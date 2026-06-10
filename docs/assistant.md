@@ -1,101 +1,78 @@
 # Assistant — Architecture
 
-> Status: draft · Last updated: 2026-06-09 · Owner: _TBD_
+> Status: built (M2) · Last updated: 2026-06-10 · Owner: _TBD_
 >
-> Part of the [backend overview](backend-overview.md). The assistant turns a chat
-> message into a friendly reply plus an optional "action card".
+> Part of the [backend overview](backend-overview.md). The assistant is the
+> universal interface: a server-side Claude tool loop with read + write reach
+> over every built domain, persistent conversations, and Mem0-backed memory.
 
 ## Responsibility
 
-Take one user message and return `{ text, action? }`:
-
-- `text` — the reply to show in the chat panel (may contain inline `<strong>` HTML).
-- `action` — an optional card the UI renders (icon, title, meta, a CTA, and a `screen`
-  to deep-link to). When `action.makeTask` is set, it's also a signal to the client to
-  create a real task.
-
-It is **pure and stateless**: same input → same output, no history, no side effects, no
-store access. That purity is the whole point — it's the seam where a real LLM drops in.
+Take one user message (plus optional `conversation_id`) and run a real agentic
+turn: recall relevant memories, stream a reply, execute tools against the live
+store, and persist the whole exchange. Returns
+`{ conversation_id, text, actions[] }` — `text` is **plain text, never HTML**
+(review R4), and each `ChatAction` is a *receipt for a tool that actually
+executed*, with a deep link (review D2).
 
 ## Surface (current)
 
-`POST /api/assistant/chat` — `app/routers/assistant.py`
+`app/routers/assistant.py`:
 
-| | |
-| --- | --- |
-| Request | `ChatRequest { message: str }` |
-| Response | `ChatResponse { text: str, action: ChatAction | null }` |
-| `ChatAction` | `{ icon, title, meta, cta, screen, makeTask?: str }` |
+| Method | Path | Notes |
+| --- | --- | --- |
+| `POST` | `/api/assistant/chat` | JSON: `ChatRequest { message, conversation_id? }` → `ChatResponse { conversation_id, text, actions[] }`. `503 service_unavailable` (with the real reason — missing key, billing, rate limit) when the LLM can't be reached. |
+| `POST` | `/api/assistant/chat/stream` | SSE: `meta {conversation_id}` → `delta {text}`* → `tool {name}` / `action {…}`* → `done {text, actions}`. Mid-stream failures arrive as an `error` event. |
+| `GET` | `/api/assistant/conversation` | Latest conversation + its messages — the chat panel resumes it across backend restarts. |
 
-The endpoint is a one-liner that calls `reply(req.message)`. It never writes to the
-store, even when the action implies a task — the client owns that follow-up POST.
+`ChatAction.screen` is a `Literal` over the sidebar's actual screens (review
+R8) — the model can't deep-link to a screen that doesn't exist.
 
 ## Internal design (current)
 
-All logic lives in `app/assistant.py`, a faithful server-side port of the prototype's
-`assistant-logic.js` (mirrored client-side as `frontend/src/assistant/assistantLogic.js`
-for offline fallback — **keep the two in sync**).
+- **`app/llm.py`** — the Anthropic seam (D3): lazy client, `pick_model()`
+  routing (cheap/fast `claude-haiku-4-5` for chat; `claude-opus-4-8` for heavy
+  work — day planning now, email drafts in M5), and one `stream()` entry point.
+  Tests swap the whole seam via `llm.configure(fake)`.
+- **`app/tools.py`** — the tool surface: tasks read+write (`list/create/update/
+  delete_task`), memory read+write (`search_memory`, `remember` (verbatim),
+  `list/update/forget_memory`), and read-only tools over seeded sample domains
+  (calendar/nutrition/finance/habits/fitness from `app/seeds.py`, every payload
+  labeled SAMPLE DATA until the real integration lands in M3/M4/M6). Write
+  executors return the action card. Tool errors go back to the model
+  (`{"error": …}` in the tool result), not to the user.
+- **`app/assistant.py`** — the loop: build system prompt (persona + current
+  time + top Mem0 recalls for this message), replay history from the
+  conversations table, then stream/execute/feed-back for up to 8 tool rounds.
+  Both endpoints drive the same `run_turn()` generator.
+- **Persistence:** user + assistant messages (with action receipts) land in
+  `conversation_messages`; the panel reloads them on open. Restart-survival is
+  an M2 acceptance test.
+- **Memory capture:** after each reply, the exchange goes to Mem0 auto-capture
+  on a background thread — see [memory.md](memory.md).
 
-- `reply(text) -> {text, action}` — lowercases the message, then runs an **ordered**
-  chain of regex/keyword checks; first match wins; falls through to a help message.
-- `clean_title(text)` / `clean_event(text)` — strip command prefixes ("remind me to",
-  "schedule a meeting for", trailing punctuation) and capitalize, so the echoed task/
-  event label reads naturally.
+## Offline fallback (review D4)
 
-Intent order (order matters — earlier rules win):
+`frontend/src/assistant/assistantLogic.js` is now **capture-only**: when the
+backend (or the LLM) is unreachable, the panel shows "Offline — capture only",
+tries to file the message as a second-brain note, and says exactly what
+happened. All canned replies and invented figures are gone.
 
-| # | Intent | Screen / action |
-| --- | --- | --- |
-| 1 | Plan my day / agenda / brief me | `home` — "Day planned" |
-| 2 | Explicit task phrasing ("add a task", "remind me", "to-do") | `tasks` + `makeTask` |
-| 3 | Move/transfer money into savings | `finance` |
-| 4 | Spending / budget / "how much" | `finance` |
-| 5 | Schedule / meeting / calendar | `calendar` + cleaned event |
-| 6 | Log meal / nutrition / water | `nutrition` |
-| 7 | Generic reminder/task keywords (call, email, pay, buy…) | `tasks` + `makeTask` |
-| 8 | Remember / note / second brain | `memory` |
-| 9 | _fallback_ | help text, `action: null` |
+## Voice
 
-> Rules 2 and 7 both create tasks; 2 exists so explicit task phrasing wins over a
-> category keyword in the same sentence (e.g. "add a task to **book** the dentist"
-> shouldn't be read as a calendar booking).
+Browser `SpeechRecognition` (`frontend/src/lib/useSpeech.js`): dictation into
+the chat composer (mic button) and the top-bar "Voice note" flow, which files
+the transcript as a `voice note` memory. Server-side Whisper is the planned
+upgrade path if quality disappoints.
 
-## Dependencies & interactions
+## Resolved questions (were open pre-M2)
 
-- **Depends on:** `schemas.py` only (`ChatRequest`, `ChatResponse`, `ChatAction`).
-- **Does _not_ depend on:** the store. No persistence, no shared state.
-- **Interacts with Tasks indirectly:** an `action.makeTask` is the client's cue to call
-  `POST /api/tasks`. The assistant never creates the task itself — see the cross-section
-  sequence in the [overview](backend-overview.md#cross-section-flow-add-a-task-via-the-assistant).
-- **Mirror in the frontend:** `assistantLogic.js` must return the identical shape so the
-  offline fallback matches server behavior.
-
-## How it _should_ function
-
-> The target you're authoring. Seeds from the README's "clean seam for a real LLM":
-
-- [ ] **Swap the intent engine for a live LLM** returning the same `{text, action}`
-      shape. What model? Where does the prompt + the "available screens/actions" schema
-      live?
-- [ ] **Action vocabulary as a contract.** Today actions are ad-hoc dicts. Should the set
-      of `screen`/`action` types be an enum the model is constrained to (tool/function
-      calling) so it can't hallucinate a screen that doesn't exist?
-- [ ] **Conversation state.** Stay stateless, or thread history? If stateful, where does
-      it live, and does that break the "pure function" seam?
-- [ ] **Streaming** responses to the chat panel?
-- [ ] **Keeping the offline fallback honest** once the server uses a real LLM — what does
-      `assistantLogic.js` do then?
-
-## Design decisions & rationale
-
-- _Why a pure function instead of writing tasks server-side?_ — Stateless `/chat` is
-  idempotent and trivially testable; the client already owns optimistic UI. TODO: confirm
-  this stays true with a real LLM.
-- _Why ordered keyword rules?_ — Deterministic, debuggable, and an exact match for the
-  prototype. TODO.
-
-## Open questions / future work
-
-- How do server and client intent engines stay in sync — shared source, codegen, or
-  manual parity? (They drift silently today.)
-- Should `text` keep returning HTML (`<strong>`), or move to a safer structured format?
+- **LLM:** Anthropic Claude; models above; `ANTHROPIC_API_KEY` via env.
+- **Action vocabulary:** enum-constrained in `schemas.py` (R8) ✔
+- **Conversation state:** threaded; lives in the DB; the "pure function" seam
+  became the `llm.configure`/`memory_engine.configure` seams for tests.
+- **Streaming:** SSE ✔ (through the Vite proxy in dev).
+- **Offline fallback honesty:** capture-only ✔ — server/client engines can no
+  longer drift because the client one no longer pretends to answer.
+- **Server-side writes:** the assistant now writes tasks itself via tools; the
+  old client-mediated `makeTask` flow is gone.

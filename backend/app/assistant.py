@@ -1,92 +1,124 @@
-"""Scuffed OS assistant — intent engine.
+"""Scuffed OS assistant — the real engine (replaces the M0 intent mock).
 
-A faithful server-side port of the prototype's assistant-logic.js: keyword/intent
-matching that returns a friendly reply plus an optional "action card". This is a
-deterministic mock of the AI backend — perfect for the prototype, and a clean seam
-to later swap in a real LLM call (return the same {text, action} shape).
+A server-side agentic tool loop over Claude (review D2): the model reads and
+writes every built domain through app/tools.py, action cards report what
+actually executed, and the whole exchange persists to the conversations
+tables so history survives restarts. Streaming variant yields SSE events.
 """
 from __future__ import annotations
 
-import re
+import json
+import logging
+from datetime import datetime
+
+from . import llm, memory_engine, tools
+from .store import store
+
+log = logging.getLogger("scuffed_os.assistant")
+
+MAX_TOOL_ROUNDS = 8
+HISTORY_LIMIT = 30
+
+_PERSONA = """You are the Scuffed OS assistant — a warm, calm personal aide living inside the user's life dashboard. You can read and write their tasks and second-brain memories, and read their calendar, nutrition, finance, habits and fitness panels.
+
+Rules:
+- Plain text only: no HTML tags, no markdown headers or asterisks. Short sentences, short paragraphs. A simple "- " list is fine.
+- Act, don't narrate: when the user asks for something a tool can do, call the tool. Don't ask permission for ordinary task/memory writes; do ask before deleting anything.
+- Some panels are sample data until their integrations land (the tool results say so). If you used sample data, mention it casually ("once your bank is connected…").
+- Be brief. One or two sentences is usually right. No "Certainly!" openers.
+- Use the remember tool when the user says "remember X" or shares something durably useful. You don't need to announce routine memory captures."""
 
 
-def clean_title(text: str) -> str:
-    t = re.sub(r"^(hey |hi |ok |please |can you |could you |would you |i need to |i want to )+", "", text, flags=re.I)
-    t = re.sub(
-        r"^(add (a )?(task|reminder|to-?do)( to)?:?\s*|remind me to\s*|create (a )?task( to)?:?\s*|new task:?\s*|to-?do:?\s*|set a reminder to\s*)+",
-        "", t, flags=re.I,
-    )
-    t = re.sub(r"[.?!]+$", "", t).strip()
-    return (t[:1].upper() + t[1:]) if t else t
+def _system_prompt(message: str) -> str:
+    now = datetime.now().astimezone()
+    parts = [_PERSONA, f"Right now it is {now.strftime('%A, %B %-d %Y, %-I:%M%p').lower()}."]
+    recalled = memory_engine.search(message, limit=4)
+    if recalled:
+        lines = "\n".join(f"- {r['text']}" for r in recalled if r.get("text"))
+        if lines:
+            parts.append("Possibly relevant things you remember about the user:\n" + lines)
+    return "\n\n".join(parts)
 
 
-def clean_event(text: str) -> str:
-    t = re.sub(r"^(hey |hi |ok |please |can you |could you )+", "", text, flags=re.I)
-    t = re.sub(
-        r"^(schedule|book|set up|add|create|put in)( a| an| my)?( meeting| event| call| appointment)?( for| with| on| about)?:?\s*",
-        "", t, flags=re.I,
-    )
-    t = re.sub(r"[.?!]+$", "", t).strip()
-    return (t[:1].upper() + t[1:]) if t else "New event"
+def _history_messages(conversation_id: int) -> list[dict]:
+    rows = store.list_messages(conversation_id)[-HISTORY_LIMIT:]
+    return [{"role": r["role"], "content": r["content"]} for r in rows if r["content"]]
 
 
-def reply(text: str) -> dict:
-    """Return {"text": str, "action": dict | None} for a user message."""
-    t = text.lower()
+def _resolve_conversation(conversation_id: int | None) -> int:
+    if conversation_id is not None and store.get_conversation(conversation_id):
+        return conversation_id
+    return store.create_conversation()["id"]
 
-    if re.search(r"plan (my|the) day|my day|what('?s| is) (on |up )?today|^agenda|brief me", t):
-        return {
-            "text": "Here's your day: <strong>4 tasks</strong>, a design standup at 11:30, and a dentist visit at 4. You're $120 under your dining budget and 410 kcal from your goal. Want me to block focus time this morning?",
-            "action": {"icon": "layout-dashboard", "title": "Day planned", "meta": "Focus block held · 9:00–10:30", "cta": "Open home", "screen": "home"},
-        }
 
-    # explicit task phrasing wins over category keywords (e.g. "add a task to water the plants")
-    if re.search(r"\b(add a task|task to|new task|remind me|to-?do|follow up)\b", t):
-        et = clean_title(text)
-        return {
-            "text": "Done — I've added <strong>" + et + "</strong> to your Tasks for today.",
-            "action": {"icon": "circle-check-big", "title": "Added to Tasks", "meta": "Today · tap to set a due date", "cta": "View tasks", "screen": "tasks", "makeTask": et},
-        }
+def run_turn(message: str, conversation_id: int | None = None):
+    """Generator driving one chat turn. Yields ("meta"|"delta"|"tool"|"action"|
+    "done", payload) events; the SSE endpoint forwards them and the JSON
+    endpoint just drains for the final state."""
+    if not llm.available():
+        raise AssistantUnavailable()
 
-    if re.search(r"move|transfer|roll(\s|-)?over|put.*savings|into savings", t) and re.search(r"saving|dining|budget|\$|money", t):
-        return {
-            "text": "Moved <strong>$120</strong> from Dining to Savings. You're still comfortably on budget for June.",
-            "action": {"icon": "wallet", "title": "Transfer complete", "meta": "$120 → Savings", "cta": "View finance", "screen": "finance"},
-        }
+    conv_id = _resolve_conversation(conversation_id)
+    yield "meta", {"conversation_id": conv_id}
 
-    if re.search(r"spend|spent|budget|afford|cost|how much|finance|expense", t):
-        return {
-            "text": "You've spent <strong>$1,840</strong> in June — 12% less than May. Dining is your biggest discretionary category at <strong>$186</strong> of $250.",
-            "action": {"icon": "wallet", "title": "June spending", "meta": "$1,840 / $2,400 budget", "cta": "View finance", "screen": "finance"},
-        }
+    system = _system_prompt(message)
+    history = _history_messages(conv_id)
+    store.add_message(conv_id, "user", message)
+    messages = history + [{"role": "user", "content": message}]
+    model = llm.pick_model(message)
 
-    if re.search(r"schedule|meeting|calendar|book|appointment|event|invite", t):
-        ev = clean_event(text)
-        return {
-            "text": "Scheduled <strong>" + ev + "</strong>. I found a free slot tomorrow afternoon and sent the invite.",
-            "action": {"icon": "calendar", "title": "Event created", "meta": ev + " · Tue 2:00pm", "cta": "Open calendar", "screen": "calendar"},
-        }
+    full_text: list[str] = []
+    actions: list[dict] = []
 
-    if re.search(r"log|ate|eat|breakfast|lunch|dinner|meal|calorie|protein|snack|water|drank", t):
-        return {
-            "text": "Logged it. You're at <strong>1,910 kcal</strong> today and <strong>132g</strong> protein — 190 calories from your goal.",
-            "action": {"icon": "apple", "title": "Meal logged", "meta": "+220 kcal · 18g protein", "cta": "View nutrition", "screen": "nutrition"},
-        }
+    for _round in range(MAX_TOOL_ROUNDS):
+        with llm.stream(model=model, system=system, messages=messages,
+                        tools=tools.DEFINITIONS) as stream:
+            for text in stream.text_stream:
+                full_text.append(text)
+                yield "delta", {"text": text}
+            final = stream.get_final_message()
 
-    if re.search(r"remind|task|to-?do|todo|add|call|email|pay|renew|follow up|pick up|buy|order|book a", t):
-        ti = clean_title(text)
-        return {
-            "text": "Done — I've added <strong>" + ti + "</strong> to your Tasks for today.",
-            "action": {"icon": "circle-check-big", "title": "Added to Tasks", "meta": "Today · tap to set a due date", "cta": "View tasks", "screen": "tasks", "makeTask": ti},
-        }
+        if final.stop_reason != "tool_use":
+            break
 
-    if re.search(r"remember|note|memory|second brain|where did|what did i say", t):
-        return {
-            "text": "Saved to your second brain. I'll surface it when it's relevant — and you can ask me about it anytime.",
-            "action": {"icon": "brain", "title": "Stored in memory", "meta": "Tagged automatically", "cta": "Open brain", "screen": "memory"},
-        }
+        tool_results = []
+        for block in final.content:
+            if block.type != "tool_use":
+                continue
+            yield "tool", {"name": block.name}
+            result_json, action = tools.execute(block.name, block.input)
+            if action is not None:
+                actions.append(action)
+                yield "action", action
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": result_json,
+            })
+        messages.append({"role": "assistant", "content": final.content})
+        messages.append({"role": "user", "content": tool_results})
+    else:
+        log.warning("Tool loop hit MAX_TOOL_ROUNDS — answering with what we have")
 
-    return {
-        "text": "I can manage your tasks, calendar, finances and nutrition, or pull anything from your second brain. Tell me what you'd like — for example, “add a task to call the dentist” or “how much did I spend on dining?”",
-        "action": None,
-    }
+    text = "".join(full_text).strip() or "Done."
+    store.add_message(conv_id, "assistant", text, actions=actions or None)
+    yield "done", {"conversation_id": conv_id, "text": text, "actions": actions}
+
+
+def reply(message: str, conversation_id: int | None = None) -> dict:
+    """Non-streaming entry point: drain the turn, return the final payload."""
+    payload = None
+    for event, data in run_turn(message, conversation_id):
+        if event == "done":
+            payload = data
+    return payload
+
+
+def capture(message: str, conversation_id: int, text: str) -> None:
+    """Post-response Mem0 auto-capture; runs as a background task."""
+    del conversation_id
+    memory_engine.capture_turn(message, text)
+
+
+class AssistantUnavailable(Exception):
+    """No API key / LLM seam configured — the endpoint returns 503."""

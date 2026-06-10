@@ -37,11 +37,13 @@ export function useTasks() {
   // id -> { patch, timer } of edits not yet flushed to the API.
   const pending = React.useRef({})
 
-  React.useEffect(() => {
+  const refresh = React.useCallback(() => {
     api.listTasks()
       .then((data) => { if (Array.isArray(data)) setTasks(data) })
       .catch(() => {}) // backend down — keep the sample, edits stay local
   }, [])
+
+  React.useEffect(() => { refresh() }, [refresh])
 
   const updateTask = (id, patch) => {
     setTasks((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)))
@@ -88,5 +90,5 @@ export function useTasks() {
       .catch(() => {})
   }
 
-  return { tasks, addTask, toggleTask, updateTask }
+  return { tasks, addTask, toggleTask, updateTask, refresh }
 }

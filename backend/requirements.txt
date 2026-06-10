@@ -4,6 +4,11 @@ uvicorn>=0.32.0
 pydantic-settings>=2.6.0
 sqlalchemy>=2.0.44
 alembic>=1.16
-psycopg[binary]>=3.2
+psycopg[binary,pool]>=3.2
+anthropic>=0.69
+# Memory engine (M2): self-hosted Mem0 — Claude extraction, Ollama embedder,
+# vectors in pgvector. `ollama serve` + `ollama pull nomic-embed-text` locally.
+mem0ai>=2.0
+ollama>=0.4
 # Optional, for `uvicorn --reload` + faster event loop (compiled deps):
 #   pip install "uvicorn[standard]"

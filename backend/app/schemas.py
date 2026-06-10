@@ -20,23 +20,44 @@ TaskPriority = Literal["low", "med", "high"]
 
 
 # ---- Assistant ------------------------------------------------------------
+# The deep-link vocabulary (review R8) — every screen the sidebar knows.
+Screen = Literal["home", "tasks", "calendar", "habits", "nutrition", "fitness",
+                 "finance", "people", "email", "memory", "settings"]
+
+
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1)
+    conversation_id: int | None = None
 
 
 class ChatAction(BaseModel):
+    """A receipt for a tool the assistant actually executed, with a deep link."""
+
     icon: str
     title: str
     meta: str
     cta: str
-    screen: str
-    # Set when the assistant should create a real task with this label.
-    makeTask: str | None = None
+    screen: Screen
 
 
 class ChatResponse(BaseModel):
-    text: str
-    action: ChatAction | None = None
+    conversation_id: int
+    text: str  # plain text — never HTML (review R4)
+    actions: List[ChatAction] = []
+
+
+class ConversationMessageOut(BaseModel):
+    id: int
+    role: Literal["user", "assistant"]
+    content: str
+    actions: List[ChatAction] | None = None
+    created_at: datetime
+
+
+class ConversationOut(BaseModel):
+    id: int
+    title: str | None
+    messages: List[ConversationMessageOut]
 
 
 # ---- Tasks ----------------------------------------------------------------

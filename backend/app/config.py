@@ -31,5 +31,23 @@ class Settings(BaseSettings):
     # a future multi-device/auth story doesn't need a schema rewrite.
     owner: str = "me"
 
+    # Assistant models — cheap/fast tier for chat, escalate for heavy work
+    # (day planning now; email drafts in M5).
+    assistant_model: str = "claude-haiku-4-5"
+    assistant_heavy_model: str = "claude-opus-4-8"
+
+    # Mem0 memory engine (self-hosted): Claude extraction + local Ollama
+    # embedder + pgvector in the same Postgres. Dims are pinned to the
+    # embedder — switching embedders means a new collection + re-embed.
+    memory_enabled: bool = True
+    memory_llm_model: str = "claude-haiku-4-5"
+    embedder_model: str = "nomic-embed-text"
+    embedder_dims: int = 768
+    ollama_base_url: str = "http://localhost:11434"
+    mem0_collection: str = "mem0_memories"
+    # Mem0's change-history DB stays a local SQLite file (the one Mem0
+    # artifact that doesn't live in Supabase).
+    mem0_history_path: str = "./data/mem0_history.db"
+
 
 settings = Settings()

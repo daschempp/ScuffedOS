@@ -61,6 +61,8 @@ def _memory_dict(m: Memory) -> dict:
         "when": relative_when(m.created_at),
         "created_at": aware_utc(m.created_at),
         "updated_at": aware_utc(m.updated_at),
+        # Internal (filtered out of API responses by the response model).
+        "mem0_id": m.mem0_id,
     }
 
 
@@ -161,17 +163,40 @@ class Store:
             rows = s.scalars(select(Memory).order_by(Memory.id.desc())).all()
             return [_memory_dict(m) for m in rows]
 
-    def create_memory(self, data: dict) -> dict:
+    def create_memory(self, data: dict, mem0_id: str | None = None) -> dict:
         from .config import settings
 
         with self._session() as s, s.begin():
             memory = Memory(
                 owner=settings.owner,
+                mem0_id=mem0_id,
                 **{k: v for k, v in data.items() if k in _MEMORY_FIELDS and v is not None},
             )
             s.add(memory)
             s.flush()
             return _memory_dict(memory)
+
+    def set_memory_mem0_id(self, memory_id: int, mem0_id: str) -> None:
+        with self._session() as s, s.begin():
+            memory = s.get(Memory, memory_id)
+            if memory is not None:
+                memory.mem0_id = mem0_id
+
+    def update_memory_by_mem0_id(self, mem0_id: str, text: str) -> bool:
+        with self._session() as s, s.begin():
+            memory = s.scalars(select(Memory).where(Memory.mem0_id == mem0_id)).first()
+            if memory is None:
+                return False
+            memory.text = text
+            return True
+
+    def delete_memory_by_mem0_id(self, mem0_id: str) -> bool:
+        with self._session() as s, s.begin():
+            memory = s.scalars(select(Memory).where(Memory.mem0_id == mem0_id)).first()
+            if memory is None:
+                return False
+            s.delete(memory)
+            return True
 
     def update_memory(self, memory_id: int, patch: dict) -> dict | None:
         with self._session() as s, s.begin():
@@ -184,13 +209,15 @@ class Store:
             s.flush()
             return _memory_dict(memory)
 
-    def delete_memory(self, memory_id: int) -> bool:
+    def delete_memory(self, memory_id: int) -> dict | None:
+        """Delete and return the row (callers propagate its mem0_id to Mem0)."""
         with self._session() as s, s.begin():
             memory = s.get(Memory, memory_id)
             if memory is None:
-                return False
+                return None
+            snapshot = _memory_dict(memory)
             s.delete(memory)
-            return True
+            return snapshot
 
     # ---- conversations (used by the real assistant from M2 on) ----
     def create_conversation(self, title: str | None = None) -> dict:

@@ -1,5 +1,5 @@
 /* Scuffed OS — Dashboard (home overview) */
-import { Card, IconButton, Badge, Stat, ProgressBar, ProgressRing, Checkbox } from '../components/ui.jsx'
+import { Button, Card, IconButton, Badge, Stat, ProgressBar, ProgressRing, Checkbox } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 
 export function DashboardScreen({ tasks, onToggleTask, voiceNotes }) {

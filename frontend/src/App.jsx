@@ -15,7 +15,9 @@ import { CRMScreen } from './screens/CRMScreen.jsx'
 import { EmailScreen } from './screens/EmailScreen.jsx'
 import { MemoryScreen } from './screens/MemoryScreen.jsx'
 import { ChatPanel } from './assistant/ChatPanel.jsx'
+import { api } from './lib/api.js'
 import { useTasks } from './lib/useTasks.js'
+import { useSpeech } from './lib/useSpeech.js'
 
 const SCREENS = {
   home: { title: 'Good morning, Sam', sub: 'Tuesday, June 9 · 4 things need you today' },
@@ -45,15 +47,26 @@ function Placeholder({ icon, name }) {
 
 export function App() {
   const [screen, setScreen] = React.useState('home')
-  const [recording, setRecording] = React.useState(false)
   // The one rich task list (D1) — Home, TasksScreen and the assistant share it.
-  const { tasks, addTask, toggleTask, updateTask } = useTasks()
-  const voiceNotes = [
+  const { tasks, addTask, toggleTask, updateTask, refresh } = useTasks()
+  const [voiceNotes, setVoiceNotes] = React.useState([
     { text: '“Remind me to call mom about the ceramics class”', time: '8:10am', len: '0:06', done: true },
     { text: '“Lighthouse deadline moved to the 30th”', time: 'Yesterday', len: '0:11', done: true },
     { text: '“Cut dining out to twice a week”', time: 'Yesterday', len: '0:04', done: true },
-  ]
+  ])
   const [assistantOpen, setAssistantOpen] = React.useState(false)
+
+  // "Voice note" in the top bar: dictate → file into the second brain.
+  const speech = useSpeech()
+  const recording = speech.listening
+  const toggleRecord = () => {
+    if (!recording) { speech.start(); return }
+    speech.stop()
+    const text = speech.transcript.trim()
+    if (!text) return
+    api.createMemory(text, { src: 'voice note' }).catch(() => {})
+    setVoiceNotes((notes) => [{ text: `“${text}”`, time: 'just now', len: '', done: true }, ...notes])
+  }
 
   const meta = SCREENS[screen] || SCREENS.home
 
@@ -74,14 +87,16 @@ export function App() {
     <div className="kit">
       <Sidebar active={screen} onNavigate={setScreen} />
       <main className="kit-main">
-        <TopBar title={meta.title} subtitle={meta.sub} recording={recording} onToggleRecord={() => setRecording((r) => !r)} />
+        <TopBar title={meta.title} subtitle={meta.sub} recording={recording} onToggleRecord={toggleRecord} />
         <div className="kit-page">
           {recording && (
             <div className="kit-voice" style={{ marginBottom: 'var(--gutter)' }}>
               <span className="kit-insight__icon" style={{ background: 'var(--green-600)', color: '#fff' }}><Icon name="mic" /></span>
               <div className="kit-voice__wave">{Array.from({ length: 30 }).map((_, i) => <i key={i} style={{ height: 6 + (i % 6) * 3, animationDelay: (i * 0.04) + 's' }} />)}</div>
-              <div className="kit-voice__label"><b>Listening…</b>Speak — I'll file it into your second brain</div>
-              <Button variant="secondary" size="sm" onClick={() => setRecording(false)}>Done</Button>
+              <div className="kit-voice__label">
+                <b>Listening…</b>{speech.transcript || "Speak — I'll file it into your second brain"}
+              </div>
+              <Button variant="secondary" size="sm" onClick={toggleRecord}>Done</Button>
             </div>
           )}
           {body}
@@ -95,7 +110,7 @@ export function App() {
         </button>
       )}
       {assistantOpen && (
-        <ChatPanel onClose={() => setAssistantOpen(false)} onNavigate={setScreen} onCreateTask={addTask} />
+        <ChatPanel onClose={() => setAssistantOpen(false)} onNavigate={setScreen} onTasksChanged={refresh} />
       )}
     </div>
   )

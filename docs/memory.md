@@ -1,6 +1,18 @@
 # Memory (Second Brain) — Architecture
 
-> Status: CRUD built (M1); Mem0 engine lands M2 · Last updated: 2026-06-10 · Owner: _TBD_
+> Status: built (M1 CRUD + M2 Mem0 engine) · Last updated: 2026-06-10 · Owner: _TBD_
+>
+> M2 implementation notes: `app/memory_engine.py` realizes the Mem0 design
+> below — Claude (haiku) extraction, Ollama `nomic-embed-text` embedder (768
+> dims, pinned), pgvector store in the same Postgres (`mem0_memories`
+> collection, HNSW; `CREATE EXTENSION vector` via migration 0002), local SQLite
+> history DB under `backend/data/`. Auto-capture runs after every chat turn
+> (`infer=True`) and its ADD/UPDATE/DELETE events are **mirrored** into the
+> canonical `memories` table (`src="learned"`, linked by `mem0_id`), so the
+> Memory screen truthfully shows what the assistant learned; API edits/deletes
+> propagate back into Mem0. Explicit "remember X" files verbatim
+> (`infer=False`). The engine is best-effort: without Ollama/key/DB it degrades
+> to recent-notes fallback and chat keeps working.
 >
 > Part of the [backend overview](backend-overview.md). Stores and lists the
 > second-brain memories surfaced on the Memory screen.

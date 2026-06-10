@@ -25,6 +25,7 @@ _CODES = {
     422: "validation_error",
     429: "rate_limited",
     500: "internal_error",
+    503: "service_unavailable",
 }
 
 

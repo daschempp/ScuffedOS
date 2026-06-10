@@ -1,20 +1,29 @@
-/* Scuffed OS — Assistant chat panel (the AI backend you chat with).
-   Talks to POST /api/assistant/chat; if that's unreachable it falls back to the
-   local intent engine (assistantLogic.js) so the panel still works offline.
-   Tasks the assistant creates flow up via onCreateTask -> the app's real state. */
+/* Scuffed OS — Assistant chat panel.
+   Streams replies from the server-side tool loop (SSE), renders action cards
+   for tools that actually executed, resumes the last conversation across
+   restarts, and falls back to labeled capture-only mode when offline.
+   Text renders as plain text — never HTML (review R4). */
 import React from 'react'
 import { IconButton } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 import { api } from '../lib/api.js'
-import { reply as localReply } from './assistantLogic.js'
+import { useSpeech } from '../lib/useSpeech.js'
+import { captureReply } from './assistantLogic.js'
 
-export function ChatPanel({ onClose, onNavigate, onCreateTask }) {
-  const [messages, setMessages] = React.useState([
-    { id: 1, role: 'ai', text: "Good morning, Sam. I've gone through your day — <strong>4 tasks</strong>, a standup at 11:30, and you're $120 under budget. Want me to handle anything?" },
-  ])
+const GREETING = {
+  id: 'greeting', role: 'ai',
+  text: "Hi — I'm your assistant. I can manage your tasks, file things into your second brain, and read your day. What do you need?",
+}
+
+export function ChatPanel({ onClose, onNavigate, onTasksChanged }) {
+  const [messages, setMessages] = React.useState([GREETING])
+  const [conversationId, setConversationId] = React.useState(null)
   const [input, setInput] = React.useState('')
-  const [typing, setTyping] = React.useState(false)
+  const [busy, setBusy] = React.useState(false)
+  const [toolStatus, setToolStatus] = React.useState(null)
+  const [offline, setOffline] = React.useState(false)
   const logRef = React.useRef(null)
+  const speech = useSpeech()
 
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose() }
@@ -24,27 +33,80 @@ export function ChatPanel({ onClose, onNavigate, onCreateTask }) {
 
   React.useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
-  }, [messages, typing])
+  }, [messages, busy])
+
+  // Resume the latest conversation — history survives backend restarts.
+  React.useEffect(() => {
+    let alive = true
+    api.latestConversation()
+      .then((conv) => {
+        if (!alive || !conv) return
+        setConversationId(conv.id)
+        setMessages([GREETING, ...conv.messages.map((m) => ({
+          id: m.id, role: m.role === 'assistant' ? 'ai' : 'user',
+          text: m.content, actions: m.actions || [],
+        }))])
+      })
+      .catch((err) => { if (alive && err?.name !== 'ApiError') setOffline(true) })
+    return () => { alive = false }
+  }, [])
+
+  // Dictation streams straight into the composer.
+  React.useEffect(() => {
+    if (speech.listening) setInput(speech.transcript)
+  }, [speech.listening, speech.transcript])
+
+  const updateMessage = (id, patch) =>
+    setMessages((ms) => ms.map((m) => (m.id === id ? { ...m, ...patch(m) } : m)))
 
   const send = async (raw) => {
     const text = (raw != null ? raw : input).trim()
-    if (!text) return
-    setMessages((m) => [...m, { id: Date.now(), role: 'user', text }])
+    if (!text || busy) return
+    if (speech.listening) speech.stop()
     setInput('')
-    setTyping(true)
-    let r
+    setMessages((ms) => [...ms, { id: 'u' + Date.now(), role: 'user', text }])
+    setBusy(true)
+
+    const aiId = 'a' + Date.now()
+    let streamed = false
     try {
-      r = await api.chat(text)
+      await api.chatStream(text, conversationId, (event, data) => {
+        if (event === 'meta') setConversationId(data.conversation_id)
+        else if (event === 'delta') {
+          setToolStatus(null)
+          if (!streamed) {
+            streamed = true
+            setMessages((ms) => [...ms, { id: aiId, role: 'ai', text: data.text, actions: [] }])
+          } else {
+            updateMessage(aiId, (m) => ({ text: m.text + data.text }))
+          }
+        } else if (event === 'tool') setToolStatus(data.name.replaceAll('_', ' '))
+        else if (event === 'action') {
+          if (streamed) updateMessage(aiId, (m) => ({ actions: [...m.actions, data] }))
+          if (data.screen === 'tasks' && onTasksChanged) onTasksChanged()
+        } else if (event === 'error') {
+          throw new Error(data.message)
+        } else if (event === 'done') {
+          setOffline(false)
+          const final = { id: aiId, role: 'ai', text: data.text, actions: data.actions || [] }
+          setMessages((ms) => streamed
+            ? ms.map((m) => (m.id === aiId ? final : m))
+            : [...ms, final])
+        }
+      })
     } catch {
-      r = localReply(text) // backend unreachable — answer locally
+      setOffline(true)
+      const fallback = await captureReply(text)
+      setMessages((ms) => [...ms.filter((m) => m.id !== aiId),
+        { id: aiId, role: 'ai', text: fallback.text, actions: fallback.action ? [fallback.action] : [] }])
+    } finally {
+      setToolStatus(null)
+      setBusy(false)
     }
-    if (r.action && r.action.makeTask && onCreateTask) onCreateTask(r.action.makeTask)
-    setTyping(false)
-    setMessages((m) => [...m, { id: Date.now() + 1, role: 'ai', text: r.text, action: r.action }])
   }
 
   const goAction = (screen) => { if (screen && onNavigate) onNavigate(screen); onClose() }
-  const suggestions = ['Plan my day', 'Add a task to call the dentist', 'How much did I spend on dining?', 'Log my breakfast']
+  const suggestions = ['Plan my day', 'Add a task to call the dentist', 'How much did I spend on dining?', "What's in my second brain?"]
 
   return (
     <React.Fragment>
@@ -54,7 +116,9 @@ export function ChatPanel({ onClose, onNavigate, onCreateTask }) {
           <div className="kit-chat__id"><img src="/assets/logo-mark.svg" alt="" /></div>
           <div style={{ flex: 1 }}>
             <div className="kit-chat__name">Scuffed Assistant</div>
-            <div className="kit-chat__status">Connected to your second brain</div>
+            <div className="kit-chat__status" style={offline ? { color: 'var(--clay-600)' } : undefined}>
+              {offline ? 'Offline — capture only' : 'Connected to your second brain'}
+            </div>
           </div>
           <IconButton label="Close" size="sm" onClick={onClose}><Icon name="x" /></IconButton>
         </div>
@@ -64,25 +128,27 @@ export function ChatPanel({ onClose, onNavigate, onCreateTask }) {
             <div key={m.id} className={'kit-msg kit-msg--' + m.role}>
               {m.role === 'ai' && <span className="kit-msg__av"><Icon name="sparkles" /></span>}
               <div>
-                <div className="kit-bubble" dangerouslySetInnerHTML={{ __html: m.text }} />
-                {m.action && (
-                  <div className="kit-action">
-                    <span className="kit-action__ico"><Icon name={m.action.icon} /></span>
+                <div className="kit-bubble" style={{ whiteSpace: 'pre-wrap' }}>{m.text}</div>
+                {(m.actions || []).map((a, i) => (
+                  <div className="kit-action" key={i}>
+                    <span className="kit-action__ico"><Icon name={a.icon} /></span>
                     <div className="kit-action__main">
-                      <div className="kit-action__title"><Icon name="check" />{m.action.title}</div>
-                      <div className="kit-action__meta">{m.action.meta}</div>
+                      <div className="kit-action__title"><Icon name="check" />{a.title}</div>
+                      <div className="kit-action__meta">{a.meta}</div>
                     </div>
-                    <span className="kit-action__cta" onClick={() => goAction(m.action.screen)}>{m.action.cta}</span>
+                    <span className="kit-action__cta" onClick={() => goAction(a.screen)}>{a.cta}</span>
                   </div>
-                )}
+                ))}
               </div>
             </div>
           ))}
-          {typing && (
+          {busy && (
             <div className="kit-msg kit-msg--ai">
               <span className="kit-msg__av"><Icon name="sparkles" /></span>
-              <div className="kit-bubble" style={{ padding: 0 }}>
-                <div className="kit-typing"><i /><i /><i /></div>
+              <div className="kit-bubble" style={toolStatus ? undefined : { padding: 0 }}>
+                {toolStatus
+                  ? <span className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}><Icon name="loader-circle" /> {toolStatus}…</span>
+                  : <div className="kit-typing"><i /><i /><i /></div>}
               </div>
             </div>
           )}
@@ -94,10 +160,18 @@ export function ChatPanel({ onClose, onNavigate, onCreateTask }) {
 
         <div className="kit-composer">
           <div className="kit-composer__box">
-            <textarea rows="1" value={input} placeholder="Ask or tell your assistant…"
+            <textarea rows="1" value={input}
+              placeholder={speech.listening ? 'Listening…' : 'Ask or tell your assistant…'}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }} />
-            <IconButton label="Voice" variant="ghost" size="sm"><Icon name="mic" /></IconButton>
+            <IconButton
+              label={speech.listening ? 'Stop dictation' : 'Dictate'}
+              variant={speech.listening ? 'solid' : 'ghost'} size="sm"
+              disabled={!speech.supported}
+              onClick={() => (speech.listening ? speech.stop() : speech.start())}
+            >
+              <Icon name={speech.listening ? 'square' : 'mic'} />
+            </IconButton>
           </div>
           <IconButton label="Send" variant="solid" onClick={() => send()}><Icon name="arrow-up" /></IconButton>
         </div>

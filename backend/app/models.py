@@ -64,6 +64,9 @@ class Memory(Base):
     src: Mapped[str] = mapped_column(String(32), default="note")
     tags: Mapped[list] = mapped_column(JSONField, default=list)
     color: Mapped[str] = mapped_column(String(16), default="green")
+    # Link to the Mem0 vector record this row mirrors (M2) — null for rows
+    # that only exist in the canonical table.
+    mem0_id: Mapped[str | None] = mapped_column(String(64), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow

@@ -11,6 +11,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
+from app import llm, memory_engine
 from app.db import Base, make_engine, make_session_factory
 from app.main import app
 from app.store import store
@@ -28,6 +29,17 @@ def fresh_db():
     yield
     store.configure(None)
     engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def no_external_services():
+    """Tests never reach the Claude API, Ollama, or Mem0 — install a fake
+    explicitly (llm.configure / memory_engine.configure) when one is needed."""
+    llm.configure(None)
+    memory_engine.configure(None)
+    yield
+    llm.configure()
+    memory_engine.configure("unset")
 
 
 @pytest.fixture()
