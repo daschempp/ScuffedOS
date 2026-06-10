@@ -177,8 +177,8 @@ and whether each function is a read-only **mirror** or our own **canonical recor
 
 > The target architecture you're authoring. Seeds drawn from the README's direction:
 
-- [ ] **Real persistence** for the three built functions (Postgres + SQLAlchemy behind the
-      same store interface).
+- [ ] **Real persistence** for the three built functions (Supabase-hosted Postgres +
+      SQLAlchemy behind the same store interface — see [data-store.md](data-store.md)).
 - [ ] **Real assistant** — live LLM returning the same `{ text, action }` shape, with a
       generalized write path to domains (beyond `makeTask`).
 - [ ] **Graduate the seven planned functions** from React sample data to real endpoints +

@@ -73,10 +73,13 @@ flowchart TD
 
 > Target design to author. This layer is where the "prototype → real app" jump happens.
 
-- [ ] **Real database.** Replace the in-memory `Store` with a durable backend (the README
-      suggests **Postgres + SQLAlchemy**) behind the _same method names_, so routers don't
-      change. Define: schema/tables, migrations, connection/session management, and how the
-      lock-based concurrency maps onto DB transactions.
+- [ ] **Real database — decided (2026-06-10): Supabase-hosted Postgres (free tier), used
+      as plain Postgres** via SQLAlchemy + Alembic behind the _same method names_, so
+      routers don't change (supersedes the SQLite pick in the architecture review).
+      `DATABASE_URL` from env, session-pooler connection string (direct is IPv6-only on
+      free tier); **no supabase-py/-js anywhere** — the frontend keeps talking only to
+      FastAPI. Define: schema/tables, migrations, connection/session management, and how
+      the lock-based concurrency maps onto DB transactions.
 - [ ] **Real timestamps** (replace `when="just now"`; derive relative strings on read).
 - [ ] **Identity & multi-user.** Today everything is global/single-user. If auth lands,
       the store and most schemas grow a user/owner dimension — decide early.

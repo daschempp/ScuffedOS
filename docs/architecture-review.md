@@ -274,6 +274,15 @@ and write the store-interface contract down, including the patch-null and copy
 semantics from R7. Keep the single `Store` facade; carve per-domain SQLAlchemy models
 underneath it as functions graduate.
 
+> **Decision (2026-06-10) — supersedes the recommendation: B, hosted on Supabase (free
+> tier), from the start.** User call — the account is already in hand, and it
+> pre-positions the off-LAN iPhone story. Everything else in this section stands
+> (SQLAlchemy + Alembic, same `Store` facade, owner column, UTC timestamps); only the
+> backing moves from a local file to a Supabase connection string, used as **plain
+> Postgres** — no supabase-js in the frontend, no Supabase Auth/RLS/realtime. Connect
+> via the session pooler (direct is IPv6-only on free tier); mitigate free-tier
+> inactivity-pause and no-automated-backups with daily use/keepalive + local `pg_dump`.
+
 ### D6 — External integrations stance
 
 **Context.** Whoop, Gmail, Google Calendar, Plaid-style aggregation, contacts. Open per
@@ -330,7 +339,7 @@ integration-heavy:
 
 | Phase | Work | Why this order |
 | --- | --- | --- |
-| 0 — Foundations | SQLite migration + rich task model + real timestamps + owner column (D1, D5) · `app/llm.py` + LLM swap with server-side tools, action/screen enums, structured `text` (D2, D3, R4, R8) · fallback shrunk to capture-only (D4) · `makeNote` immediately | Everything else depends on persistence and the LLM seam; these are also the decisions that get more expensive after the swap |
+| 0 — Foundations | Supabase Postgres migration (per the D5 decision note) + rich task model + real timestamps + owner column (D1, D5) · `app/llm.py` + LLM swap with server-side tools, action/screen enums, structured `text` (D2, D3, R4, R8) · fallback shrunk to capture-only (D4) · `makeNote` immediately | Everything else depends on persistence and the LLM seam; these are also the decisions that get more expensive after the swap |
 | 1 — Local domains | Habits → Calendar (local events, no Google sync yet) → Nutrition (manual log; LLM estimates macros) | No external dependencies; each adds a real assistant tool (`logMeal`, `makeEvent`), exercising the new write path |
 | 2 — Integrations | Keychain token storage first · then Whoop (read-only mirror, simplest) → Email (read-only triage before send) → People (bootstrap from email senders) → Finance last (heaviest + most sensitive; consider CSV import before Plaid) | Ascending sensitivity and complexity; each integration reuses the token + poll machinery the first one builds |
 | 3 — iPhone client | Port the iOS kit against the now-stable API; pairing/auth + error envelope land here (D7) | The API will have survived phases 0–2; freezing it earlier would be premature |
@@ -346,7 +355,7 @@ hardening afterthought.
 
 1. [ ] Add `makeNote` (assistant action + `ChatPanel` handler) — closes the only dishonest *capture* path; one-day change.
 2. [ ] Freeze both task models; adopt D1 (rich model server-side) as part of the DB migration.
-3. [ ] Pick SQLite + SQLAlchemy + Alembic; write the store-interface contract into [data-store.md](data-store.md), including patch-null and copy semantics (R7).
+3. [ ] ~~Pick SQLite~~ Decided 2026-06-10: **Supabase Postgres (free tier)** + SQLAlchemy + Alembic (see D5 decision note); write the store-interface contract into [data-store.md](data-store.md), including patch-null and copy semantics (R7).
 4. [ ] Replace `when`/display strings with stored UTC facts + derived display (R6) before first durable write.
 5. [ ] Create `app/llm.py` (D3); swap the assistant to a server-side tool loop (D2); constrain `screen`/action vocabulary via enums in `schemas.py` (R8).
 6. [ ] Move `text` to a structured/sanitized format and remove `dangerouslySetInnerHTML` (R4) — before the LLM swap.
