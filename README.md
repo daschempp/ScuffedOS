@@ -54,6 +54,20 @@ Open **http://localhost:5173**. The Vite dev server proxies `/api/*` to the back
 
 To build the frontend for production: `cd frontend && npm run build` (output in `dist/`).
 
+## Tests
+
+Backend tests live in `backend/tests/` (pytest over FastAPI's TestClient):
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest
+```
+
+CI (GitHub Actions, `.github/workflows/ci.yml`) runs the backend suite and a frontend
+production build on every push. Backend configuration is env-based — copy
+`backend/.env.example` to `backend/.env` for local overrides.
+
 ## How the two halves connect
 
 | Frontend | Backend |

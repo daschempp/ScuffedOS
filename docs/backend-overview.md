@@ -167,8 +167,9 @@ and whether each function is a read-only **mirror** or our own **canonical recor
   with a `threading.Lock`. See [data-store.md](data-store.md).
 - **Persistence.** None yet — in-memory, resets on restart. The store is the swap seam to
   a real DB; every planned function depends on that landing.
-- **Error handling.** Minimal today (`404` on unknown task id; Pydantic `422` on bad
-  input). _TODO: a consistent error model as the surface grows._
+- **Error handling.** Every non-2xx response uses a consistent envelope —
+  `{ "error": { "code", "message", "details"? } }` (`app/errors.py`) — so clients can
+  branch on a stable `code` instead of parsing prose.
 - **Auth / multi-user.** None — single local user. The biggest fork for the schema once
   external accounts and an iPhone client arrive. _TODO._
 

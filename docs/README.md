@@ -56,9 +56,13 @@ ones, the data model is extracted from the corresponding React screen. Anything 
 
 ```
 backend/
-├── requirements.txt
+├── requirements.txt       # runtime deps (requirements-dev.txt adds pytest + httpx)
+├── pytest.ini
+├── tests/                 # pytest suite over the routers (FastAPI TestClient)
 └── app/
     ├── main.py            # app wiring: CORS, router registration, /api/health
+    ├── config.py          # env-backed settings (.env supported)
+    ├── errors.py          # consistent {"error": {code, message}} envelope
     ├── schemas.py         # Pydantic request/response models
     ├── store.py           # in-memory data store (tasks + memories)
     ├── assistant.py       # intent engine (pure logic)

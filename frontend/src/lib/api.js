@@ -5,12 +5,35 @@
    gracefully (the UI falls back to local behavior when the backend is down). */
 const BASE = import.meta.env.VITE_API_URL || ''
 
+/* Thrown for non-2xx API responses (vs. a network-level TypeError when the
+   backend is unreachable — callers use that distinction to decide between
+   "surface the error" and "fall back to local behavior"). */
+export class ApiError extends Error {
+  constructor(message, { status, code } = {}) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.code = code
+  }
+}
+
 async function request(path, options = {}) {
   const res = await fetch(`${BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
   })
-  if (!res.ok) throw new Error(`API ${res.status} on ${path}`)
+  if (!res.ok) {
+    let code
+    let message = `API ${res.status} on ${path}`
+    try {
+      const body = await res.json()
+      if (body?.error) {
+        code = body.error.code
+        message = body.error.message
+      }
+    } catch { /* non-JSON error body — keep the generic message */ }
+    throw new ApiError(message, { status: res.status, code })
+  }
   if (res.status === 204) return null
   return res.json()
 }
