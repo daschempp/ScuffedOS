@@ -33,7 +33,7 @@ def fresh_db():
 
 @pytest.fixture(autouse=True)
 def no_external_services():
-    """Tests never reach the Claude API, Ollama, or Mem0 — install a fake
+    """Tests never reach the Claude API, OpenAI, or Mem0 — install a fake
     explicitly (llm.configure / memory_engine.configure) when one is needed."""
     llm.configure(None)
     memory_engine.configure(None)

@@ -1,18 +1,18 @@
 """Mem0 memory engine (self-hosted OSS) — the assistant's semantic memory.
 
-Configuration per the production spec: Claude as the extraction LLM, a local
-Ollama embedder (dims pinned), vectors in the same Postgres via pgvector
-(collection `mem0_memories`, distinct from the app's own `memories` table),
-and Mem0's change-history DB as a local SQLite file.
+Configuration per the production spec: Claude as the extraction LLM, an OpenAI
+embedder (dims pinned), vectors in the same Postgres via pgvector (collection
+`mem0_memories_openai`, distinct from the app's own `memories` table), and
+Mem0's change-history DB as a local SQLite file.
 
 Mirroring keeps the user-visible Memory screen truthful: every Mem0
 ADD/UPDATE/DELETE event from auto-capture is reflected into the app's
 `memories` table (src="learned", linked by `mem0_id`), and edits/deletes made
 through the API propagate back into Mem0.
 
-The engine is strictly best-effort: if Ollama/Postgres/the API key are
-missing, every function degrades to a no-op (search returns None) and chat
-keeps working.
+The engine is strictly best-effort: if Postgres/either API key is missing,
+every function degrades to a no-op (search returns None) and chat keeps
+working.
 """
 from __future__ import annotations
 
@@ -53,7 +53,8 @@ def _get():
     with _lock:
         if _engine is not None:
             return _engine if _engine is not False else None
-        if not (settings.memory_enabled and settings.anthropic_api_key and settings.database_url):
+        if not (settings.memory_enabled and settings.anthropic_api_key
+                and settings.openai_api_key and settings.database_url):
             _engine = False
             return None
         try:
@@ -67,10 +68,10 @@ def _get():
                     "temperature": 0.1,
                     "max_tokens": 2000,
                 }},
-                "embedder": {"provider": "ollama", "config": {
+                "embedder": {"provider": "openai", "config": {
                     "model": settings.embedder_model,
                     "embedding_dims": settings.embedder_dims,
-                    "ollama_base_url": settings.ollama_base_url,
+                    "api_key": settings.openai_api_key,
                 }},
                 "vector_store": {"provider": "pgvector", "config": {
                     "connection_string": _connection_string(),
