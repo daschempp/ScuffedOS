@@ -82,4 +82,4 @@ If the app's data practices change — for example, when new integrations are ad
 
 ## 10. Contact
 
-Questions, or a data access/deletion request? Email **daschempp47@gmail.com**.
+Questions, or a data access/deletion request? Email **contact@scuffedcorporation.com**.
