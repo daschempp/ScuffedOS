@@ -1,0 +1,42 @@
+/* ===========================================================================
+   Scuffed OS — Typography
+   =========================================================================== */
+
+:root {
+  /* families */
+  --font-display: "Schibsted Grotesk", system-ui, -apple-system, sans-serif;
+  --font-sans:    "Hanken Grotesk", system-ui, -apple-system, sans-serif;
+  --font-mono:    "Spline Sans Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  /* type scale (1rem = 16px) */
+  --text-xs:   0.75rem;    /* 12 — captions, labels */
+  --text-sm:   0.8125rem;  /* 13 — meta, dense UI */
+  --text-base: 0.9375rem;  /* 15 — body default */
+  --text-md:   1.0625rem;  /* 17 — lead body */
+  --text-lg:   1.25rem;    /* 20 — card titles */
+  --text-xl:   1.5rem;     /* 24 — section heads */
+  --text-2xl:  1.875rem;   /* 30 — page titles */
+  --text-3xl:  2.375rem;   /* 38 — display sm */
+  --text-4xl:  3rem;       /* 48 — display */
+  --text-5xl:  3.75rem;    /* 60 — hero */
+
+  /* line height */
+  --leading-tight:   1.1;
+  --leading-snug:    1.25;
+  --leading-normal:  1.5;
+  --leading-relaxed: 1.65;
+
+  /* letter spacing */
+  --tracking-tight:  -0.022em;
+  --tracking-snug:   -0.012em;
+  --tracking-normal: 0;
+  --tracking-wide:   0.04em;
+  --tracking-caps:   0.09em;  /* eyebrows / overlines */
+
+  /* weights */
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+  --weight-black:    800;
+}

@@ -1,0 +1,14 @@
+/* ===========================================================================
+   Scuffed OS — Webfonts
+   ---------------------------------------------------------------------------
+   Loaded from the Google Fonts CDN. These are the nearest grotesk matches for
+   the "neutral grotesk, journal-like" direction:
+     - Schibsted Grotesk  -> display / headings
+     - Hanken Grotesk     -> UI + body
+     - Spline Sans Mono   -> data, amounts, "second brain" mono
+   SUBSTITUTION NOTE: served from fonts.gstatic.com (not self-hosted). If you
+   want these vendored as local .woff2 binaries, send the files and I'll swap
+   these @import lines for self-hosted @font-face rules.
+   =========================================================================== */
+
+@import url("https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&family=Hanken+Grotesk:wght@400;500;600;700;800&family=Spline+Sans+Mono:wght@400;500;600&display=swap");

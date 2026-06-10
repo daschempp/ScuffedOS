@@ -1,0 +1,22 @@
+<!-- @dsCard group="Type" viewport="700x170" name="Mono — Spline Sans Mono" subtitle="Amounts, metrics, data & timestamps" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; padding: 22px 24px; background: var(--surface-raised); font-family: var(--font-mono); color: var(--text-strong); }
+  .line { display: flex; align-items: baseline; gap: 14px; margin-bottom: 12px; }
+  .spec { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); width: 110px; flex: none; }
+  .amt { font-size: var(--text-2xl); font-weight: 600; letter-spacing: -0.02em; }
+  .pos { color: var(--green-600); }
+  .neg { color: var(--clay-600); }
+  .meta { font-size: var(--text-sm); color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div class="line"><span class="spec">30 · 600</span><span class="amt">$4,820<span style="color:var(--text-faint)">.50</span></span></div>
+  <div class="line"><span class="spec">+ / −</span><span class="amt pos" style="font-size:var(--text-lg)">+$1,240</span><span class="amt neg" style="font-size:var(--text-lg)">−$86.20</span></div>
+  <div class="line"><span class="spec">13 · meta</span><span class="meta">2,140 kcal · 138g protein · 08:42</span></div>
+</body>
+</html>

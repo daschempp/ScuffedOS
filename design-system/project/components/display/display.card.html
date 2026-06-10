@@ -1,0 +1,69 @@
+<!-- @dsCard group="Components" viewport="700x420" name="Display" subtitle="Card · Badge · Avatar · Stat · ProgressBar · ProgressRing" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/lucide@0.460.0/dist/umd/lucide.min.js"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>
+  body { margin: 0; padding: 24px; background: var(--canvas); font-family: var(--font-sans); }
+  .grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 18px; align-items: start; }
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .avatars { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+  .stats { display: flex; gap: 28px; margin-bottom: 18px; }
+  .bars { display: flex; flex-direction: column; gap: 14px; }
+  .rings { display: flex; gap: 16px; align-items: center; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { Card, Badge, Avatar, Stat, ProgressBar, ProgressRing, IconButton } = window.ScuffedOSDesignSystem_c8c4c3;
+    const Ic = (n) => <i data-lucide={n}></i>;
+    function Demo() {
+      React.useEffect(() => { window.lucide && window.lucide.createIcons(); });
+      return (
+        <div className="grid">
+          <div style={{display:'flex', flexDirection:'column', gap:'18px'}}>
+            <Card eyebrow="Today" title="Quick status" action={<IconButton label="More" size="sm">{Ic("more-horizontal")}</IconButton>}>
+              <div className="badges">
+                <Badge color="green" dot>On track</Badge>
+                <Badge color="clay">Over budget</Badge>
+                <Badge color="honey">Due soon</Badge>
+                <Badge color="sky" icon={Ic("mic")}>Voice note</Badge>
+                <Badge color="plum">Memory</Badge>
+              </div>
+              <div className="avatars">
+                <Avatar name="Sam Rivera" size="lg" />
+                <Avatar name="Jo Kim" tint="clay" />
+                <Avatar name="Al Vance" tint="sky" size="sm" />
+                <Avatar name="Mo" tint="honey" size="xs" />
+              </div>
+              <div className="stats">
+                <Stat label="Balance" value="$4,820" delta="+3.2%" trend="up" icon={Ic("wallet")} />
+                <Stat label="Protein" value="138" unit="g" delta="-12g" trend="down" />
+              </div>
+            </Card>
+          </div>
+          <Card variant="sunken" title="Goals">
+            <div className="rings">
+              <ProgressRing value={1840} max={2100} size={84} color="green" label="88%" sublabel="kcal" />
+              <ProgressRing value={42} max={120} size={84} color="clay" label="42m" sublabel="exercise" />
+            </div>
+            <div className="bars" style={{marginTop:'18px'}}>
+              <ProgressBar label="Groceries" meta="$320 / $400" value={320} max={400} color="clay" />
+              <ProgressBar label="Savings" meta="$1.2k / $1.5k" value={1200} max={1500} color="green" />
+              <ProgressBar label="Water" meta="5 / 8 cups" value={5} max={8} color="sky" size="sm" />
+            </div>
+          </Card>
+        </div>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById("root")).render(<Demo />);
+  </script>
+</body>
+</html>

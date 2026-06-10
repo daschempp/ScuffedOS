@@ -1,0 +1,24 @@
+<!-- @dsCard group="Type" viewport="700x230" name="Body — Hanken Grotesk" subtitle="UI text & reading copy" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; padding: 22px 24px; background: var(--surface-raised); font-family: var(--font-sans); color: var(--text-body); }
+  .line { display: flex; align-items: baseline; gap: 14px; margin-bottom: 11px; }
+  .spec { font-family: var(--font-mono); font-size: 11px; color: var(--text-faint); width: 110px; flex: none; }
+  .lead { font-size: var(--text-md); color: var(--text-strong); font-weight: 500; }
+  .base { font-size: var(--text-base); }
+  .sm { font-size: var(--text-sm); color: var(--text-muted); }
+  .xs { font-size: var(--text-xs); color: var(--text-faint); }
+  p { margin: 0; max-width: 480px; line-height: var(--leading-normal); }
+</style>
+</head>
+<body>
+  <div class="line"><span class="spec">17 · lead</span><p class="lead">Your assistant noticed you skipped lunch twice this week.</p></div>
+  <div class="line"><span class="spec">15 · body</span><p class="base">Caught up on everything — three tasks moved to tomorrow, and rent posted this morning.</p></div>
+  <div class="line"><span class="spec">13 · meta</span><p class="sm">From a voice note · 2 minutes ago</p></div>
+  <div class="line"><span class="spec">12 · caption</span><p class="xs">SYNCED FROM TELEGRAM</p></div>
+</body>
+</html>

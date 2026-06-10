@@ -1,0 +1,12 @@
+/* ===========================================================================
+   Scuffed OS — app global stylesheet
+   Webfonts load via <link> in index.html. This file pulls in the design-system
+   tokens (CSS custom properties) and the UI-kit component/screen styles.
+   =========================================================================== */
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/spacing.css";
+@import "./tokens/radius.css";
+@import "./tokens/shadows.css";
+@import "./tokens/motion.css";
+@import "./kit.css";

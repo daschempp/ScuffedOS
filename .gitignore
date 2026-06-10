@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node (frontend has its own .gitignore too)
+node_modules/
+
+# OS / editor
+.DS_Store
+.idea/
+
+# Secrets & local data
+.env
+*.db
+*.sqlite3
+
+# Design bundle working artifacts (extracted reference kept in design-system/)
+design_download/

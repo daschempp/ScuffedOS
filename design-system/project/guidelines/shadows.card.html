@@ -1,0 +1,25 @@
+<!-- @dsCard group="Spacing" viewport="700x186" name="Elevation" subtitle="Soft floaty warm-tinted shadows" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body { margin: 0; padding: 26px 24px 30px; background: var(--canvas); font-family: var(--font-sans); color: var(--text-body); }
+  .row { display: flex; gap: 22px; align-items:center; }
+  .col { text-align: center; }
+  .box { width: 88px; height: 60px; background: var(--surface-raised); border-radius: var(--radius-lg); }
+  .tok { font-family: var(--font-mono); font-size: 11px; color: var(--text-strong); margin-top: 12px; font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="col"><div class="box" style="box-shadow:var(--shadow-xs)"></div><div class="tok">xs</div></div>
+    <div class="col"><div class="box" style="box-shadow:var(--shadow-sm)"></div><div class="tok">sm</div></div>
+    <div class="col"><div class="box" style="box-shadow:var(--shadow-md)"></div><div class="tok">md</div></div>
+    <div class="col"><div class="box" style="box-shadow:var(--shadow-lg)"></div><div class="tok">lg</div></div>
+    <div class="col"><div class="box" style="box-shadow:var(--shadow-xl)"></div><div class="tok">xl</div></div>
+    <div class="col"><div class="box" style="background:var(--green-600);box-shadow:var(--shadow-accent)"></div><div class="tok" style="color:var(--accent-text)">accent</div></div>
+  </div>
+</body>
+</html>

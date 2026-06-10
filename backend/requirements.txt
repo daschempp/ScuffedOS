@@ -1,0 +1,5 @@
+# Scuffed OS backend
+fastapi>=0.115.0
+uvicorn>=0.32.0
+# Optional, for `uvicorn --reload` + faster event loop (compiled deps):
+#   pip install "uvicorn[standard]"

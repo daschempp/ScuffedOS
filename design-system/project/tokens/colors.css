@@ -1,0 +1,94 @@
+/* ===========================================================================
+   Scuffed OS — Color
+   Warm "paper" neutrals + deep forest-green accent. Calm, cozy, journal-like.
+   =========================================================================== */
+
+:root {
+  /* ---- Warm paper neutrals (canvas + surfaces) -------------------------- */
+  --paper-50:  #FFFDFA;   /* raised cards */
+  --paper-100: #FAF6EF;   /* app canvas — the dominant "paper" tone */
+  --paper-200: #F4EEE3;   /* sunken / subtle fill */
+  --paper-300: #ECE4D5;   /* inset / track */
+  --paper-400: #E1D7C4;   /* heavier fill */
+
+  /* ---- Warm ink (text) -------------------------------------------------- */
+  --ink-900: #2A2620;     /* strong text — warm near-black */
+  --ink-700: #4A443B;     /* body */
+  --ink-500: #6E665A;     /* muted */
+  --ink-400: #938A7B;     /* faint / placeholder */
+  --ink-300: #B6AD9C;     /* disabled */
+
+  /* ---- Forest green accent --------------------------------------------- */
+  --green-900: #20402F;
+  --green-800: #284E39;
+  --green-700: #2D5640;
+  --green-600: #3A6B4E;   /* PRIMARY accent */
+  --green-500: #4F8463;
+  --green-400: #6B9E7E;
+  --green-300: #95BCA2;
+  --green-200: #C4DAC9;
+  --green-100: #DEEBE1;
+  --green-50:  #EDF4EE;
+
+  /* ---- Supporting warm hues (categories + semantics) ------------------- */
+  --clay-600:  #BC5A3C;   /* danger / expense / over-budget */
+  --clay-300:  #E0A48E;
+  --clay-100:  #F6E0D7;
+  --honey-600: #C0892F;   /* warning / caution */
+  --honey-300: #E4C07E;
+  --honey-100: #F6E9CF;
+  --sky-600:   #3E708F;   /* info / calm links */
+  --sky-300:   #98BACE;
+  --sky-100:   #DCE8EF;
+  --plum-600:  #7E5A86;   /* misc category accent */
+  --plum-100:  #ECE0EE;
+
+  --white: #FFFFFF;
+  --black: #1C1A16;
+
+  /* ====================================================================== */
+  /* Semantic aliases — prefer these in product code                        */
+  /* ====================================================================== */
+
+  /* surfaces */
+  --canvas:          var(--paper-100);
+  --surface:         var(--paper-50);
+  --surface-raised:  var(--white);
+  --surface-sunken:  var(--paper-200);
+  --surface-inset:   var(--paper-300);
+
+  /* text */
+  --text-strong:     var(--ink-900);
+  --text-body:       var(--ink-700);
+  --text-muted:      var(--ink-500);
+  --text-faint:      var(--ink-400);
+  --text-disabled:   var(--ink-300);
+  --text-on-accent:  #F3F8F3;
+
+  /* accent */
+  --accent:          var(--green-600);
+  --accent-hover:    var(--green-700);
+  --accent-press:    var(--green-800);
+  --accent-soft:     var(--green-100);
+  --accent-tint:     var(--green-50);
+  --accent-border:   var(--green-200);
+  --accent-text:     var(--green-700);
+
+  /* borders / hairlines */
+  --border-hairline: #EDE5D7;
+  --border-soft:     #E4DAC8;
+  --border-strong:   #D6CAB5;
+
+  /* status */
+  --success:      var(--green-600);
+  --success-soft: var(--green-100);
+  --warning:      var(--honey-600);
+  --warning-soft: var(--honey-100);
+  --danger:       var(--clay-600);
+  --danger-soft:  var(--clay-100);
+  --info:         var(--sky-600);
+  --info-soft:    var(--sky-100);
+
+  /* focus */
+  --focus-ring: color-mix(in srgb, var(--green-600) 38%, transparent);
+}

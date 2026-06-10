@@ -1,0 +1,13 @@
+/* ===========================================================================
+   Scuffed OS — Radius  (soft, rounded — 12px default card)
+   =========================================================================== */
+
+:root {
+  --radius-xs:   6px;    /* chips, tags */
+  --radius-sm:   9px;    /* inputs, small buttons */
+  --radius-md:   11px;   /* buttons, list rows */
+  --radius-lg:   12px;   /* DEFAULT card */
+  --radius-xl:   18px;   /* large panels */
+  --radius-2xl:  24px;   /* hero surfaces */
+  --radius-pill: 999px;  /* pills, avatars, switches */
+}
