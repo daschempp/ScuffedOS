@@ -20,11 +20,11 @@ has its own doc.
 | Doc | Function | Status |
 | --- | --- | --- |
 | [assistant.md](assistant.md) | Assistant chat / intent engine — `POST /api/assistant/chat` | ✅ Built |
-| [tasks.md](tasks.md) | Task list — `GET/POST /api/tasks`, `PATCH /api/tasks/{id}` | ✅ Built |
+| [tasks.md](tasks.md) | Task list (+ reminders, attachments, recurrence) — `/api/tasks` | ✅ Built |
 | [memory.md](memory.md) | Second-brain memories — `GET/POST /api/memory` | ✅ Built |
-| [calendar.md](calendar.md) | Events + day/week/month + "Up next" | ⬜ Planned |
-| [habits.md](habits.md) | Habit definitions + daily completion log / streaks | ⬜ Planned |
-| [nutrition.md](nutrition.md) | Food + water log + macro targets | ⬜ Planned |
+| [calendar.md](calendar.md) | Events + recurrence + "Up next" — `/api/calendar` | ✅ Built |
+| [habits.md](habits.md) | Habit definitions + daily completion log / streaks — `/api/habits` | ✅ Built |
+| [nutrition.md](nutrition.md) | Food + water log + macro targets + food DB — `/api/nutrition` | ✅ Built |
 | [fitness.md](fitness.md) | Recovery/strain/sleep + workouts (Whoop sync) | ⬜ Planned |
 | [finance.md](finance.md) | Accounts, budgets, transactions, net worth, subs, bills | ⬜ Planned |
 | [email.md](email.md) | AI triage + draft replies over a synced inbox | ⬜ Planned |
@@ -35,6 +35,12 @@ has its own doc.
 | Doc | Covers |
 | --- | --- |
 | [data-store.md](data-store.md) | The persistence layer (`store.py`) and data contracts (`schemas.py`) every function uses. |
+
+## Policies
+
+| Doc | Covers |
+| --- | --- |
+| [privacy-policy.md](privacy-policy.md) | The user-facing privacy policy — data collected, service providers (Anthropic, OpenAI, Supabase, USDA, WHOOP), retention/deletion. Needs a public URL for the WHOOP developer portal. |
 
 ## How these docs are organized
 
@@ -56,22 +62,36 @@ ones, the data model is extracted from the corresponding React screen. Anything 
 
 ```
 backend/
-├── requirements.txt       # runtime deps (requirements-dev.txt adds pytest + httpx)
+├── requirements.txt       # runtime deps (requirements-dev.txt adds pytest)
 ├── pytest.ini
-├── tests/                 # pytest suite over the routers (FastAPI TestClient)
+├── alembic/               # migrations (0001 schema · 0002 mem0 · 0003 local domains)
+├── data/                  # local artifacts: mem0 history db, attachments/ (gitignored)
+├── tests/                 # pytest suite (SQLite default; TEST_DATABASE_URL for PG)
 └── app/
-    ├── main.py            # app wiring: CORS, router registration, /api/health
+    ├── main.py            # app wiring: CORS, routers, lifespan (reminder tick), /api/health
     ├── config.py          # env-backed settings (.env supported)
     ├── errors.py          # consistent {"error": {code, message}} envelope
     ├── schemas.py         # Pydantic request/response models
-    ├── store.py           # in-memory data store (tasks + memories)
-    ├── assistant.py       # intent engine (pure logic)
+    ├── db.py / models.py  # SQLAlchemy engine helpers + table models
+    ├── store.py           # the Store facade — all persistence behind plain methods
+    ├── display.py         # derived display strings (due, when, at, …)
+    ├── recurrence.py      # shared RRULE engine (events + recurring tasks, M3)
+    ├── reminders.py       # firing reminders: tick loop + osascript notify (M3)
+    ├── food_db.py         # USDA FoodData Central lookup (M3)
+    ├── llm.py             # the one Claude client (chat + heavy tiers)
+    ├── memory_engine.py   # self-hosted Mem0 (Claude extraction, OpenAI embedder)
+    ├── assistant.py       # the tool-loop engine behind /api/assistant
+    ├── tools.py           # the assistant's tool surface (read+write per domain)
+    ├── seeds.py           # sample payloads for still-planned domains (fitness, finance)
     └── routers/
-        ├── assistant.py   # POST /api/assistant/chat
-        ├── tasks.py       # GET/POST /api/tasks, PATCH /api/tasks/{id}
-        └── memory.py      # GET/POST /api/memory
-# planned functions (calendar, habits, nutrition, fitness, finance, email, people)
-# have no backend yet — they live as sample data in frontend/src/screens/*.jsx
+        ├── assistant.py   # chat + SSE stream + conversation resume
+        ├── tasks.py       # tasks + reminders + file attachments
+        ├── memory.py      # second-brain CRUD (Mem0-synced)
+        ├── calendar.py    # events + occurrences + up-next (M3)
+        ├── habits.py      # habits + completion toggles (M3)
+        └── nutrition.py   # meals/water/targets/week + food search (M3)
+# still-planned functions (fitness, finance, email, people) render sample data
+# in frontend/src/screens/*.jsx until their milestones (M4-M6)
 ```
 
-> Status: draft · Last updated: 2026-06-09
+> Status: current as of M3 · Last updated: 2026-06-10

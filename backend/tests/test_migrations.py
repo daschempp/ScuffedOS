@@ -27,15 +27,23 @@ def alembic_cfg(tmp_path):
     return _make_cfg(f"sqlite:///{tmp_path}/migrated.db")
 
 
+ALL_TABLES = {
+    "tasks", "memories", "conversations", "conversation_messages",
+    "task_reminders", "events", "habits", "habit_completions",
+    "meals", "water_days", "nutrition_targets",
+}
+
+
 def test_upgrade_head_builds_full_schema(alembic_cfg, tmp_path):
     command.upgrade(alembic_cfg, "head")
     engine = create_engine(f"sqlite:///{tmp_path}/migrated.db")
     tables = set(inspect(engine).get_table_names())
-    assert {"tasks", "memories", "conversations", "conversation_messages"} <= tables
+    assert ALL_TABLES <= tables
 
     task_cols = {c["name"] for c in inspect(engine).get_columns("tasks")}
     assert {"bucket", "deadline", "prio", "list", "subtasks", "labels",
-            "reminders", "files", "created_at", "completed_at"} <= task_cols
+            "recurrence", "files", "created_at", "completed_at"} <= task_cols
+    assert "reminders" not in task_cols  # dropped in 0003 — they fire from task_reminders now
     engine.dispose()
 
 
@@ -44,7 +52,7 @@ def test_downgrade_base_removes_everything(alembic_cfg, tmp_path):
     command.downgrade(alembic_cfg, "base")
     engine = create_engine(f"sqlite:///{tmp_path}/migrated.db")
     tables = set(inspect(engine).get_table_names())
-    assert not {"tasks", "memories", "conversations", "conversation_messages"} & tables
+    assert not ALL_TABLES & tables
     engine.dispose()
 
 

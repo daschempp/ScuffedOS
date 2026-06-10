@@ -53,5 +53,18 @@ class Settings(BaseSettings):
     # artifact that doesn't live in Supabase).
     mem0_history_path: str = "./data/mem0_history.db"
 
+    # Task attachments (M3): bytes live here, metadata stays on the task row.
+    # Local app data, not Supabase — same frame as the Mem0 history file.
+    attachments_dir: str = "./data/attachments"
+
+    # Firing reminders (M3): a background tick scans for due reminders and
+    # posts macOS notifications via osascript (works without an app bundle).
+    reminders_enabled: bool = True
+    reminder_tick_seconds: int = 30
+
+    # USDA FoodData Central — resolves "a chicken wrap" to macros (M3).
+    # DEMO_KEY works rate-limited; a free key from api.data.gov lifts it.
+    fdc_api_key: str = "DEMO_KEY"
+
 
 settings = Settings()

@@ -7,16 +7,24 @@ and the assistant's tools can't invent values. Display strings (`due`, `late`,
 from __future__ import annotations
 
 from datetime import date, datetime
-# The task models have a field literally named `list` (the prototype's API
-# contract). Under Python 3.14's deferred annotations, that field shadows the
-# `list` builtin when sibling `list[...]` annotations are evaluated — so task
-# models use typing.List instead.
-from typing import List, Literal
+# Two Python 3.14 deferred-annotation quirks: a field literally named `list`
+# (the prototype's API contract) shadows the builtin when sibling `list[...]`
+# annotations are evaluated — so task models use typing.List. Likewise the
+# nutrition/habit models have a field named `date`, which shadows the date
+# *type* inside their own class — those annotate with the `Day` alias.
+from datetime import date as Day
+from typing import Annotated, List, Literal
 
 from pydantic import BaseModel, Field
 
+Weekday = Annotated[int, Field(ge=0, le=6)]  # Mon=0 … Sun=6
+
 TaskGroup = Literal["Today", "Upcoming", "Someday"]
 TaskPriority = Literal["low", "med", "high"]
+# The design palette — event colors, habit tints, meal chips all draw from it.
+Tint = Literal["green", "sky", "plum", "honey", "clay"]
+MealSlot = Literal["Breakfast", "Lunch", "Snack", "Dinner"]
+HabitLink = Literal["water", "workout"]
 
 
 # ---- Assistant ------------------------------------------------------------
@@ -68,11 +76,30 @@ class Subtask(BaseModel):
 
 
 class TaskFile(BaseModel):
-    """File *metadata* only until real uploads land in M3."""
+    """File metadata; the bytes live on disk under settings.attachments_dir.
 
-    id: int | float
+    Server-issued ids are uuid hex strings (M3 uploads); older client-generated
+    Date.now() ids are still tolerated on rows that predate real uploads.
+    """
+
+    id: int | float | str
     name: str
     size: int | None = None
+
+
+class TaskReminderOut(BaseModel):
+    """A reminder that fires (M3). `display` is the chip text."""
+
+    id: int
+    remind_at: datetime
+    label: str
+    fired_at: datetime | None
+    display: str
+
+
+class TaskReminderCreate(BaseModel):
+    remind_at: datetime
+    label: str = ""
 
 
 class Task(BaseModel):
@@ -86,8 +113,10 @@ class Task(BaseModel):
     description: str
     subtasks: List[Subtask]
     labels: List[str]
-    reminders: List[str]
+    reminders: List[TaskReminderOut]
     files: List[TaskFile]
+    recurrence: str | None
+    recurrence_label: str | None  # derived: "Repeats weekly" / None
     # Derived display facts (review R6) — computed from deadline/done on read.
     due: str | None
     late: bool
@@ -106,13 +135,14 @@ class TaskCreate(BaseModel):
     description: str = ""
     subtasks: List[Subtask] = []
     labels: List[str] = []
-    reminders: List[str] = []
     files: List[TaskFile] = []
+    recurrence: str | None = None
 
 
 class TaskUpdate(BaseModel):
     """Partial update. Only keys the client sends are applied; an explicit
-    null clears `deadline` and is ignored for non-nullable fields (R7)."""
+    null clears `deadline`/`recurrence` and is ignored for non-nullable
+    fields (R7)."""
 
     label: str | None = Field(default=None, min_length=1)
     done: bool | None = None
@@ -123,8 +153,8 @@ class TaskUpdate(BaseModel):
     description: str | None = None
     subtasks: List[Subtask] | None = None
     labels: List[str] | None = None
-    reminders: List[str] | None = None
     files: List[TaskFile] | None = None
+    recurrence: str | None = None
 
 
 # ---- Memory (second brain) ------------------------------------------------
@@ -151,3 +181,195 @@ class MemoryUpdate(BaseModel):
     src: str | None = None
     tags: list[str] | None = None
     color: str | None = None
+
+
+# ---- Calendar ---------------------------------------------------------------
+class EventOccurrence(BaseModel):
+    """One concrete occurrence — what GET /events returns. For a recurring
+    series, `id` is the series row and `start`/`end` are this instance's
+    times; single-occurrence deletes key on `start`."""
+
+    id: int
+    title: str
+    start: datetime
+    end: datetime
+    tint: Tint
+    location: str
+    description: str
+    recurring: bool
+    recurrence_label: str | None
+    at: str  # derived display clock, e.g. "9:00am"
+
+
+class EventCreate(BaseModel):
+    title: str = Field(min_length=1)
+    start: datetime
+    end: datetime | None = None  # defaults to start + 1h
+    tint: Tint = "sky"
+    location: str = ""
+    description: str = ""
+    recurrence: str | None = None
+
+
+class EventUpdate(BaseModel):
+    """Partial update; edits apply to the whole series for recurring events
+    (delete a single occurrence via DELETE ?occurrence_start=)."""
+
+    title: str | None = Field(default=None, min_length=1)
+    start: datetime | None = None
+    end: datetime | None = None
+    tint: Tint | None = None
+    location: str | None = None
+    description: str | None = None
+    recurrence: str | None = None
+
+
+class UpNextItem(BaseModel):
+    id: int
+    title: str
+    when: str  # derived: "Now · 9:00am–10:30am" / "Tomorrow 4:00pm · Oak Street"
+    tint: Tint
+    start: datetime
+
+
+# ---- Habits -----------------------------------------------------------------
+class HabitOut(BaseModel):
+    id: int
+    name: str
+    icon: str
+    tint: Tint
+    schedule: list[int]  # weekday ints, Mon=0
+    link: HabitLink | None
+    streak: int  # derived from the completion log
+    best_streak: int
+    days: list[bool]  # the requested week's completion grid, Mon-first
+
+
+class HabitsWeek(BaseModel):
+    week_start: date  # Monday
+    today_index: int | None  # 0-6 within this week, None if another week
+    habits: List[HabitOut]
+    done_today: int
+    week_pct: int  # completions / scheduled slots elapsed this week
+    prev_week_pct: int
+
+
+class HabitCreate(BaseModel):
+    name: str = Field(min_length=1)
+    icon: str = "check"
+    tint: Tint = "green"
+    schedule: list[Weekday] = [0, 1, 2, 3, 4, 5, 6]
+    link: HabitLink | None = None
+
+
+class HabitUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    icon: str | None = None
+    tint: Tint | None = None
+    schedule: list[Weekday] | None = None
+    link: HabitLink | None = None
+
+
+class HabitToggle(BaseModel):
+    date: Day | None = None  # defaults to today
+
+
+# ---- Nutrition --------------------------------------------------------------
+class MealOut(BaseModel):
+    id: int
+    date: Day
+    slot: MealSlot
+    name: str
+    kcal: int
+    protein_g: float
+    carbs_g: float
+    fat_g: float
+    time: str  # derived: "Breakfast · 8:10am"
+    icon: str  # derived from slot (egg/sandwich/apple/utensils)
+    tint: Tint
+    logged_at: datetime
+
+
+class MealCreate(BaseModel):
+    name: str = Field(min_length=1)
+    slot: MealSlot = "Snack"
+    kcal: int = Field(default=0, ge=0)
+    protein_g: float = Field(default=0, ge=0)
+    carbs_g: float = Field(default=0, ge=0)
+    fat_g: float = Field(default=0, ge=0)
+    date: Day | None = None  # defaults to today
+    logged_at: datetime | None = None
+
+
+class MealUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    slot: MealSlot | None = None
+    kcal: int | None = Field(default=None, ge=0)
+    protein_g: float | None = Field(default=None, ge=0)
+    carbs_g: float | None = Field(default=None, ge=0)
+    fat_g: float | None = Field(default=None, ge=0)
+
+
+class NutritionTargetsOut(BaseModel):
+    calories: int
+    protein_g: int
+    carbs_g: int
+    fat_g: int
+    water_cups: int
+
+
+class NutritionTargetsUpdate(BaseModel):
+    calories: int | None = Field(default=None, gt=0)
+    protein_g: int | None = Field(default=None, gt=0)
+    carbs_g: int | None = Field(default=None, gt=0)
+    fat_g: int | None = Field(default=None, gt=0)
+    water_cups: int | None = Field(default=None, gt=0)
+
+
+class WaterOut(BaseModel):
+    date: Day
+    cups: int
+    goal: int
+
+
+class WaterUpdate(BaseModel):
+    """Increment by `delta` cups (default +1) or set `cups` outright."""
+
+    delta: int | None = None
+    cups: int | None = Field(default=None, ge=0)
+    date: Day | None = None
+
+
+class NutritionDay(BaseModel):
+    date: Day
+    meals: List[MealOut]
+    totals: dict  # {kcal, protein_g, carbs_g, fat_g} summed on read
+    targets: NutritionTargetsOut
+    water: WaterOut
+
+
+class NutritionWeekDay(BaseModel):
+    date: Day
+    dow: str  # "M" / "T" / ... Mon-first
+    kcal: int
+    frac: float  # kcal / target, capped at 1.0 for the bar chart
+
+
+class NutritionWeek(BaseModel):
+    days: List[NutritionWeekDay]
+    avg_kcal: int
+    days_met: int  # days within the kcal goal (of days with any logging)
+    goal: int
+
+
+class FoodHit(BaseModel):
+    """A food-database match (USDA FoodData Central), per ~serving."""
+
+    fdc_id: int
+    description: str
+    brand: str | None = None
+    serving: str
+    kcal: int
+    protein_g: float
+    carbs_g: float
+    fat_g: float

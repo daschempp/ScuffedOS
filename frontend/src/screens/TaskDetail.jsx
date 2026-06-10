@@ -2,6 +2,7 @@
 import React from 'react'
 import { Badge, IconButton, Checkbox, Button } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
+import { api } from '../lib/api.js'
 
 const TASK_LISTS = [
   { name: 'Work', color: 'sky' }, { name: 'Health', color: 'green' },
@@ -24,9 +25,10 @@ function fmtSize(bytes) {
   return (bytes / 1024 / 1024).toFixed(1) + ' MB'
 }
 
-export function TaskDetail({ task, onUpdate, onClose }) {
+export function TaskDetail({ task, onUpdate, onClose, onRefresh }) {
   const [subInput, setSubInput] = React.useState('')
-  const [remInput, setRemInput] = React.useState('')
+  const [remWhen, setRemWhen] = React.useState('')
+  const [remLabel, setRemLabel] = React.useState('')
   const [addingRem, setAddingRem] = React.useState(false)
   const fileRef = React.useRef(null)
 
@@ -50,20 +52,45 @@ export function TaskDetail({ task, onUpdate, onClose }) {
   const toggleSub = (id) => patch({ subtasks: subs.map((s) => s.id === id ? { ...s, done: !s.done } : s) })
   const delSub = (id) => patch({ subtasks: subs.filter((s) => s.id !== id) })
 
+  const addReminderAt = (when, label) =>
+    api.addTaskReminder(task.id, when.toISOString(), label).then(onRefresh).catch(() => {})
   const addRem = () => {
-    if (remInput.trim()) patch({ reminders: [...reminders, remInput.trim()] })
-    setRemInput(''); setAddingRem(false)
+    if (remWhen) addReminderAt(new Date(remWhen), remLabel.trim() || undefined)
+    setRemWhen(''); setRemLabel(''); setAddingRem(false)
   }
-  const presetRems = ['1 hour before', '9:00am', 'Tonight']
+  const delRem = (rid) => api.deleteTaskReminder(task.id, rid).then(onRefresh).catch(() => {})
+  // Quick chips — concrete datetimes, not free-text strings.
+  const quickRems = [
+    ['Tomorrow 9am', () => {
+      const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return d
+    }],
+    ['Tonight 8pm', () => {
+      const d = new Date(); d.setHours(20, 0, 0, 0)
+      if (d <= new Date()) d.setDate(d.getDate() + 1) // 8pm already passed — tomorrow 8pm
+      return d
+    }],
+  ]
 
   const onFiles = (e) => {
-    const picked = Array.from(e.target.files || []).map((f) => ({ id: Date.now() + Math.random(), name: f.name, size: f.size }))
-    if (picked.length) patch({ files: [...files, ...picked] })
+    const picked = Array.from(e.target.files || [])
     e.target.value = ''
+    if (!picked.length) return
+    picked
+      .reduce((p, f) => p.then(() => api.uploadTaskFile(task.id, f)).catch(() => {}), Promise.resolve())
+      .then(onRefresh)
   }
-  const delFile = (id) => patch({ files: files.filter((f) => f.id !== id) })
+  const openFile = (f) => {
+    if (typeof f.id !== 'string') return // temp/sample row — nothing to download
+    window.open(api.taskFileUrl(task.id, f.id), '_blank')
+  }
+  const delFile = (id) => api.deleteTaskFile(task.id, id).then(onRefresh).catch(() => {})
 
   const PRIOS = [['low', 'Low', 'var(--green-500)'], ['med', 'Medium', 'var(--honey-600)'], ['high', 'High', 'var(--clay-600)']]
+  const RECURS = [
+    [null, 'None'], ['FREQ=DAILY', 'Daily'], ['FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', 'Weekdays'],
+    ['FREQ=WEEKLY', 'Weekly'], ['FREQ=MONTHLY', 'Monthly'],
+  ]
+  const customRecurrence = task.recurrence && !RECURS.some(([val]) => val === task.recurrence)
 
   return (
     <React.Fragment>
@@ -143,28 +170,43 @@ export function TaskDetail({ task, onUpdate, onClose }) {
           </div>
 
           <div className="kit-field">
+            <span className="kit-field__label"><Icon name="repeat" />Repeats</span>
+            <div className="kit-seg">
+              {RECURS.map(([val, lbl]) => (
+                <button key={lbl} className={!customRecurrence && (task.recurrence || null) === val ? 'is-on' : ''}
+                  onClick={() => patch({ recurrence: val })}>{lbl}</button>
+              ))}
+              {customRecurrence && <button className="is-on">{task.recurrence_label || 'Repeats (custom)'}</button>}
+            </div>
+          </div>
+
+          <div className="kit-field">
             <span className="kit-field__label"><Icon name="bell" />Reminders</span>
             <div className="kit-chips">
-              {reminders.map((r, i) => (
-                <span className="kit-chip" key={i}>
-                  <Icon name="bell" />{r}
-                  <span className="kit-chip__x" onClick={() => patch({ reminders: reminders.filter((_, j) => j !== i) })}><Icon name="x" /></span>
+              {reminders.map((r) => (
+                <span className="kit-chip" key={r.id} style={r.fired_at ? { opacity: 0.5, textDecoration: 'line-through' } : undefined}>
+                  <Icon name="bell" />{r.display}
+                  <span className="kit-chip__x" onClick={() => delRem(r.id)}><Icon name="x" /></span>
                 </span>
               ))}
-              {addingRem ? (
-                <span className="kit-chip">
-                  <input autoFocus value={remInput} onChange={(e) => setRemInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && addRem()} onBlur={addRem}
-                    placeholder="When?" style={{ border: 'none', outline: 'none', background: 'transparent', font: 'inherit', width: 90 }} />
-                </span>
-              ) : (
+              {!addingRem && (
                 <span className="kit-chip kit-chip__add" onClick={() => setAddingRem(true)}><Icon name="plus" />Add</span>
               )}
             </div>
+            {addingRem && (
+              <div className="kit-addrow">
+                <Icon name="bell" />
+                <input autoFocus type="datetime-local" value={remWhen} onChange={(e) => setRemWhen(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addRem()} style={{ width: 'auto', flex: 1 }} />
+                <input value={remLabel} onChange={(e) => setRemLabel(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addRem()} placeholder="Label (optional)" style={{ width: 110 }} />
+                <Button variant="soft" size="sm" onClick={addRem}>Set</Button>
+              </div>
+            )}
             {reminders.length === 0 && !addingRem && (
               <div className="kit-chips">
-                {presetRems.map((r) => (
-                  <span className="kit-chip kit-chip__add" key={r} onClick={() => patch({ reminders: [...reminders, r] })}>{r}</span>
+                {quickRems.map(([lbl, when]) => (
+                  <span className="kit-chip kit-chip__add" key={lbl} onClick={() => addReminderAt(when())}>{lbl}</span>
                 ))}
               </div>
             )}
@@ -177,13 +219,14 @@ export function TaskDetail({ task, onUpdate, onClose }) {
                 {files.map((f) => {
                   const fi = fileIcon(f.name)
                   return (
-                    <div className="kit-file" key={f.id}>
+                    <div className="kit-file" key={f.id} onClick={() => openFile(f)}
+                      style={typeof f.id === 'string' ? { cursor: 'pointer' } : undefined}>
                       <span className="kit-file__ico" style={{ background: `var(--${fi.tint}-100)`, color: `var(--${fi.tint}-600)` }}><Icon name={fi.icon} /></span>
                       <div className="kit-file__main">
                         <div className="kit-file__name">{f.name}</div>
                         <div className="kit-file__size">{fmtSize(f.size)}</div>
                       </div>
-                      <span className="kit-file__del" onClick={() => delFile(f.id)}><Icon name="x" /></span>
+                      <span className="kit-file__del" onClick={(e) => { e.stopPropagation(); delFile(f.id) }}><Icon name="x" /></span>
                     </div>
                   )
                 })}

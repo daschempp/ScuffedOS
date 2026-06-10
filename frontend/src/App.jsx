@@ -17,6 +17,9 @@ import { MemoryScreen } from './screens/MemoryScreen.jsx'
 import { ChatPanel } from './assistant/ChatPanel.jsx'
 import { api } from './lib/api.js'
 import { useTasks } from './lib/useTasks.js'
+import { useCalendar } from './lib/useCalendar.js'
+import { useHabits } from './lib/useHabits.js'
+import { useNutrition } from './lib/useNutrition.js'
 import { useSpeech } from './lib/useSpeech.js'
 
 const SCREENS = {
@@ -45,10 +48,34 @@ function Placeholder({ icon, name }) {
   )
 }
 
+/* Live header subtitle when real data has loaded; null falls back to the
+   static SCREENS sub. */
+function liveSub(screen, calendar, habitsState, nutrition) {
+  if (screen === 'calendar' && calendar.todayCount !== null) {
+    const n = calendar.todayCount
+    return `${n} event${n === 1 ? '' : 's'} today`
+  }
+  if (screen === 'habits' && habitsState.habits.length) {
+    return `${habitsState.doneToday} of ${habitsState.habits.length} done · keep your streaks alive`
+  }
+  if (screen === 'nutrition' && nutrition.day) {
+    const eaten = Math.round(nutrition.day.totals.kcal)
+    const goal = nutrition.day.targets.calories
+    return `${eaten.toLocaleString('en-US')} of ${goal.toLocaleString('en-US')} kcal · ${Math.max(0, goal - eaten).toLocaleString('en-US')} to go`
+  }
+  return null
+}
+
 export function App() {
   const [screen, setScreen] = React.useState('home')
   // The one rich task list (D1) — Home, TasksScreen and the assistant share it.
   const { tasks, addTask, toggleTask, updateTask, refresh } = useTasks()
+  // Calendar, habits and nutrition state — same shared-hook pattern.
+  const calendar = useCalendar()
+  const habitsState = useHabits()
+  // Reaching (or leaving) the water goal auto-completes a water-linked habit
+  // server-side; refetch habits so the checkmark/streak follow.
+  const nutrition = useNutrition({ onWaterChanged: () => habitsState.refresh() })
   const [voiceNotes, setVoiceNotes] = React.useState([
     { text: '“Remind me to call mom about the ceramics class”', time: '8:10am', len: '0:06', done: true },
     { text: '“Lighthouse deadline moved to the 30th”', time: 'Yesterday', len: '0:11', done: true },
@@ -69,16 +96,27 @@ export function App() {
   }
 
   const meta = SCREENS[screen] || SCREENS.home
+  const sub = liveSub(screen, calendar, habitsState, nutrition) || meta.sub
+
+  // Assistant action → refresh whichever domain it touched. Nutrition also
+  // refreshes habits: water actions deep-link to 'nutrition' but can flip a
+  // water-linked habit's completion.
+  const onDataChanged = (target) => {
+    if (target === 'tasks') refresh()
+    else if (target === 'calendar') calendar.refresh()
+    else if (target === 'habits') habitsState.refresh()
+    else if (target === 'nutrition') { nutrition.refresh(); habitsState.refresh() }
+  }
 
   let body
-  if (screen === 'home') body = <DashboardScreen tasks={tasks.filter((t) => t.group === 'Today')} onToggleTask={toggleTask} voiceNotes={voiceNotes} />
-  else if (screen === 'nutrition') body = <NutritionScreen />
+  if (screen === 'home') body = <DashboardScreen tasks={tasks.filter((t) => t.group === 'Today')} onToggleTask={toggleTask} voiceNotes={voiceNotes} calendar={calendar} nutrition={nutrition} onNavigate={setScreen} />
+  else if (screen === 'nutrition') body = <NutritionScreen nutrition={nutrition} />
   else if (screen === 'finance') body = <FinanceScreen />
   else if (screen === 'memory') body = <MemoryScreen voiceNotes={voiceNotes} />
-  else if (screen === 'calendar') body = <CalendarScreen />
-  else if (screen === 'tasks') body = <TasksScreen tasks={tasks} onToggle={toggleTask} onUpdate={updateTask} onAdd={addTask} />
+  else if (screen === 'calendar') body = <CalendarScreen calendar={calendar} />
+  else if (screen === 'tasks') body = <TasksScreen tasks={tasks} onToggle={toggleTask} onUpdate={updateTask} onAdd={addTask} onRefresh={refresh} />
   else if (screen === 'fitness') body = <FitnessScreen />
-  else if (screen === 'habits') body = <HabitsScreen />
+  else if (screen === 'habits') body = <HabitsScreen habits={habitsState} />
   else if (screen === 'people') body = <CRMScreen />
   else if (screen === 'email') body = <EmailScreen />
   else body = <Placeholder icon={{ settings: 'settings' }[screen] || 'sparkles'} name={meta.title} />
@@ -87,7 +125,7 @@ export function App() {
     <div className="kit">
       <Sidebar active={screen} onNavigate={setScreen} />
       <main className="kit-main">
-        <TopBar title={meta.title} subtitle={meta.sub} recording={recording} onToggleRecord={toggleRecord} />
+        <TopBar title={meta.title} subtitle={sub} recording={recording} onToggleRecord={toggleRecord} />
         <div className="kit-page">
           {recording && (
             <div className="kit-voice" style={{ marginBottom: 'var(--gutter)' }}>
@@ -110,7 +148,7 @@ export function App() {
         </button>
       )}
       {assistantOpen && (
-        <ChatPanel onClose={() => setAssistantOpen(false)} onNavigate={setScreen} onTasksChanged={refresh} />
+        <ChatPanel onClose={() => setAssistantOpen(false)} onNavigate={setScreen} onDataChanged={onDataChanged} />
       )}
     </div>
   )

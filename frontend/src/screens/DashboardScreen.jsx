@@ -1,14 +1,22 @@
-/* Scuffed OS — Dashboard (home overview) */
+/* Scuffed OS — Dashboard (home overview).
+   Agenda + nutrition rings are live (M3); finance stays sample until Plaid (M6). */
 import { Button, Card, IconButton, Badge, Stat, ProgressBar, ProgressRing, Checkbox } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 
-export function DashboardScreen({ tasks, onToggleTask, voiceNotes }) {
-  const agenda = [
-    { time: '09:00', title: 'Deep work — Q3 planning', meta: 'Focus block', active: true },
-    { time: '11:30', title: 'Standup with design', meta: 'Google Meet', icon: 'video', active: true },
-    { time: '13:00', title: 'Lunch — log it!', meta: 'Assistant reminder', icon: 'utensils', active: false },
-    { time: '16:00', title: 'Dentist', meta: '12 Oak Street', icon: 'map-pin', active: false },
-  ]
+export function DashboardScreen({ tasks, onToggleTask, voiceNotes, calendar, nutrition, onNavigate }) {
+  // Up-next occurrences double as the agenda; `when` arrives pre-formatted.
+  const agenda = ((calendar && calendar.upNext) || []).map((u, i) => ({
+    time: (u.when || '').split(' · ')[0],
+    title: u.title,
+    meta: (u.when || '').split(' · ').slice(1).join(' · '),
+    icon: u.tint === 'sky' ? 'video' : undefined,
+    active: i === 0,
+  }))
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).replace(',', ' ·')
+  const day = nutrition && nutrition.day
+  const totals = (day && day.totals) || { kcal: 0, protein_g: 0 }
+  const targets = (day && day.targets) || { calories: 2100, protein_g: 160 }
+  const water = (day && day.water) || { cups: 0, goal: 8 }
   const txns = [
     { title: 'Whole Foods', sub: 'Groceries · 8:42am', amt: '-$64.20', cat: 'var(--clay-600)' },
     { title: 'Salary', sub: 'Acme Inc · deposit', amt: '+$3,200', cat: 'var(--green-600)', pos: true },
@@ -17,8 +25,9 @@ export function DashboardScreen({ tasks, onToggleTask, voiceNotes }) {
   return (
     <div className="kit-grid kit-grid--dash">
       <div className="kit-col">
-        <Card eyebrow="Tuesday · June 8" title="Today's agenda" action={<IconButton label="Open calendar" size="sm"><Icon name="arrow-up-right" /></IconButton>}>
+        <Card eyebrow={today} title="Up next" action={<IconButton label="Open calendar" size="sm" onClick={() => onNavigate && onNavigate('calendar')}><Icon name="arrow-up-right" /></IconButton>}>
           <div className="kit-agenda">
+            {agenda.length === 0 && <p className="kit-muted">Nothing scheduled — enjoy the quiet.</p>}
             {agenda.map((a, i) => (
               <div key={i} className={`kit-agenda__item ${a.active ? '' : 'kit-agenda__item--muted'}`}>
                 <div className="kit-agenda__time">{a.time}</div>
@@ -31,7 +40,7 @@ export function DashboardScreen({ tasks, onToggleTask, voiceNotes }) {
           </div>
         </Card>
 
-        <Card title="Finance snapshot" action={<Badge color="green" dot>On budget</Badge>}>
+        <Card eyebrow="Sample data — real bank sync lands with Plaid (M6)" title="Finance snapshot" action={<Badge color="green" dot>On budget</Badge>}>
           <div className="kit-spread" style={{ marginBottom: 18 }}>
             <Stat label="Balance" value="$4,820" delta="+3.2% this week" trend="up" />
             <div style={{ flex: 1, maxWidth: 230 }}>
@@ -75,9 +84,9 @@ export function DashboardScreen({ tasks, onToggleTask, voiceNotes }) {
 
         <Card title="Nutrition" variant="sunken">
           <div className="kit-rings">
-            <div className="kit-ring-cell"><ProgressRing value={1840} max={2100} size={78} color="green" label="1840" sublabel="kcal" /><span className="kit-ring-cell__lab">Calories</span></div>
-            <div className="kit-ring-cell"><ProgressRing value={138} max={160} size={78} color="clay" label="138g" sublabel="protein" /><span className="kit-ring-cell__lab">Protein</span></div>
-            <div className="kit-ring-cell"><ProgressRing value={5} max={8} size={78} color="sky" label="5/8" sublabel="cups" /><span className="kit-ring-cell__lab">Water</span></div>
+            <div className="kit-ring-cell"><ProgressRing value={Math.round(totals.kcal)} max={targets.calories || 1} size={78} color="green" label={String(Math.round(totals.kcal))} sublabel="kcal" /><span className="kit-ring-cell__lab">Calories</span></div>
+            <div className="kit-ring-cell"><ProgressRing value={Math.round(totals.protein_g)} max={targets.protein_g || 1} size={78} color="clay" label={`${Math.round(totals.protein_g)}g`} sublabel="protein" /><span className="kit-ring-cell__lab">Protein</span></div>
+            <div className="kit-ring-cell"><ProgressRing value={water.cups} max={water.goal || 1} size={78} color="sky" label={`${water.cups}/${water.goal}`} sublabel="cups" /><span className="kit-ring-cell__lab">Water</span></div>
           </div>
         </Card>
       </div>

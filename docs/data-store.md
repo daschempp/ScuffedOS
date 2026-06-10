@@ -35,10 +35,12 @@ Three cross-cutting concerns:
 - **Migrations:** Alembic (`backend/alembic/`), URL resolved the same way the app does.
   `alembic upgrade head` before first run; `python -m app.seed` (idempotent) loads the
   design-prototype demo rows.
-- **Tables** (`models.py`): `tasks`, `memories`, `conversations`,
-  `conversation_messages`. Every row: `owner` (defaulted `"me"` — single-user today,
-  schema-ready for more) + real UTC `created_at`/`updated_at`. Display strings
-  (`when`, `due`, `late`) derive on read in `app/display.py` — never stored.
+- **Tables** (`models.py`): `tasks`, `task_reminders`, `memories`, `conversations`,
+  `conversation_messages`, and (M3) `events`, `habits`, `habit_completions`,
+  `meals`, `water_days`, `nutrition_targets`. Every row: `owner` (defaulted `"me"` —
+  single-user today, schema-ready for more) + real UTC timestamps. Display strings
+  (`when`, `due`, `late`, `at`, reminder chips) derive on read in `app/display.py` —
+  never stored.
 - **Free-tier ops** (user-side): ~1-week inactivity pause (daily use avoids it), no
   automated backups → periodic local `pg_dump`, 500 MB cap (revisit at the M5 email
   mirror).

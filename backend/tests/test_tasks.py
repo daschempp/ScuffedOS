@@ -4,8 +4,8 @@ TODAY = date.today()
 
 RICH_SHAPE = {
     "id", "label", "done", "group", "deadline", "prio", "list", "description",
-    "subtasks", "labels", "reminders", "files", "due", "late",
-    "created_at", "updated_at", "completed_at",
+    "subtasks", "labels", "reminders", "files", "recurrence", "recurrence_label",
+    "due", "late", "created_at", "updated_at", "completed_at",
 }
 
 
@@ -37,7 +37,6 @@ def test_create_task_with_full_payload(client):
         "description": "Outline goals.",
         "subtasks": [{"id": 1, "label": "Goals", "done": False}],
         "labels": ["planning"],
-        "reminders": ["9:00am"],
         "files": [{"id": 1.5, "name": "notes.txt", "size": 120}],
     })
     assert res.status_code == 201

@@ -1,63 +1,127 @@
-/* Scuffed OS — Nutrition tracker */
+/* Scuffed OS — Nutrition tracker.
+   A view over the shared nutrition state (useNutrition() in App.jsx, passed
+   down as the `nutrition` prop). day/week are null until loaded (or with the
+   backend down) — the screen keeps its structure and renders zeros. */
+import React from 'react'
 import { Card, Button, ProgressRing, ProgressBar, Badge } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 
-export function NutritionScreen() {
-  const meals = [
-    { ico: 'egg', tint: 'honey', name: 'Greek yogurt & berries', time: 'Breakfast · 8:10am', kcal: 320, p: 24 },
-    { ico: 'sandwich', tint: 'clay', name: 'Chicken & avocado wrap', time: 'Lunch · 1:05pm', kcal: 540, p: 38 },
-    { ico: 'apple', tint: 'green', name: 'Apple + almonds', time: 'Snack · 3:30pm', kcal: 210, p: 7 },
-    { ico: 'utensils', tint: 'plum', name: 'Salmon, rice & greens', time: 'Dinner · 7:20pm', kcal: 620, p: 45 },
+const SLOTS = ['Breakfast', 'Lunch', 'Snack', 'Dinner']
+const EMPTY_TOTALS = { kcal: 0, protein_g: 0, carbs_g: 0, fat_g: 0 }
+const EMPTY_TARGETS = { calories: 0, protein_g: 0, carbs_g: 0, fat_g: 0 }
+const EMPTY_FORM = { name: '', slot: 'Breakfast', kcal: '', protein: '' }
+
+const localIso = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+export function NutritionScreen({ nutrition }) {
+  const day = nutrition?.day
+  const week = nutrition?.week
+  const totals = day?.totals || EMPTY_TOTALS
+  const targets = day?.targets || EMPTY_TARGETS
+  const meals = day?.meals || []
+  const water = day?.water || { cups: 0, goal: 0 }
+  const weekDays = week?.days || Array.from({ length: 7 }, () => ({ date: '', dow: '', kcal: 0, frac: 0 }))
+  const todayIso = localIso(new Date())
+
+  const [logging, setLogging] = React.useState(false)
+  const [form, setForm] = React.useState(EMPTY_FORM)
+  const setField = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
+
+  const submitMeal = () => {
+    if (!form.name.trim() || !form.kcal) return
+    // kcal is an int server-side — a fractional entry would 422 and the
+    // .catch-swallowing hook would silently drop the meal.
+    nutrition.logMeal({ name: form.name.trim(), slot: form.slot, kcal: Math.round(+form.kcal) || 0, protein_g: +form.protein || 0 })
+    setForm(EMPTY_FORM)
+    setLogging(false)
+  }
+  const onFormKey = (e) => {
+    if (e.key === 'Enter') submitMeal()
+    else if (e.key === 'Escape') { setForm(EMPTY_FORM); setLogging(false) }
+  }
+
+  const macros = [
+    { lab: 'Calories', color: 'green', value: totals.kcal, max: targets.calories, label: `${totals.kcal}`, sub: `of ${targets.calories} kcal` },
+    { lab: 'Protein', color: 'clay', value: totals.protein_g, max: targets.protein_g, label: `${totals.protein_g}g`, sub: `of ${targets.protein_g}g` },
+    { lab: 'Carbs', color: 'honey', value: totals.carbs_g, max: targets.carbs_g, label: `${totals.carbs_g}g`, sub: `of ${targets.carbs_g}g` },
+    { lab: 'Fat', color: 'sky', value: totals.fat_g, max: targets.fat_g, label: `${totals.fat_g}g`, sub: `of ${targets.fat_g}g` },
   ]
-  const week = [
-    { d: 'M', v: 0.82 }, { d: 'T', v: 0.94 }, { d: 'W', v: 0.71 }, { d: 'T', v: 0.88 },
-    { d: 'F', v: 1.0 }, { d: 'S', v: 0.64 }, { d: 'S', v: 0.87, hi: true },
-  ]
+
+  const selectStyle = {
+    padding: '8px 11px', borderRadius: 'var(--radius-sm)', background: 'var(--surface-sunken)',
+    border: 'none', outline: 'none', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)',
+    color: 'var(--text-strong)', cursor: 'pointer',
+  }
+
   return (
     <div className="kit-stack" style={{ gap: 'var(--gutter)' }}>
-      <Card title="Today's goals" eyebrow="2,100 kcal target">
+      <Card title="Today's goals" eyebrow={`${(targets.calories || 0).toLocaleString()} kcal target`}>
         <div className="kit-rings" style={{ justifyContent: 'space-between' }}>
-          <div className="kit-ring-cell"><ProgressRing value={1690} max={2100} size={104} thickness={11} color="green" label="1690" sublabel="of 2100 kcal" /><span className="kit-ring-cell__lab">Calories</span></div>
-          <div className="kit-ring-cell"><ProgressRing value={114} max={160} size={104} thickness={11} color="clay" label="114g" sublabel="of 160g" /><span className="kit-ring-cell__lab">Protein</span></div>
-          <div className="kit-ring-cell"><ProgressRing value={148} max={210} size={104} thickness={11} color="honey" label="148g" sublabel="of 210g" /><span className="kit-ring-cell__lab">Carbs</span></div>
-          <div className="kit-ring-cell"><ProgressRing value={52} max={70} size={104} thickness={11} color="sky" label="52g" sublabel="of 70g" /><span className="kit-ring-cell__lab">Fat</span></div>
+          {macros.map((m) => (
+            <div className="kit-ring-cell" key={m.lab}>
+              <ProgressRing value={m.value} max={m.max || 1} size={104} thickness={11} color={m.color} label={m.label} sublabel={m.sub} />
+              <span className="kit-ring-cell__lab">{m.lab}</span>
+            </div>
+          ))}
         </div>
       </Card>
 
       <div className="kit-grid" style={{ gridTemplateColumns: '1.4fr 1fr' }}>
-        <Card title="Meals" action={<Button variant="soft" size="sm" iconLeft={<Icon name="plus" />}>Log meal</Button>}>
-          {meals.map((m, i) => (
-            <div className="kit-meal" key={i}>
-              <span className="kit-meal__ico" style={{ background: `var(--${m.tint}-100)`, color: `var(--${m.tint}-600)` }}><Icon name={m.ico} /></span>
+        <Card title="Meals" action={<Button variant="soft" size="sm" iconLeft={<Icon name="plus" />} onClick={() => setLogging((v) => !v)}>Log meal</Button>}>
+          {logging && (
+            <div className="kit-stack" style={{ gap: 8, marginBottom: 12 }}>
+              <div className="kit-addrow" style={{ marginTop: 0 }}>
+                <Icon name="utensils" />
+                <input autoFocus placeholder="What did you eat?" value={form.name} onChange={setField('name')} onKeyDown={onFormKey} />
+              </div>
+              <div className="kit-inline" style={{ gap: 8 }}>
+                <select value={form.slot} onChange={setField('slot')} style={selectStyle}>
+                  {SLOTS.map((s) => <option key={s}>{s}</option>)}
+                </select>
+                <div className="kit-addrow" style={{ marginTop: 0, flex: 1 }}>
+                  <input type="number" placeholder="kcal" value={form.kcal} onChange={setField('kcal')} onKeyDown={onFormKey} />
+                </div>
+                <div className="kit-addrow" style={{ marginTop: 0, flex: 1 }}>
+                  <input type="number" placeholder="protein (g)" value={form.protein} onChange={setField('protein')} onKeyDown={onFormKey} />
+                </div>
+                <Button variant="soft" size="sm" onClick={submitMeal}>Add</Button>
+              </div>
+            </div>
+          )}
+          {meals.map((m) => (
+            <div className="kit-meal" key={m.id}>
+              <span className="kit-meal__ico" style={{ background: `var(--${m.tint}-100)`, color: `var(--${m.tint}-600)` }}><Icon name={m.icon} /></span>
               <div className="kit-row__main">
                 <p className="kit-row__title">{m.name}</p>
                 <p className="kit-row__sub">{m.time}</p>
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div className="kit-row__amt">{m.kcal}<span style={{ color: 'var(--text-faint)', fontSize: 12 }}> kcal</span></div>
-                <div className="kit-muted" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{m.p}g protein</div>
+                <div className="kit-muted" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{m.protein_g}g protein</div>
               </div>
             </div>
           ))}
+          {meals.length === 0 && !logging && <p className="kit-muted">Nothing logged yet today.</p>}
         </Card>
 
         <div className="kit-col">
-          <Card title="Water" action={<Badge color="sky">5 / 8 cups</Badge>}>
-            <ProgressBar value={5} max={8} color="sky" meta="3 cups to go" />
+          <Card title="Water" action={<Badge color="sky">{water.cups} / {water.goal} cups</Badge>}>
+            <ProgressBar value={water.cups} max={water.goal || 1} color="sky" meta={`${Math.max(0, water.goal - water.cups)} cups to go`} />
             <div className="kit-inline" style={{ marginTop: 14 }}>
-              <Button variant="secondary" size="sm" iconLeft={<Icon name="plus" />}>Add a cup</Button>
+              <Button variant="secondary" size="sm" iconLeft={<Icon name="plus" />} onClick={() => nutrition.addWater()}>Add a cup</Button>
             </div>
           </Card>
           <Card title="This week" variant="sunken">
             <div className="kit-chart">
-              {week.map((c, i) => (
+              {weekDays.map((c, i) => (
                 <div className="kit-chart__col" key={i}>
-                  <div className={`kit-chart__bar ${c.hi ? 'kit-chart__bar--hi' : ''}`} style={{ height: (c.v * 100) + '%' }} />
-                  <span className="kit-chart__lab">{c.d}</span>
+                  <div className={`kit-chart__bar ${c.date === todayIso ? 'kit-chart__bar--hi' : ''}`} style={{ height: (Math.max(0, Math.min(1, c.frac || 0)) * 100) + '%' }} />
+                  <span className="kit-chart__lab">{c.dow}</span>
                 </div>
               ))}
             </div>
-            <p className="kit-muted" style={{ marginTop: 10 }}>Avg <strong style={{ color: 'var(--text-strong)' }}>1,940 kcal</strong> · goal met 5 / 7 days</p>
+            <p className="kit-muted" style={{ marginTop: 10 }}>Avg <strong style={{ color: 'var(--text-strong)' }}>{(week?.avg_kcal ?? 0).toLocaleString()} kcal</strong> · goal met {week?.days_met ?? 0} / 7 days</p>
           </Card>
         </div>
       </div>

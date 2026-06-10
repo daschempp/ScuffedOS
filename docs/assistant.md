@@ -35,12 +35,16 @@ R8) — the model can't deep-link to a screen that doesn't exist.
   work — day planning now, email drafts in M5), and one `stream()` entry point.
   Tests swap the whole seam via `llm.configure(fake)`.
 - **`app/tools.py`** — the tool surface: tasks read+write (`list/create/update/
-  delete_task`), memory read+write (`search_memory`, `remember` (verbatim),
-  `list/update/forget_memory`), and read-only tools over seeded sample domains
-  (calendar/nutrition/finance/habits/fitness from `app/seeds.py`, every payload
-  labeled SAMPLE DATA until the real integration lands in M3/M4/M6). Write
-  executors return the action card. Tool errors go back to the model
-  (`{"error": …}` in the tool result), not to the user.
+  delete_task`, `add_task_reminder`, recurrence on create), memory read+write
+  (`search_memory`, `remember` (verbatim), `list/update/forget_memory`),
+  calendar read+write (`get_calendar`, `create/update/delete_event`), habits
+  (`get_habits_today`, `toggle_habit` — fuzzy name match, `create_habit`),
+  nutrition (`get_nutrition_today`, `search_food` (USDA), `log_meal`,
+  `log_water`) — all real from M3 — plus read-only tools over the remaining
+  seeded domains (finance/fitness from `app/seeds.py`, payloads labeled SAMPLE
+  DATA until M4/M6). Write executors return the action card. Tool errors go
+  back to the model (`{"error": …}` in the tool result), not to the user.
+  Naive datetimes from the model are interpreted as the user's local time.
 - **`app/assistant.py`** — the loop: build system prompt (persona + current
   time + top Mem0 recalls for this message), replay history from the
   conversations table, then stream/execute/feed-back for up to 8 tool rounds.

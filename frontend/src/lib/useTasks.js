@@ -8,14 +8,14 @@ import React from 'react'
 import { api } from './api.js'
 
 const API_FIELDS = ['label', 'done', 'group', 'deadline', 'prio', 'list',
-  'description', 'subtasks', 'labels', 'reminders', 'files']
+  'description', 'subtasks', 'labels', 'recurrence', 'files']
 
 const SAMPLE_TASKS = [
   { id: 1, label: 'Reply to Priya about Lighthouse', group: 'Today', due: 'Today', prio: 'high', list: 'Work',
     description: 'She asked about the moved deadline — confirm the 30th works and loop in the design review.',
     subtasks: [{ id: 11, label: 'Check calendar for the 30th', done: true }, { id: 12, label: 'Draft reply', done: false }],
-    reminders: ['1 hour before'], files: [{ id: 101, name: 'lighthouse-brief.pdf', size: 248000 }] },
-  { id: 2, label: 'Log lunch', group: 'Today', due: 'Today', prio: 'low', list: 'Health', labels: ['nutrition'], reminders: ['1:00pm'] },
+    files: [{ id: 101, name: 'lighthouse-brief.pdf', size: 248000 }] },
+  { id: 2, label: 'Log lunch', group: 'Today', due: 'Today', prio: 'low', list: 'Health', labels: ['nutrition'] },
   { id: 3, label: 'Book dentist follow-up', group: 'Today', due: 'Overdue', late: true, prio: 'med', list: 'Health',
     description: 'Call Oak Street Dental — ask for an early-morning slot.' },
   { id: 4, label: 'Move $120 to savings', group: 'Today', due: 'Today', prio: 'med', list: 'Finance',
@@ -25,7 +25,7 @@ const SAMPLE_TASKS = [
     description: 'Outline goals, headcount, and the roadmap themes.',
     subtasks: [{ id: 61, label: 'Goals', done: false }, { id: 62, label: 'Roadmap themes', done: false }], labels: ['planning'] },
   { id: 7, label: "Order mom's birthday gift", group: 'Upcoming', due: 'Jun 12', prio: 'med', list: 'Personal',
-    description: 'The ceramics class she mentioned in a voice note.', reminders: ['Jun 11, 9:00am'],
+    description: 'The ceramics class she mentioned in a voice note.',
     files: [{ id: 701, name: 'ceramics-studio.png', size: 1340000 }, { id: 702, name: 'gift-ideas.txt', size: 1200 }] },
   { id: 8, label: 'Meal prep for the week', group: 'Upcoming', due: 'Sun', prio: 'low', list: 'Health' },
   { id: 9, label: 'Renew gym membership', group: 'Someday', prio: 'low', list: 'Health' },
@@ -66,6 +66,9 @@ export function useTasks() {
           // Reconcile derived fields (due/late/completed_at) unless the user
           // has typed again since this flush.
           if (!pending.current[id]) setTasks((ts) => ts.map((t) => (t.id === id ? saved : t)))
+          // Completing a recurring task spawns its next occurrence server-side
+          // — re-fetch so it shows up.
+          if (body.done === true) refresh()
         })
         .catch(() => {})
     }, 400)
@@ -83,6 +86,7 @@ export function useTasks() {
     setTasks((ts) => [{
       done: false, late: false, due: null, deadline: null, group: 'Today', prio: 'med',
       list: 'Personal', description: '', subtasks: [], labels: [], reminders: [], files: [],
+      recurrence: null,
       ...body, id: tempId,
     }, ...ts])
     api.createTask(body)

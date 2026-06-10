@@ -11,7 +11,8 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from app import llm, memory_engine
+from app import food_db, llm, memory_engine, reminders
+from app.config import settings
 from app.db import Base, make_engine, make_session_factory
 from app.main import app
 from app.store import store
@@ -33,13 +34,26 @@ def fresh_db():
 
 @pytest.fixture(autouse=True)
 def no_external_services():
-    """Tests never reach the Claude API, OpenAI, or Mem0 — install a fake
-    explicitly (llm.configure / memory_engine.configure) when one is needed."""
+    """Tests never reach the Claude API, OpenAI, Mem0, USDA, or osascript —
+    install a fake explicitly (each module's configure seam) when needed."""
     llm.configure(None)
     memory_engine.configure(None)
+    food_db.configure(None)
+    reminders.configure(None)
     yield
     llm.configure()
     memory_engine.configure("unset")
+    food_db.configure("unset")
+    reminders.configure("unset")
+
+
+@pytest.fixture(autouse=True)
+def attachments_tmpdir(tmp_path):
+    """Uploads land in a per-test scratch directory, never ./data."""
+    original = settings.attachments_dir
+    settings.attachments_dir = str(tmp_path / "attachments")
+    yield
+    settings.attachments_dir = original
 
 
 @pytest.fixture()

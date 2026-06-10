@@ -17,11 +17,9 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  })
+/* Shared response handling: parse the {error: {code, message}} envelope on
+   failure, unwrap JSON (or null for 204) on success. */
+async function handleResponse(res, path) {
   if (!res.ok) {
     let code
     let message = `API ${res.status} on ${path}`
@@ -36,6 +34,23 @@ async function request(path, options = {}) {
   }
   if (res.status === 204) return null
   return res.json()
+}
+
+async function request(path, options = {}) {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  })
+  return handleResponse(res, path)
+}
+
+/* Multipart upload — must NOT set Content-Type (the browser supplies the
+   multipart boundary), so this bypasses request() and its JSON header. */
+async function uploadFile(path, file) {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${BASE}${path}`, { method: 'POST', body: form })
+  return handleResponse(res, path)
 }
 
 /* Stream one assistant turn over SSE. Calls on(event, data) for each event:
@@ -92,6 +107,57 @@ export const api = {
   }),
   updateTask: (id, patch) => request(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteTask: (id) => request(`/api/tasks/${id}`, { method: 'DELETE' }),
+
+  // Task reminders (M3) — structured rows, managed via their own endpoints
+  // (TaskCreate/TaskUpdate no longer accept a reminders field).
+  addTaskReminder: (taskId, remindAtIso, label) => request(`/api/tasks/${taskId}/reminders`, {
+    method: 'POST',
+    body: JSON.stringify(label != null ? { remind_at: remindAtIso, label } : { remind_at: remindAtIso }),
+  }),
+  deleteTaskReminder: (taskId, reminderId) =>
+    request(`/api/tasks/${taskId}/reminders/${reminderId}`, { method: 'DELETE' }),
+
+  // Task file attachments (M3). uploadTaskFile resolves to the updated Task.
+  uploadTaskFile: (taskId, file) => uploadFile(`/api/tasks/${taskId}/files`, file),
+  deleteTaskFile: (taskId, fileId) => request(`/api/tasks/${taskId}/files/${fileId}`, { method: 'DELETE' }),
+  taskFileUrl: (taskId, fileId) => `${BASE}/api/tasks/${taskId}/files/${fileId}`,
+
+  // Calendar — recurring series are expanded server-side into occurrences.
+  // Always pass explicit-offset ISO datetimes (naive is read as UTC).
+  listEvents: (fromIso, toIso) =>
+    request(`/api/calendar/events?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`),
+  createEvent: (evt) => request('/api/calendar/events', { method: 'POST', body: JSON.stringify(evt) }),
+  updateEvent: (id, patch) => request(`/api/calendar/events/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  // With occurrenceStartIso: delete just that occurrence; without: the whole series.
+  deleteEvent: (id, occurrenceStartIso) => request(
+    `/api/calendar/events/${id}${occurrenceStartIso ? `?occurrence_start=${encodeURIComponent(occurrenceStartIso)}` : ''}`,
+    { method: 'DELETE' },
+  ),
+  upNext: (limit) => request(`/api/calendar/up-next${limit != null ? `?limit=${limit}` : ''}`),
+
+  // Habits — week is a Monday YYYY-MM-DD; toggle flips one day's checkmark.
+  habitsWeek: (weekIsoDate) => request(`/api/habits${weekIsoDate ? `?week=${weekIsoDate}` : ''}`),
+  createHabit: (h) => request('/api/habits', { method: 'POST', body: JSON.stringify(h) }),
+  toggleHabit: (id, isoDate) => request(`/api/habits/${id}/toggle`, {
+    method: 'POST',
+    body: JSON.stringify(isoDate ? { date: isoDate } : {}),
+  }),
+  updateHabit: (id, patch) => request(`/api/habits/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteHabit: (id) => request(`/api/habits/${id}`, { method: 'DELETE' }),
+
+  // Nutrition — day log, water, weekly kcal trend, targets, food search.
+  nutritionDay: (isoDate) => request(`/api/nutrition/day${isoDate ? `?date=${isoDate}` : ''}`),
+  logMeal: (meal) => request('/api/nutrition/meals', { method: 'POST', body: JSON.stringify(meal) }),
+  updateMeal: (id, patch) => request(`/api/nutrition/meals/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteMeal: (id) => request(`/api/nutrition/meals/${id}`, { method: 'DELETE' }),
+  addWater: (delta) => request('/api/nutrition/water', {
+    method: 'POST',
+    body: JSON.stringify({ delta: delta != null ? delta : 1 }),
+  }),
+  nutritionWeek: (isoDate) => request(`/api/nutrition/week${isoDate ? `?date=${isoDate}` : ''}`),
+  getTargets: () => request('/api/nutrition/targets'),
+  putTargets: (p) => request('/api/nutrition/targets', { method: 'PUT', body: JSON.stringify(p) }),
+  searchFoods: (q) => request(`/api/nutrition/foods?q=${encodeURIComponent(q)}`),
 
   // Second-brain memories.
   listMemories: () => request('/api/memory'),

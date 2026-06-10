@@ -15,7 +15,7 @@ const GREETING = {
   text: "Hi — I'm your assistant. I can manage your tasks, file things into your second brain, and read your day. What do you need?",
 }
 
-export function ChatPanel({ onClose, onNavigate, onTasksChanged }) {
+export function ChatPanel({ onClose, onNavigate, onDataChanged }) {
   const [messages, setMessages] = React.useState([GREETING])
   const [conversationId, setConversationId] = React.useState(null)
   const [input, setInput] = React.useState('')
@@ -83,7 +83,7 @@ export function ChatPanel({ onClose, onNavigate, onTasksChanged }) {
         } else if (event === 'tool') setToolStatus(data.name.replaceAll('_', ' '))
         else if (event === 'action') {
           if (streamed) updateMessage(aiId, (m) => ({ actions: [...m.actions, data] }))
-          if (data.screen === 'tasks' && onTasksChanged) onTasksChanged()
+          if (data.screen && onDataChanged) onDataChanged(data.screen)
         } else if (event === 'error') {
           throw new Error(data.message)
         } else if (event === 'done') {

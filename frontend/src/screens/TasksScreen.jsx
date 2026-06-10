@@ -9,7 +9,7 @@ import { TaskDetail } from './TaskDetail.jsx'
 const LIST_COLOR = { Work: 'sky', Health: 'green', Finance: 'honey', Personal: 'plum' }
 const withColor = (t) => ({ ...t, listColor: LIST_COLOR[t.list] || 'neutral' })
 
-export function TasksScreen({ tasks, onToggle, onUpdate, onAdd }) {
+export function TasksScreen({ tasks, onToggle, onUpdate, onAdd, onRefresh }) {
   const [openId, setOpenId] = React.useState(null)
   const [quickAdd, setQuickAdd] = React.useState('')
 
@@ -114,7 +114,7 @@ export function TasksScreen({ tasks, onToggle, onUpdate, onAdd }) {
         </div>
       </div>
 
-      {openTask && <TaskDetail task={withColor(openTask)} onUpdate={onUpdate} onClose={() => setOpenId(null)} />}
+      {openTask && <TaskDetail task={withColor(openTask)} onUpdate={onUpdate} onClose={() => setOpenId(null)} onRefresh={onRefresh} />}
     </React.Fragment>
   )
 }
