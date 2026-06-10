@@ -11,6 +11,23 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      # Same image family as production (Supabase Postgres + pgvector).
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: scuffed
+          POSTGRES_PASSWORD: scuffed
+          POSTGRES_DB: scuffedos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U scuffed"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://scuffed:scuffed@localhost:5432/scuffedos_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,6 +35,8 @@ jobs:
           python-version: "3.14"
       - run: pip install -r requirements-dev.txt
       - run: pytest
+      # The suite must also pass on SQLite (the local no-docker dev path).
+      - run: TEST_DATABASE_URL= pytest -q
 
   frontend:
     runs-on: ubuntu-latest

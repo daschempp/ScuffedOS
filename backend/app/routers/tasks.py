@@ -1,7 +1,10 @@
-"""Task CRUD endpoints (the simple home / assistant task list)."""
+"""Task CRUD endpoints — the one rich task model (review D1).
+
+TasksScreen, Home, and the assistant all read and write these same rows.
+"""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from ..schemas import Task, TaskCreate, TaskUpdate
 from ..store import store
@@ -16,7 +19,7 @@ def list_tasks() -> list[dict]:
 
 @router.post("", response_model=Task, status_code=201)
 def create_task(body: TaskCreate) -> dict:
-    return store.create_task(body.label, body.done)
+    return store.create_task(body.model_dump())
 
 
 @router.patch("/{task_id}", response_model=Task)
@@ -25,3 +28,10 @@ def update_task(task_id: int, body: TaskUpdate) -> dict:
     if updated is None:
         raise HTTPException(status_code=404, detail="Task not found")
     return updated
+
+
+@router.delete("/{task_id}", status_code=204)
+def delete_task(task_id: int) -> Response:
+    if not store.delete_task(task_id):
+        raise HTTPException(status_code=404, detail="Task not found")
+    return Response(status_code=204)

@@ -24,6 +24,11 @@ export function MemoryScreen({ voiceNotes }) {
     return () => { alive = false }
   }, [])
 
+  const forget = (id) => {
+    setMemories((ms) => ms.filter((m) => m.id !== id))
+    api.deleteMemory(id).catch(() => {})
+  }
+
   const tagColor = { family: 'plum', gifts: 'plum', health: 'green', routine: 'green', work: 'sky', finance: 'clay', nutrition: 'honey' }
   return (
     <div className="kit-grid" style={{ gridTemplateColumns: '1.5fr 1fr' }}>
@@ -42,11 +47,17 @@ export function MemoryScreen({ voiceNotes }) {
         <Card title="Recent memories" eyebrow="142 stored" action={<Badge color="green" dot>Learning</Badge>}>
           <div className="kit-stack">
             {memories.map((m, i) => (
-              <div className="kit-memory" key={i}>
+              <div className="kit-memory" key={m.id ?? i}>
                 <div className="kit-memory__top">
                   <span className="kit-cat" style={{ background: `var(--${m.color}-600)` }} />
                   <Badge color={m.color}>{m.src}</Badge>
                   <span className="kit-memory__src">{m.when || '2 days ago'}</span>
+                  <span style={{ flex: 1 }} />
+                  {m.id != null && (
+                    <IconButton label="Forget" variant="ghost" size="sm" onClick={() => forget(m.id)}>
+                      <Icon name="trash-2" />
+                    </IconButton>
+                  )}
                 </div>
                 <p>{m.text}</p>
                 <div className="kit-tags">

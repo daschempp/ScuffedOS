@@ -1,15 +1,17 @@
 # Tasks — Architecture
 
-> Status: draft · Last updated: 2026-06-09 · Owner: _TBD_
+> Status: built (M1) · Last updated: 2026-06-10 · Owner: _TBD_
 >
-> Part of the [backend overview](backend-overview.md). The simple home/assistant task
-> list — create, list, and toggle tasks.
+> Part of the [backend overview](backend-overview.md). THE task model (review D1):
+> one rich, durable task that Home, the Tasks screen, and the assistant all share.
 
 ## Responsibility
 
-Own the **simple** task list shown on Home and created by the assistant: a flat list of
-`{ id, label, done }`. This is deliberately _not_ the rich task model on the Tasks screen
-(subtasks, files, priority, deadline) — see Open questions.
+Own the **one rich task model**: the former TasksScreen shape (group, deadline,
+priority, list, description, subtasks, labels, reminders, file metadata), stored in
+Postgres. Home renders the `Today` slice of the same rows; the assistant's
+`makeTask` flow creates the same rows. The old simple/rich split is resolved — merged
+server-side in M1.
 
 ## Surface (current)
 
@@ -17,31 +19,42 @@ Own the **simple** task list shown on Home and created by the assistant: a flat 
 
 | Method | Path | Body | Returns | Notes |
 | --- | --- | --- | --- | --- |
-| `GET` | `/api/tasks` | — | `list[Task]` | Newest first. |
-| `POST` | `/api/tasks` | `TaskCreate { label, done=false }` | `Task` | `201 Created`. |
-| `PATCH` | `/api/tasks/{id}` | `TaskUpdate { label?, done? }` | `Task` | `404` if id unknown. |
+| `GET` | `/api/tasks` | — | `list[Task]` | Newest first (id desc). |
+| `POST` | `/api/tasks` | `TaskCreate` (label required, rest defaulted) | `Task` | `201 Created`. |
+| `PATCH` | `/api/tasks/{id}` | `TaskUpdate` (all optional) | `Task` | `404` if id unknown. |
+| `DELETE` | `/api/tasks/{id}` | — | `204` | `404` if id unknown. |
 
 Models (`schemas.py`):
 
-- `Task { id: int, label: str, done: bool = false }`
-- `TaskCreate { label: str, done: bool = false }`
-- `TaskUpdate { label?: str, done?: bool }` — only the fields sent are applied
-  (`exclude_unset`), so `PATCH` is a true partial update.
-
-There is **no delete** endpoint today.
+- `Task` — `{ id, label, done, group, deadline, prio, list, description, subtasks,
+  labels, reminders, files, due, late, created_at, updated_at, completed_at }`.
+  `group` and `prio` are Literal-constrained (`Today|Upcoming|Someday`, `low|med|high`
+  — review R8). `due`/`late` are **derived display facts** computed on read from
+  `deadline`/`done`/`completed_at` (review R6) — never stored, read-only.
+- `TaskCreate` — label (non-empty) + optional everything else, with prototype defaults
+  (`group=Today`, `prio=med`, `list=Personal`).
+- `TaskUpdate` — all-optional partial update (`exclude_unset`); explicit `null` clears
+  `deadline` and is ignored for non-nullable fields (review R7).
+- `files` holds **metadata only** (`{id, name, size}`) until real uploads land in M3;
+  `reminders` are display strings until they fire (M3).
 
 ## Internal design (current)
 
-The router is thin; all state lives in `store.py` (see [data-store.md](data-store.md)):
+The router is thin; persistence lives in `store.py` over SQLAlchemy
+(see [data-store.md](data-store.md)):
 
-- `store.list_tasks()` — returns a shallow copy of the list.
-- `store.create_task(label, done)` — assigns `_next_task_id`, **inserts at the front**
-  (newest-first, matching the prototype), returns the new task.
-- `store.update_task(id, patch)` — finds by id, applies only non-`None` patch values,
-  returns the updated task or `None` (router turns `None` into `404`).
+- `tasks` table (`app/models.py`): `group` is stored in a `bucket` column (SQL-name
+  hygiene), `list` in a `list` column mapped to `list_name`; subtasks/labels/reminders/
+  files are JSONB (JSON on SQLite). Real UTC `created_at`/`updated_at`/`completed_at`.
+- `done: true` sets `completed_at` (drives the "Done 8:02am" display); un-completing
+  clears it.
+- `store.seed_demo()` / `python -m app.seed` inserts the 10 design-prototype tasks with
+  deadlines computed relative to today, so Today/Upcoming/Someday look right whenever
+  it runs. The 5 Home tasks are the `Today` group of the same rows.
 
-Seeded with 5 tasks that mirror the frontend's `App.jsx` `SEED_TASKS` (ids 1–5,
-"Pay rent" done, the rest open). Mutations are lock-guarded.
+Frontend: `lib/useTasks.js` owns the shared list (optimistic updates, 400 ms debounced
+PATCH per task so the detail drawer doesn't write per keystroke); `App.jsx` passes the
+same state to Home (`Today` filter) and TasksScreen.
 
 ## Dependencies & interactions
 
@@ -76,27 +89,29 @@ slice of it:
 
 ## How it _should_ function
 
-> Target design to author:
-
-- [ ] **Durable persistence** via the real store (DB). Same router, new backing.
-- [ ] **Reconcile with the Tasks-screen model.** Today the backend serves a _simple_
-      list while the Tasks screen keeps its own rich local model (subtasks, reminders,
-      list, priority, deadline, files). Do these merge into one backend model, stay two
-      tiers, or does the rich model also move server-side? This is the biggest open call.
-- [ ] **Delete / archive / complete semantics** — is `done` enough, or do we need
-      soft-delete and a separate "archived" state?
-- [ ] **Due dates & reminders** as first-class fields (the UI hints "tap to set a due
-      date").
-- [ ] **Ordering** — newest-first is hardcoded; should clients control sort/filter?
+- [x] **Durable persistence** — M1: Postgres + SQLAlchemy + Alembic.
+- [x] **Reconcile with the Tasks-screen model** — M1: merged; the rich model is THE model.
+- [x] **Delete** — hard delete endpoint (M1). Archive/soft-delete deferred until a need shows.
+- [x] **Due dates** first-class (`deadline`, M1).
+- [ ] **Reminders that fire** — M3 (scheduler → macOS notifications; reminders become
+      structured/queryable then).
+- [ ] **Real file attachments** — M3 (upload + app-data-dir storage + download).
+- [ ] **Recurring tasks** — M3 (recurrence machinery shared with Calendar).
+- [ ] **Ordering** — newest-first is hardcoded; client sort/filter still open.
 
 ## Design decisions & rationale
 
-- _Why insert newest-first?_ — Matches the prototype's home list. TODO.
+- _Why insert newest-first?_ — Matches the prototype's home list.
 - _Why `PATCH` with `exclude_unset` rather than `PUT`?_ — Lets the UI toggle `done`
-  without resending `label`. TODO.
+  without resending `label`, and makes null-to-clear semantics explicit (R7).
+- _Why JSON columns for subtasks/reminders/files?_ — The UI patches them wholesale;
+  they graduate to real tables only when something needs to query them (M3 reminders).
+- _Why store `group` rather than derive it from `deadline`?_ — "Someday" is a user
+  intent, not a date fact; deriving would erase it.
 
 ## Open questions / future work
 
-- The two-task-model split (simple backend list vs. rich Tasks screen) is the key
-  architectural question — resolve it before adding fields piecemeal.
-- Validation: should empty/whitespace `label` be rejected? (Not enforced today.)
+- Lists are free-form strings with a fixed color map in the UI; the "New list" button
+  is still decorative. Real user-defined lists (own table, colors) when needed.
+- `done` on a `Someday` task still counts toward "Done today" in the Progress card —
+  prototype behavior, revisit with real analytics.

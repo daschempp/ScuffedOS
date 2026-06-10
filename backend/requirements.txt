@@ -2,5 +2,8 @@
 fastapi>=0.115.0
 uvicorn>=0.32.0
 pydantic-settings>=2.6.0
+sqlalchemy>=2.0.44
+alembic>=1.16
+psycopg[binary]>=3.2
 # Optional, for `uvicorn --reload` + faster event loop (compiled deps):
 #   pip install "uvicorn[standard]"

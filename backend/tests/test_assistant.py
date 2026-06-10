@@ -58,11 +58,10 @@ def test_fallback_has_no_action(client):
 
 def test_chat_never_writes_to_the_store(client):
     # The endpoint is stateless: even a makeTask reply must not create the task
-    # server-side — the client owns the follow-up POST.
+    # server-side — the client owns the follow-up POST. (Flips in M2, when the
+    # assistant gets real write tools.)
     chat(client, "add a task to water the plants")
-    tasks = client.get("/api/tasks").json()
-    assert len(tasks) == 5
-    assert all(t["label"] != "Water the plants" for t in tasks)
+    assert client.get("/api/tasks").json() == []
 
 
 def test_chat_is_deterministic(client):

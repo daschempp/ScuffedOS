@@ -42,12 +42,19 @@ export const api = {
   // Assistant — POST a message, get { text, action? } back.
   chat: (message) => request('/api/assistant/chat', { method: 'POST', body: JSON.stringify({ message }) }),
 
-  // Tasks — the simple home/assistant task list.
+  // Tasks — the one rich task model (Home, TasksScreen and the assistant
+  // all read/write these same rows). Accepts a label string or a full object.
   listTasks: () => request('/api/tasks'),
-  createTask: (label) => request('/api/tasks', { method: 'POST', body: JSON.stringify({ label }) }),
+  createTask: (task) => request('/api/tasks', {
+    method: 'POST',
+    body: JSON.stringify(typeof task === 'string' ? { label: task } : task),
+  }),
   updateTask: (id, patch) => request(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteTask: (id) => request(`/api/tasks/${id}`, { method: 'DELETE' }),
 
   // Second-brain memories.
   listMemories: () => request('/api/memory'),
   createMemory: (text) => request('/api/memory', { method: 'POST', body: JSON.stringify({ text }) }),
+  updateMemory: (id, patch) => request(`/api/memory/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteMemory: (id) => request(`/api/memory/${id}`, { method: 'DELETE' }),
 }

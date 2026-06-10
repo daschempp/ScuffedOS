@@ -1,6 +1,6 @@
 # Memory (Second Brain) — Architecture
 
-> Status: draft · Last updated: 2026-06-09 · Owner: _TBD_
+> Status: CRUD built (M1); Mem0 engine lands M2 · Last updated: 2026-06-10 · Owner: _TBD_
 >
 > Part of the [backend overview](backend-overview.md). Stores and lists the
 > second-brain memories surfaced on the Memory screen.
@@ -19,26 +19,24 @@ backend handles **capture + list**; retrieval/surfacing is not yet a backend con
 | --- | --- | --- | --- | --- |
 | `GET` | `/api/memory` | — | `list[Memory]` | Newest first. |
 | `POST` | `/api/memory` | `MemoryCreate` | `Memory` | `201 Created`. |
+| `PATCH` | `/api/memory/{id}` | `MemoryUpdate` (all optional) | `Memory` | `404` if unknown. |
+| `DELETE` | `/api/memory/{id}` | — | `204` | "Forget" — wired to a trash affordance on the Memory screen. |
 
 Models (`schemas.py`):
 
-- `Memory { id, text, src, tags: list[str], color, when }`
+- `Memory { id, text, src, tags: list[str], color, when, created_at, updated_at }`
 - `MemoryCreate { text, src="note", tags=[], color="green" }`
+- `MemoryUpdate { text?, src?, tags?, color? }`
 
-`when` is **not** client-supplied — the store sets it to `"just now"` on create (seed
-data uses relative strings like "2 days ago"). It's a display string today, not a
-timestamp. There is **no update or delete** endpoint.
+`when` is **derived on read** from the stored UTC `created_at` ("just now", "2 days
+ago", "1 week ago" — `app/display.py`), never stored or client-supplied.
 
 ## Internal design (current)
 
-Thin router over `store.py` (see [data-store.md](data-store.md)):
-
-- `store.list_memories()` — shallow copy of the list.
-- `store.create_memory(text, src, tags, color)` — assigns `_next_memory_id`, sets
-  `when="just now"`, **inserts at the front**, returns the new memory.
-
-Seeded with 4 memories mirroring `MemoryScreen.SAMPLE_MEMORIES` (family/gifts, health/
-routine, work, finance/nutrition). Mutations are lock-guarded.
+Thin router over `store.py` — a `memories` table (SQLAlchemy/Postgres, M1) with owner
+column and real timestamps; see [data-store.md](data-store.md). Demo rows come from
+`store.seed_demo()` with `created_at` offsets so the relative times look like the
+prototype.
 
 ## Dependencies & interactions
 

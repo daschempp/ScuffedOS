@@ -15,7 +15,7 @@ import { CRMScreen } from './screens/CRMScreen.jsx'
 import { EmailScreen } from './screens/EmailScreen.jsx'
 import { MemoryScreen } from './screens/MemoryScreen.jsx'
 import { ChatPanel } from './assistant/ChatPanel.jsx'
-import { api } from './lib/api.js'
+import { useTasks } from './lib/useTasks.js'
 
 const SCREENS = {
   home: { title: 'Good morning, Sam', sub: 'Tuesday, June 9 · 4 things need you today' },
@@ -43,18 +43,11 @@ function Placeholder({ icon, name }) {
   )
 }
 
-const SEED_TASKS = [
-  { id: 1, label: 'Pay rent', done: true },
-  { id: 2, label: 'Reply to Priya about Lighthouse', done: false },
-  { id: 3, label: 'Log lunch', done: false },
-  { id: 4, label: 'Book dentist follow-up', done: false },
-  { id: 5, label: 'Move $120 to savings', done: false },
-]
-
 export function App() {
   const [screen, setScreen] = React.useState('home')
   const [recording, setRecording] = React.useState(false)
-  const [tasks, setTasks] = React.useState(SEED_TASKS)
+  // The one rich task list (D1) — Home, TasksScreen and the assistant share it.
+  const { tasks, addTask, toggleTask, updateTask } = useTasks()
   const voiceNotes = [
     { text: '“Remind me to call mom about the ceramics class”', time: '8:10am', len: '0:06', done: true },
     { text: '“Lighthouse deadline moved to the 30th”', time: 'Yesterday', len: '0:11', done: true },
@@ -62,35 +55,15 @@ export function App() {
   ]
   const [assistantOpen, setAssistantOpen] = React.useState(false)
 
-  // Load the live task list from the backend (falls back to the seed if down).
-  React.useEffect(() => {
-    api.listTasks()
-      .then((data) => { if (Array.isArray(data) && data.length) setTasks(data) })
-      .catch(() => {})
-  }, [])
-
-  const toggleTask = (id) => {
-    const t = tasks.find((x) => x.id === id)
-    setTasks((ts) => ts.map((x) => x.id === id ? { ...x, done: !x.done } : x))
-    if (t) api.updateTask(id, { done: !t.done }).catch(() => {})
-  }
-  const addTask = (label) => {
-    const tempId = 'tmp-' + Date.now()
-    setTasks((ts) => [{ id: tempId, label, done: false }, ...ts])
-    api.createTask(label)
-      .then((saved) => { if (saved) setTasks((ts) => ts.map((x) => x.id === tempId ? saved : x)) })
-      .catch(() => {})
-  }
-
   const meta = SCREENS[screen] || SCREENS.home
 
   let body
-  if (screen === 'home') body = <DashboardScreen tasks={tasks} onToggleTask={toggleTask} voiceNotes={voiceNotes} />
+  if (screen === 'home') body = <DashboardScreen tasks={tasks.filter((t) => t.group === 'Today')} onToggleTask={toggleTask} voiceNotes={voiceNotes} />
   else if (screen === 'nutrition') body = <NutritionScreen />
   else if (screen === 'finance') body = <FinanceScreen />
   else if (screen === 'memory') body = <MemoryScreen voiceNotes={voiceNotes} />
   else if (screen === 'calendar') body = <CalendarScreen />
-  else if (screen === 'tasks') body = <TasksScreen />
+  else if (screen === 'tasks') body = <TasksScreen tasks={tasks} onToggle={toggleTask} onUpdate={updateTask} onAdd={addTask} />
   else if (screen === 'fitness') body = <FitnessScreen />
   else if (screen === 'habits') body = <HabitsScreen />
   else if (screen === 'people') body = <CRMScreen />

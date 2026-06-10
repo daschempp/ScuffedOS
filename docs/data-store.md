@@ -1,43 +1,47 @@
 # Data Store & Schemas — Architecture
 
-> Status: draft · Last updated: 2026-06-09 · Owner: _TBD_
+> Status: built (M1) · Last updated: 2026-06-10 · Owner: _TBD_
 >
 > Part of the [backend overview](backend-overview.md). The shared persistence layer
-> (`store.py`) and the data contracts (`schemas.py`) that every section uses.
+> (`store.py` over SQLAlchemy/Postgres) and the data contracts (`schemas.py`).
 
 ## Responsibility
 
-Two cross-cutting concerns, grouped because both serve all feature sections:
+Three cross-cutting concerns:
 
-- **`store.py`** — the single source of mutable state. Holds the tasks and memories
-  lists and the logic to read/mutate them safely. It is the **swap seam**: replace it
-  with a real database without touching any router.
+- **`store.py`** — the single data facade. Routers call plain methods that take and
+  return API-shaped dicts; all ORM/session detail stays inside. The method-signature
+  seam survived the DB swap exactly as designed.
+- **`db.py` / `models.py` / `alembic/`** — engine + session plumbing, the SQLAlchemy
+  table definitions, and migrations.
 - **`schemas.py`** — the Pydantic models that define every request/response shape. The
   shared vocabulary between routers, validation, and OpenAPI docs.
 
-## Internal design (current) — `store.py`
+## Internal design (current) — persistence
 
-- A single `Store` class, instantiated once as a module-level `store` singleton that the
-  routers import. Tasks and memory share this one instance (separate lists + id
-  counters: `_next_task_id`, `_next_memory_id`).
-- **Process-local & ephemeral** — state lives in memory and **resets on restart**. No
-  file, no DB. Intended for the prototype only.
-- **Concurrency:** a `threading.Lock` guards every mutation, because FastAPI runs sync
-  endpoints in a threadpool (concurrent requests can hit the store). Reads return
-  shallow copies (`list(...)`) so callers can't mutate internal state by accident.
-- **Methods:**
-
-  | Method | Used by | Behavior |
-  | --- | --- | --- |
-  | `list_tasks()` | tasks | Copy of the tasks list. |
-  | `create_task(label, done)` | tasks | New id, insert front, return task. |
-  | `update_task(id, patch)` | tasks | Apply non-`None` patch fields; `None` if id missing. |
-  | `list_memories()` | memory | Copy of the memories list. |
-  | `create_memory(text, src, tags, color)` | memory | New id, `when="just now"`, insert front. |
-
-- **Seed data** mirrors the frontend exactly: 5 tasks (`App.jsx` `SEED_TASKS`) and 4
-  memories (`MemoryScreen.SAMPLE_MEMORIES`), so the UI looks identical whether or not the
-  backend is running.
+- **Database: Supabase-hosted Postgres (free tier), used as plain Postgres** (decided
+  2026-06-10). `DATABASE_URL` from `backend/.env`; the **session-pooler** string (the
+  direct host is IPv6-only on the free tier). `db.normalize_database_url` accepts the
+  raw `postgresql://` string Supabase hands out and rewrites it to the psycopg 3
+  driver. **No supabase-py/-js anywhere** — the frontend talks only to FastAPI.
+- **Engine:** small pool (`pool_size=5, max_overflow=2`) with `pool_pre_ping` so
+  pooler-dropped idle connections recycle quietly. SQLite gets the same code path with
+  dialect-appropriate options — tests run on it by default, and CI also runs the whole
+  suite against a real `pgvector/pgvector:pg17` service container.
+- **`Store` facade:** lazily builds its engine from settings on first use (importing
+  the app never needs a DB); `store.configure(session_factory)` points the singleton at
+  a throwaway engine in tests. Each method opens a short-lived session +
+  transaction — the old `threading.Lock` is replaced by DB transactions.
+- **Migrations:** Alembic (`backend/alembic/`), URL resolved the same way the app does.
+  `alembic upgrade head` before first run; `python -m app.seed` (idempotent) loads the
+  design-prototype demo rows.
+- **Tables** (`models.py`): `tasks`, `memories`, `conversations`,
+  `conversation_messages`. Every row: `owner` (defaulted `"me"` — single-user today,
+  schema-ready for more) + real UTC `created_at`/`updated_at`. Display strings
+  (`when`, `due`, `late`) derive on read in `app/display.py` — never stored.
+- **Free-tier ops** (user-side): ~1-week inactivity pause (daily use avoids it), no
+  automated backups → periodic local `pg_dump`, 500 MB cap (revisit at the M5 email
+  mirror).
 
 ## Internal design (current) — `schemas.py`
 
@@ -71,22 +75,15 @@ flowchart TD
 
 ## How it _should_ function
 
-> Target design to author. This layer is where the "prototype → real app" jump happens.
-
-- [ ] **Real database — decided (2026-06-10): Supabase-hosted Postgres (free tier), used
-      as plain Postgres** via SQLAlchemy + Alembic behind the _same method names_, so
-      routers don't change (supersedes the SQLite pick in the architecture review).
-      `DATABASE_URL` from env, session-pooler connection string (direct is IPv6-only on
-      free tier); **no supabase-py/-js anywhere** — the frontend keeps talking only to
-      FastAPI. Define: schema/tables, migrations, connection/session management, and how
-      the lock-based concurrency maps onto DB transactions.
-- [ ] **Real timestamps** (replace `when="just now"`; derive relative strings on read).
-- [ ] **Identity & multi-user.** Today everything is global/single-user. If auth lands,
-      the store and most schemas grow a user/owner dimension — decide early.
+- [x] **Real database** — M1: Supabase-flavored Postgres via SQLAlchemy + Alembic behind
+      the same `Store` method names; routers unchanged. Lock-based concurrency became
+      per-call sessions + transactions.
+- [x] **Real timestamps** — M1: UTC facts stored; `when`/`due`/`late` derived on read.
+- [x] **Owner dimension** — M1: `owner` column defaulted everywhere (no auth yet).
 - [ ] **Schema evolution & API versioning** once a second client (iPhone) consumes these
       contracts.
-- [ ] **Validation rules** beyond types (non-empty labels, tag/color constraints, max
-      lengths).
+- [x] **Validation rules** — non-empty labels/text enforced; `group`/`prio`
+      Literal-constrained. Tag/color constraints still open.
 
 ## Design decisions & rationale
 
