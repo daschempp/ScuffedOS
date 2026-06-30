@@ -15,7 +15,7 @@ import functools
 import logging
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -93,6 +93,15 @@ _WORKOUT_FIELDS = {
     "name", "sport", "started_at", "duration_min", "strain",
     "calories", "avg_hr", "max_hr",
 }
+
+# The four vitals shown under the rings — fixed layout; values + deltas
+# derive on read from the day's snapshot (None when absent).
+_VITALS_SPEC = (
+    ("hrv", "hrv_ms", "HRV", "ms", "activity", "green"),
+    ("resting_hr", "resting_hr", "Resting HR", "bpm", "heart", "clay"),
+    ("respiratory_rate", "respiratory_rate", "Respiratory", "rpm", "wind", "sky"),
+    ("sleep_hours", "sleep_hours", "Sleep", "h", "moon", "plum"),
+)
 
 
 def _local_today() -> date:
@@ -1185,6 +1194,59 @@ class Store:
                 row.metrics_json = {**(row.metrics_json or {}), **snap.metrics_json}
             s.flush()
             return _snapshot_dict(row)
+
+    def _snapshot_row(self, s: Session, day: date) -> DailySnapshot | None:
+        """The owner's snapshot for `day`. When multiple sources wrote the same
+        day (e.g. a future 'oura' alongside 'whoop'), prefer 'whoop' so reads
+        don't flip between providers; ties fall back to newest id."""
+        from .config import settings
+
+        # Source precedence: prefer 'whoop' (0) over any other source (1).
+        precedence = case((DailySnapshot.source == "whoop", 0), else_=1)
+        return s.scalars(
+            select(DailySnapshot)
+            .where(DailySnapshot.owner == settings.owner)
+            .where(DailySnapshot.day == day)
+            .order_by(precedence, DailySnapshot.id.desc())
+        ).first()
+
+    @staticmethod
+    def _vital_delta(field: str, today_val, prior_val):
+        if today_val is None or prior_val is None:
+            return None
+        if field == "resting_hr":
+            return today_val - prior_val
+        return round(today_val - prior_val, 1)
+
+    def fitness_today(self, day: date | None = None) -> dict:
+        """Rings + vitals for `day` (default today). Vital deltas are this-day
+        minus the prior-day snapshot (None if there's no prior)."""
+        day = day or _local_today()
+        with self._session() as s:
+            today_row = self._snapshot_row(s, day)
+            prior_row = self._snapshot_row(s, day - timedelta(days=1))
+        vitals = []
+        for key, field, label, unit, icon, tint in _VITALS_SPEC:
+            value = getattr(today_row, field) if today_row else None
+            prior = getattr(prior_row, field) if prior_row else None
+            vitals.append({
+                "key": key,
+                "label": label,
+                "value": value,
+                "unit": unit,
+                "delta": self._vital_delta(field, value, prior),
+                "icon": icon,
+                "tint": tint,
+            })
+        return {
+            "date": day,
+            "source": today_row.source if today_row else None,
+            "recovery_pct": today_row.recovery_pct if today_row else None,
+            "day_strain": today_row.day_strain if today_row else None,
+            "sleep_quality_pct": today_row.sleep_quality_pct if today_row else None,
+            "vitals": vitals,
+            "has_data": today_row is not None,
+        }
 
     # ---- workouts ----
     def _workout_local_day(self, started_at: datetime) -> date:

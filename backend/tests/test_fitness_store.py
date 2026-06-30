@@ -196,6 +196,59 @@ def test_synced_workout_auto_completes_linked_habit():
     assert habit["days"][local_day.weekday()] is True
 
 
+def test_fitness_today_empty_state():
+    out = store.fitness_today(DAY)
+    assert out["date"] == DAY
+    assert out["has_data"] is False
+    assert out["source"] is None
+    assert out["recovery_pct"] is None
+    assert out["day_strain"] is None
+    assert out["sleep_quality_pct"] is None
+    # vitals are always the same four keys, values None when no data.
+    keys = [v["key"] for v in out["vitals"]]
+    assert keys == ["hrv", "resting_hr", "respiratory_rate", "sleep_hours"]
+    assert all(v["value"] is None and v["delta"] is None for v in out["vitals"])
+
+
+def test_fitness_today_rings_and_vitals():
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=DAY, recovery_pct=72, day_strain=14.2,
+        sleep_quality_pct=88, hrv_ms=82.0, resting_hr=52,
+        respiratory_rate=14.6, sleep_hours=7.4,
+    ))
+    out = store.fitness_today(DAY)
+    assert out["has_data"] is True
+    assert out["source"] == "whoop"
+    assert out["recovery_pct"] == 72
+    assert out["day_strain"] == 14.2
+    assert out["sleep_quality_pct"] == 88
+    by_key = {v["key"]: v for v in out["vitals"]}
+    assert by_key["hrv"]["value"] == 82.0
+    assert by_key["hrv"]["unit"] == "ms"
+    assert by_key["resting_hr"]["value"] == 52
+    assert by_key["respiratory_rate"]["value"] == 14.6
+    assert by_key["sleep_hours"]["value"] == 7.4
+    # no prior day -> no deltas
+    assert all(v["delta"] is None for v in out["vitals"])
+
+
+def test_fitness_today_deltas_vs_prior_day():
+    prior = DAY - timedelta(days=1)
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=prior, hrv_ms=76.0, resting_hr=55,
+        respiratory_rate=15.0, sleep_hours=7.0,
+    ))
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=DAY, hrv_ms=82.0, resting_hr=52,
+        respiratory_rate=14.6, sleep_hours=7.4,
+    ))
+    by_key = {v["key"]: v for v in store.fitness_today(DAY)["vitals"]}
+    assert by_key["hrv"]["delta"] == 6.0           # 82 - 76
+    assert by_key["resting_hr"]["delta"] == -3      # 52 - 55
+    assert by_key["respiratory_rate"]["delta"] == round(14.6 - 15.0, 1)
+    assert by_key["sleep_hours"]["delta"] == round(7.4 - 7.0, 1)
+
+
 def test_manual_workout_auto_completes_and_does_not_clobber_manual_tap():
     h = store.create_habit({"name": "Workout", "link": "workout"})
     local_day = datetime(2026, 6, 30, 12, 0, tzinfo=UTC).astimezone().date()
