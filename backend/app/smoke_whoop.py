@@ -91,8 +91,11 @@ def main() -> int:
     try:
         print("\n1. Token validity (refresh if within the expiry guard):")
         tokens = store.get_provider_tokens("whoop")
-        r.check(tokens is not None and bool(tokens.access_token),
-                "access token present server-side")
+        if not r.check(tokens is not None and bool(tokens.access_token),
+                       "access token present server-side"):
+            return 1
+        # Inject tokens into provider before fetching (what the sync engine does).
+        provider.set_tokens(tokens)
 
         print("\n2. Live fetch (recovery / sleep / workouts since backfill window):")
         recovery = provider.fetch_recovery(None)
