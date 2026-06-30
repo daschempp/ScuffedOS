@@ -14,7 +14,10 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Date, DateTime, ForeignKey, JSON, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Date, DateTime, ForeignKey, Index, JSON, String, Text,
+    UniqueConstraint, text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -239,3 +242,83 @@ class ConversationMessage(Base):
     # Action cards the assistant attached to this message, if any.
     actions: Mapped[list | None] = mapped_column(JSONField)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ProviderAccount(Base):
+    """OAuth credentials + incremental-sync cursor. One row per (owner, provider).
+    Tokens live server-side only, never serialized to the client (M4)."""
+
+    __tablename__ = "provider_accounts"
+    __table_args__ = (
+        UniqueConstraint("owner", "provider", name="uq_provider_accounts_owner_provider"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    provider: Mapped[str] = mapped_column(String(32), index=True)        # 'whoop'
+    access_token: Mapped[str | None] = mapped_column(Text)
+    refresh_token: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scopes: Mapped[str] = mapped_column(Text, default="")                # space-delimited
+    provider_user_id: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="connected")  # 'connected' | 'needs_reauth'
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DailySnapshot(Base):
+    """Per-day physiological summary; one row per (owner, source, day) — the upsert key.
+    No source_id: a day folds together several provider records. Deltas + weekly
+    trend derive on read."""
+
+    __tablename__ = "daily_snapshots"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "day", name="uq_daily_snapshots_owner_source_day"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)          # 'whoop'|'oura'|'apple_health'|'manual'
+    day: Mapped[date] = mapped_column(Date, index=True)
+    recovery_pct: Mapped[int | None]
+    day_strain: Mapped[float | None]
+    sleep_quality_pct: Mapped[int | None]
+    hrv_ms: Mapped[float | None]
+    resting_hr: Mapped[int | None]
+    respiratory_rate: Mapped[float | None]
+    sleep_hours: Mapped[float | None]
+    metrics_json: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class Workout(Base):
+    """Synced + manual sessions. Unique on (source, source_id) WHERE source_id IS NOT NULL —
+    synced rows upsert idempotently; manual rows (null source_id) never collide."""
+
+    __tablename__ = "workouts"
+    __table_args__ = (
+        Index("uq_workouts_source_source_id", "source", "source_id",
+              unique=True, sqlite_where=text("source_id IS NOT NULL"),
+              postgresql_where=text("source_id IS NOT NULL")),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)          # 'whoop' | 'manual'
+    source_id: Mapped[str | None] = mapped_column(String(64))            # provider id; null for manual
+    name: Mapped[str] = mapped_column(Text)
+    sport: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    duration_min: Mapped[int] = mapped_column(default=0)
+    strain: Mapped[float | None]
+    calories: Mapped[int | None]                                        # kJ->kcal converted on map
+    avg_hr: Mapped[int | None]
+    max_hr: Mapped[int | None]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
