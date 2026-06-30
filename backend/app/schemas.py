@@ -373,3 +373,22 @@ class FoodHit(BaseModel):
     protein_g: float
     carbs_g: float
     fat_g: float
+
+
+# ---- Fitness OAuth schemas (M4) — defined at the head of the OAuth phase ----
+# (Task 19; the read/write schemas land in Task 23, which skips these three.)
+class ProviderStatus(BaseModel):
+    provider: str
+    status: Literal["connected", "needs_reauth"]
+    connected_at: datetime
+    last_sync_at: datetime | None
+    provider_user_id: str | None = None
+
+
+class FitnessStatus(BaseModel):
+    connected: bool  # any provider connected
+    providers: List[ProviderStatus]
+
+
+class ConnectUrl(BaseModel):
+    authorize_url: str
