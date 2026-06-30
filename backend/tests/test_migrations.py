@@ -31,6 +31,7 @@ ALL_TABLES = {
     "tasks", "memories", "conversations", "conversation_messages",
     "task_reminders", "events", "habits", "habit_completions",
     "meals", "water_days", "nutrition_targets",
+    "provider_accounts", "daily_snapshots", "workouts",
 }
 
 
