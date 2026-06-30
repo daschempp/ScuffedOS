@@ -71,3 +71,57 @@ def test_set_provider_status_and_synced():
     when = datetime(2026, 6, 30, 12, 0, tzinfo=UTC)
     store.set_provider_synced("whoop", when)
     assert store.get_provider_account("whoop")["last_sync_at"] == when
+
+
+DAY = date(2026, 6, 30)
+
+
+def test_upsert_snapshot_creates_row():
+    out = store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=DAY, recovery_pct=72, day_strain=14.2,
+        hrv_ms=88.5, resting_hr=52,
+    ))
+    assert out["source"] == "whoop"
+    assert out["day"] == DAY
+    assert out["recovery_pct"] == 72
+    assert out["day_strain"] == 14.2
+    assert out["hrv_ms"] == 88.5
+    assert out["resting_hr"] == 52
+
+
+def test_upsert_snapshot_is_idempotent_by_owner_source_day():
+    store.upsert_snapshot(NormalizedSnapshot(source="whoop", day=DAY, recovery_pct=72))
+    store.upsert_snapshot(NormalizedSnapshot(source="whoop", day=DAY, recovery_pct=80))
+    from sqlalchemy import select as _select
+
+    from app.models import DailySnapshot
+    with store._session() as s:
+        rows = s.scalars(_select(DailySnapshot)).all()
+    assert len(rows) == 1
+    assert rows[0].recovery_pct == 80  # latest non-None wins
+
+
+def test_upsert_snapshot_merges_recovery_and_sleep_same_day():
+    # Recovery snapshot lands first (recovery + hrv), no sleep fields.
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=DAY, recovery_pct=72, hrv_ms=88.5, resting_hr=52,
+    ))
+    # Sleep snapshot lands second (sleep fields), recovery fields all None.
+    merged = store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=DAY, sleep_quality_pct=91,
+        respiratory_rate=14.6, sleep_hours=7.4,
+    ))
+    # Non-None from both lands on the one row; the earlier values survive.
+    assert merged["recovery_pct"] == 72
+    assert merged["hrv_ms"] == 88.5
+    assert merged["resting_hr"] == 52
+    assert merged["sleep_quality_pct"] == 91
+    assert merged["respiratory_rate"] == 14.6
+    assert merged["sleep_hours"] == 7.4
+
+
+def test_upsert_snapshot_none_does_not_clobber():
+    store.upsert_snapshot(NormalizedSnapshot(source="whoop", day=DAY, recovery_pct=72))
+    out = store.upsert_snapshot(NormalizedSnapshot(source="whoop", day=DAY, recovery_pct=None, day_strain=10.0))
+    assert out["recovery_pct"] == 72  # None left the prior value intact
+    assert out["day_strain"] == 10.0

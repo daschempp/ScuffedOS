@@ -61,6 +61,10 @@ _HABIT_FIELDS = {"name", "icon", "tint", "schedule", "link"}
 _HABIT_NULLABLE = {"link"}
 _MEAL_FIELDS = {"name", "slot", "kcal", "protein_g", "carbs_g", "fat_g"}
 _TARGET_FIELDS = {"calories", "protein_g", "carbs_g", "fat_g", "water_cups"}
+_SNAPSHOT_FIELDS = (
+    "recovery_pct", "day_strain", "sleep_quality_pct", "hrv_ms",
+    "resting_hr", "respiratory_rate", "sleep_hours",
+)
 
 # Meal chip icon/tint by slot — the prototype's mapping, derived on read.
 _SLOT_CHIP = {
@@ -295,6 +299,23 @@ def _provider_account_dict(p: ProviderAccount) -> dict:
         "connected_at": aware_utc(p.connected_at),
         "last_sync_at": aware_utc(p.last_sync_at),
         "provider_user_id": p.provider_user_id,
+    }
+
+
+def _snapshot_dict(d: DailySnapshot) -> dict:
+    return {
+        "source": d.source,
+        "day": d.day,
+        "recovery_pct": d.recovery_pct,
+        "day_strain": d.day_strain,
+        "sleep_quality_pct": d.sleep_quality_pct,
+        "hrv_ms": d.hrv_ms,
+        "resting_hr": d.resting_hr,
+        "respiratory_rate": d.respiratory_rate,
+        "sleep_hours": d.sleep_hours,
+        "metrics_json": d.metrics_json or {},
+        "created_at": aware_utc(d.created_at),
+        "updated_at": aware_utc(d.updated_at),
     }
 
 
@@ -1089,6 +1110,33 @@ class Store:
             row = self._provider_row(s, provider)
             if row is not None:
                 row.last_sync_at = _to_utc(when) if when else utcnow()
+
+    # ---- snapshots (derive-on-read) ----
+    @_retry_integrity
+    def upsert_snapshot(self, snap: NormalizedSnapshot) -> dict:
+        """Get-or-create by (owner, source, day); merges non-None fields onto
+        the existing row so a day's recovery and sleep records fold together
+        (non-None wins, None never clobbers). metrics_json shallow-merges."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(DailySnapshot)
+                .where(DailySnapshot.owner == settings.owner)
+                .where(DailySnapshot.source == snap.source)
+                .where(DailySnapshot.day == snap.day)
+            ).first()
+            if row is None:
+                row = DailySnapshot(owner=settings.owner, source=snap.source, day=snap.day)
+                s.add(row)
+            for field in _SNAPSHOT_FIELDS:
+                value = getattr(snap, field)
+                if value is not None:
+                    setattr(row, field, value)
+            if snap.metrics_json:
+                row.metrics_json = {**(row.metrics_json or {}), **snap.metrics_json}
+            s.flush()
+            return _snapshot_dict(row)
 
     # ---- demo data ----
     def seed_demo(self) -> bool:
