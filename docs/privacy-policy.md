@@ -59,7 +59,7 @@ ScuffedOS is an independent application and is not affiliated with, endorsed by,
 
 - App data is stored in a Postgres database hosted by Supabase; attachments and the memory history file are stored on the operator's machine.
 - Data is encrypted in transit (TLS) between the app, the database, and all service providers.
-- API credentials and OAuth tokens are stored in server-side configuration, never in the client.
+- API credentials and OAuth tokens are stored server-side, never in the client. Static API keys come from server-side configuration; OAuth tokens obtained when you connect a service (such as WHOOP) are stored in the server-side database and are never exposed to the client.
 - Access to the database and the machine running the app is limited to the operator.
 
 No system is perfectly secure, but as a single-user, self-hosted application, ScuffedOS's exposure surface is intentionally small.
