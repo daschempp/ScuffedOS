@@ -190,12 +190,129 @@ class WhoopProvider:
             log.warning("WHOOP profile fetch failed (continuing): %s", exc)
             return None
 
-    # ---- pull (stubs; filled in next task) ----
+    # ---- authed pull ----
+    def _headers(self) -> dict:
+        tokens = self._ensure_fresh(self._tokens) if self._tokens else None
+        if tokens is not None:
+            self._tokens = tokens   # keep rotated tokens for the rest of the run
+        access = tokens.access_token if tokens else ""
+        return {"Authorization": f"Bearer {access}"}
+
+    def _get_records(self, path: str, since: datetime | None) -> list[dict]:
+        """Page through a v2 collection, returning every record across pages.
+
+        Query params (confirm-against-live): start (ISO), limit, nextToken.
+        Response body: {"records": [...], "next_token": "..."}.
+        """
+        url = WHOOP_API_BASE + path
+        headers = self._headers()
+        records: list[dict] = []
+        params: dict = {"limit": 25}
+        if since is not None:
+            params["start"] = since.isoformat()
+        next_token: str | None = None
+        for _ in range(50):  # hard page cap — never loop forever
+            if next_token:
+                params["nextToken"] = next_token
+            res = self._transport().get(url, headers=headers, params=dict(params))
+            if getattr(res, "status_code", 200) >= 400:
+                raise WhoopAuthError(f"WHOOP {path} returned {res.status_code}")
+            body = res.json()
+            records.extend(body.get("records", []))
+            next_token = body.get("next_token")
+            if not next_token:
+                break
+        return records
+
+    @staticmethod
+    def _scored(rec: dict) -> dict | None:
+        """The score object for a SCORED record, else None (skip unscored)."""
+        if rec.get("score_state") != "SCORED":
+            return None
+        return rec.get("score") or None
+
+    @staticmethod
+    def _local_day(iso: str):
+        """WHOOP timestamp (ISO, UTC) → local calendar day (matches display.py)."""
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return dt.astimezone().date()
+
     def fetch_recovery(self, since: datetime | None) -> list[NormalizedSnapshot]:
-        return []
+        """Recovery (recovery_pct/hrv/resting_hr) folded with cycle strain by day.
+
+        Recovery records key on cycle_id; cycle records carry the physiological
+        day's start + strain. We index cycles by id, then stamp each recovery
+        day with that cycle's strain so one snapshot per day carries both.
+        """
+        cycles = {c["id"]: c for c in self._get_records("cycle", since)}
+        snaps: list[NormalizedSnapshot] = []
+        for rec in self._get_records("recovery", since):
+            score = self._scored(rec)
+            if score is None:
+                continue
+            cycle = cycles.get(rec.get("cycle_id"))
+            # Day = cycle start (physiological day) when available, else the
+            # recovery's created_at; both in local tz.
+            day_src = (cycle or {}).get("start") or rec.get("created_at")
+            if not day_src:
+                continue
+            cyc_score = self._scored(cycle) if cycle else None
+            snaps.append(NormalizedSnapshot(
+                source=self.name,
+                day=self._local_day(day_src),
+                recovery_pct=score.get("recovery_score"),
+                resting_hr=score.get("resting_heart_rate"),
+                hrv_ms=score.get("hrv_rmssd_milli"),
+                day_strain=(cyc_score or {}).get("strain"),
+            ))
+        return snaps
 
     def fetch_sleep(self, since: datetime | None) -> list[NormalizedSnapshot]:
-        return []
+        snaps: list[NormalizedSnapshot] = []
+        for rec in self._get_records("activity/sleep", since):
+            if rec.get("nap"):
+                continue  # naps don't define the day's sleep summary
+            score = self._scored(rec)
+            start = rec.get("start")
+            if score is None or not start:
+                continue
+            stages = score.get("stage_summary") or {}
+            in_bed = stages.get("total_in_bed_time_milli")
+            awake = stages.get("total_awake_time_milli") or 0
+            sleep_hours = None
+            if in_bed is not None:
+                sleep_hours = round((in_bed - awake) / 3_600_000, 1)
+            snaps.append(NormalizedSnapshot(
+                source=self.name,
+                day=self._local_day(start),
+                sleep_quality_pct=score.get("sleep_performance_percentage"),
+                respiratory_rate=score.get("respiratory_rate"),
+                sleep_hours=sleep_hours,
+            ))
+        return snaps
 
     def fetch_workouts(self, since: datetime | None) -> list[NormalizedWorkout]:
-        return []
+        outs: list[NormalizedWorkout] = []
+        for rec in self._get_records("activity/workout", since):
+            score = self._scored(rec)
+            start, end = rec.get("start"), rec.get("end")
+            if score is None or not start or not end:
+                continue
+            started = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            ended = datetime.fromisoformat(end.replace("Z", "+00:00"))
+            duration_min = max(0, round((ended - started).total_seconds() / 60))
+            sport = rec.get("sport_name")
+            kj = score.get("kilojoule")
+            outs.append(NormalizedWorkout(
+                source=self.name,
+                source_id=str(rec["id"]),
+                name=(sport or "Workout").replace("_", " ").title(),
+                sport=sport,
+                started_at=started,
+                duration_min=duration_min,
+                strain=score.get("strain"),
+                calories=round(kj * KJ_TO_KCAL) if kj is not None else None,
+                avg_hr=score.get("average_heart_rate"),
+                max_hr=score.get("max_heart_rate"),
+            ))
+        return outs
