@@ -392,3 +392,68 @@ class FitnessStatus(BaseModel):
 
 class ConnectUrl(BaseModel):
     authorize_url: str
+
+
+# ---- Fitness read/write schemas (M4) ----------------------------------------
+# ProviderStatus / FitnessStatus / ConnectUrl already defined in Task 19.
+FitnessSource = Literal["whoop", "oura", "apple_health", "manual"]
+
+
+class FitnessVital(BaseModel):
+    key: str  # 'hrv' | 'resting_hr' | 'respiratory_rate' | 'sleep_hours'
+    label: str
+    value: float | None
+    unit: str
+    delta: float | None  # vs prior day; None if no prior
+    icon: str
+    tint: Tint
+
+
+class FitnessToday(BaseModel):
+    date: Day
+    source: str | None  # which provider produced today's snapshot; None if no data
+    recovery_pct: int | None
+    day_strain: float | None
+    sleep_quality_pct: int | None
+    vitals: List[FitnessVital]
+    has_data: bool
+
+
+class WorkoutOut(BaseModel):
+    id: int
+    source: FitnessSource
+    name: str
+    sport: str | None
+    started_at: datetime
+    duration_min: int
+    strain: float | None
+    calories: int | None
+    avg_hr: int | None
+    max_hr: int | None
+    when: str  # derived display, e.g. "Today · 6:10am" (mirrors event_when style)
+    icon: str  # derived from sport
+    tint: Tint  # derived from sport
+
+
+class WorkoutCreate(BaseModel):
+    name: str = Field(min_length=1)
+    sport: str | None = None
+    started_at: datetime
+    duration_min: int = Field(ge=0)
+    strain: float | None = Field(default=None, ge=0)
+    calories: int | None = Field(default=None, ge=0)
+    avg_hr: int | None = Field(default=None, ge=0)
+    max_hr: int | None = Field(default=None, ge=0)
+
+
+class FitnessWeekDay(BaseModel):
+    date: Day
+    dow: str  # "M" / "T" / ... Mon-first
+    strain: float | None
+    frac: float  # day_strain / 21, capped at 1.0
+
+
+class FitnessWeek(BaseModel):
+    days: List[FitnessWeekDay]
+    avg_strain: float
+    peak_day: Day | None
