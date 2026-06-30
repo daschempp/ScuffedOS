@@ -33,17 +33,21 @@ from .display import (
 from .models import (
     Conversation,
     ConversationMessage,
+    DailySnapshot,
     Event,
     Habit,
     HabitCompletion,
     Meal,
     Memory,
     NutritionTargets,
+    ProviderAccount,
     Task,
     TaskReminder,
     WaterDay,
+    Workout,
     utcnow,
 )
+from .providers.base import NormalizedSnapshot, NormalizedWorkout, Tokens
 
 _TASK_FIELDS = {
     "label", "done", "group", "deadline", "prio", "list", "description",
@@ -279,6 +283,18 @@ def _message_dict(m: ConversationMessage) -> dict:
         "content": m.content,
         "actions": m.actions,
         "created_at": aware_utc(m.created_at),
+    }
+
+
+def _provider_account_dict(p: ProviderAccount) -> dict:
+    """Client-safe view of a provider account — NEVER includes tokens,
+    scopes, or meta (those are server-side only; see /status)."""
+    return {
+        "provider": p.provider,
+        "status": p.status,
+        "connected_at": aware_utc(p.connected_at),
+        "last_sync_at": aware_utc(p.last_sync_at),
+        "provider_user_id": p.provider_user_id,
     }
 
 
@@ -1003,6 +1019,76 @@ class Store:
             "days_met": sum(1 for k in logged if k <= goal),
             "goal": goal,
         }
+
+    # ---- provider accounts (OAuth, server-side only) ----
+    def _provider_row(self, s: Session, provider: str) -> ProviderAccount | None:
+        from .config import settings
+
+        return s.scalars(
+            select(ProviderAccount)
+            .where(ProviderAccount.owner == settings.owner)
+            .where(ProviderAccount.provider == provider)
+        ).first()
+
+    def get_provider_account(self, provider: str) -> dict | None:
+        with self._session() as s:
+            row = self._provider_row(s, provider)
+            return _provider_account_dict(row) if row else None
+
+    def get_provider_tokens(self, provider: str) -> Tokens | None:
+        with self._session() as s:
+            row = self._provider_row(s, provider)
+            if row is None:
+                return None
+            return Tokens(
+                access_token=row.access_token,
+                refresh_token=row.refresh_token,
+                expires_at=aware_utc(row.expires_at),
+                scopes=row.scopes or "",
+                provider_user_id=row.provider_user_id,
+                meta=dict(row.meta or {}),
+            )
+
+    def list_provider_accounts(self) -> list[dict]:
+        with self._session() as s:
+            rows = s.scalars(select(ProviderAccount).order_by(ProviderAccount.id)).all()
+            return [_provider_account_dict(p) for p in rows]
+
+    @_retry_integrity
+    def upsert_provider_account(self, provider: str, tokens: Tokens) -> dict:
+        """Get-or-create by (owner, provider); writes the tokens, scopes,
+        provider_user_id and meta, sets status='connected' (a reconnect
+        clears a prior needs_reauth). connected_at is stamped only on create."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._provider_row(s, provider)
+            if row is None:
+                row = ProviderAccount(owner=settings.owner, provider=provider)
+                s.add(row)
+            row.access_token = tokens.access_token
+            row.refresh_token = tokens.refresh_token
+            row.expires_at = _to_utc(tokens.expires_at) if tokens.expires_at else None
+            row.scopes = tokens.scopes or ""
+            if tokens.provider_user_id is not None:
+                row.provider_user_id = tokens.provider_user_id
+            if tokens.meta:
+                row.meta = dict(tokens.meta)
+            row.status = "connected"
+            s.flush()
+            return _provider_account_dict(row)
+
+    def set_provider_status(self, provider: str, status: str) -> None:
+        with self._session() as s, s.begin():
+            row = self._provider_row(s, provider)
+            if row is not None:
+                row.status = status
+
+    def set_provider_synced(self, provider: str, when: datetime | None = None) -> None:
+        with self._session() as s, s.begin():
+            row = self._provider_row(s, provider)
+            if row is not None:
+                row.last_sync_at = _to_utc(when) if when else utcnow()
 
     # ---- demo data ----
     def seed_demo(self) -> bool:
