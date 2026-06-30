@@ -61,15 +61,16 @@ def test_fitness_vital_and_today():
 
 def test_workout_out_shape_includes_derived_display():
     w = WorkoutOut(
-        id=1, source="whoop", name="Run", sport="running",
+        id=1, source="whoop", source_id="whoop-uuid-1", name="Run", sport="running",
         started_at=datetime(2026, 6, 30, 6, 10, tzinfo=timezone.utc),
         duration_min=42, strain=11.3, calories=520, avg_hr=148, max_hr=171,
         when="Today · 6:10am", icon="activity", tint="sky",
     )
     assert w.source == "whoop"
+    assert w.source_id == "whoop-uuid-1"
     assert w.when == "Today · 6:10am"
     with pytest.raises(ValidationError):
-        WorkoutOut(id=1, source="strava", name="x", sport=None,
+        WorkoutOut(id=1, source="strava", source_id=None, name="x", sport=None,
                    started_at=datetime.now(timezone.utc), duration_min=0,
                    strain=None, calories=None, avg_hr=None, max_hr=None,
                    when="", icon="activity", tint="sky")

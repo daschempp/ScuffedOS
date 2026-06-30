@@ -422,6 +422,7 @@ class FitnessToday(BaseModel):
 class WorkoutOut(BaseModel):
     id: int
     source: FitnessSource
+    source_id: str | None
     name: str
     sport: str | None
     started_at: datetime
