@@ -352,3 +352,36 @@ def test_fitness_week_strain_trend_and_frac_cap():
     # avg over days with a strain reading only.
     assert out["avg_strain"] == round((10.5 + 21.0 + 5.0) / 3, 1)
     assert out["peak_day"] == MONDAY + timedelta(days=1)  # day_strain 21 is the peak
+
+
+def test_delete_provider_data_removes_synced_keeps_manual():
+    store.upsert_provider_account("whoop", _tokens())
+    store.upsert_snapshot(NormalizedSnapshot(source="whoop", day=DAY, recovery_pct=72))
+    store.upsert_workout(_nw(source_id="synced-1"))
+    store.create_workout({
+        "name": "Manual lift",
+        "started_at": datetime(2026, 6, 30, 12, tzinfo=UTC),
+        "duration_min": 30,
+    })
+
+    assert store.delete_provider_data("whoop") is True
+
+    # Account + tokens gone.
+    assert store.get_provider_account("whoop") is None
+    assert store.get_provider_tokens("whoop") is None
+    assert store.list_provider_accounts() == []
+    # Synced snapshot + workout gone; manual workout preserved.
+    assert store.fitness_today(DAY)["has_data"] is False
+    remaining = store.list_workouts()
+    assert [w["name"] for w in remaining] == ["Manual lift"]
+    assert remaining[0]["source"] == "manual"
+
+
+def test_delete_provider_data_absent_returns_false():
+    # No account, but a manual workout exists and must be untouched.
+    store.create_workout({
+        "name": "Solo", "started_at": datetime(2026, 6, 30, 8, tzinfo=UTC),
+        "duration_min": 20,
+    })
+    assert store.delete_provider_data("whoop") is False
+    assert [w["name"] for w in store.list_workouts()] == ["Solo"]

@@ -1168,6 +1168,33 @@ class Store:
             if row is not None:
                 row.last_sync_at = _to_utc(when) if when else utcnow()
 
+    def delete_provider_data(self, provider: str) -> bool:
+        """Disconnect: delete the provider_accounts row + that provider's
+        daily_snapshots and workouts (source == provider). Manual workouts
+        are preserved (their source is 'manual'). Returns True iff an account
+        existed. Deletion is the user-facing guarantee, so the router calls
+        this even when the remote revoke fails."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._provider_row(s, provider)
+            existed = row is not None
+            if row is not None:
+                s.delete(row)
+            for snap in s.scalars(
+                select(DailySnapshot)
+                .where(DailySnapshot.owner == settings.owner)
+                .where(DailySnapshot.source == provider)
+            ):
+                s.delete(snap)
+            for w in s.scalars(
+                select(Workout)
+                .where(Workout.owner == settings.owner)
+                .where(Workout.source == provider)
+            ):
+                s.delete(w)
+            return existed
+
     # ---- snapshots (derive-on-read) ----
     @_retry_integrity
     def upsert_snapshot(self, snap: NormalizedSnapshot) -> dict:
