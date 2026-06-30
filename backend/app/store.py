@@ -74,6 +74,26 @@ _SLOT_CHIP = {
     "Dinner": ("utensils", "plum"),
 }
 
+# Workout chip icon/tint by sport — derived on read (mirrors _SLOT_CHIP).
+# Every icon name here MUST exist in frontend/src/lib/Icon.jsx's ICONS map or it
+# renders blank. 'running' uses 'activity' (Lucide has no plain run glyph);
+# 'swimming' uses 'waves', which Task 27 adds to the Icon registry.
+_SPORT_CHIP = {
+    "running": ("activity", "green"),
+    "cycling": ("bike", "sky"),
+    "strength": ("dumbbell", "clay"),
+    "weightlifting": ("dumbbell", "clay"),
+    "swimming": ("waves", "sky"),
+    "yoga": ("flower-2", "plum"),
+    "walking": ("footprints", "honey"),
+}
+_WORKOUT_CHIP_DEFAULT = ("activity", "clay")
+
+_WORKOUT_FIELDS = {
+    "name", "sport", "started_at", "duration_min", "strain",
+    "calories", "avg_hr", "max_hr",
+}
+
 
 def _local_today() -> date:
     return datetime.now().astimezone().date()
@@ -316,6 +336,34 @@ def _snapshot_dict(d: DailySnapshot) -> dict:
         "metrics_json": d.metrics_json or {},
         "created_at": aware_utc(d.created_at),
         "updated_at": aware_utc(d.updated_at),
+    }
+
+
+def _workout_chip(sport: str | None) -> tuple[str, str]:
+    if not sport:
+        return _WORKOUT_CHIP_DEFAULT
+    return _SPORT_CHIP.get(sport.lower(), _WORKOUT_CHIP_DEFAULT)
+
+
+def _workout_dict(w: Workout) -> dict:
+    started = aware_utc(w.started_at)
+    icon, tint = _workout_chip(w.sport)
+    end = started + timedelta(minutes=w.duration_min or 0)
+    return {
+        "id": w.id,
+        "source": w.source,
+        "source_id": w.source_id,
+        "name": w.name,
+        "sport": w.sport,
+        "started_at": started,
+        "duration_min": w.duration_min,
+        "strain": w.strain,
+        "calories": w.calories,
+        "avg_hr": w.avg_hr,
+        "max_hr": w.max_hr,
+        "when": event_when_display(started, end),
+        "icon": icon,
+        "tint": tint,
     }
 
 
@@ -1137,6 +1185,77 @@ class Store:
                 row.metrics_json = {**(row.metrics_json or {}), **snap.metrics_json}
             s.flush()
             return _snapshot_dict(row)
+
+    # ---- workouts ----
+    def _workout_local_day(self, started_at: datetime) -> date:
+        """The calendar day a workout belongs to = its start in local tz."""
+        return aware_utc(started_at).astimezone().date()
+
+    def list_workouts(self, limit: int = 50) -> list[dict]:
+        with self._session() as s:
+            rows = s.scalars(
+                select(Workout).order_by(Workout.started_at.desc()).limit(limit)
+            ).all()
+            return [_workout_dict(w) for w in rows]
+
+    @_retry_integrity
+    def upsert_workout(self, w: NormalizedWorkout) -> dict:
+        """Upsert a synced workout by (source, source_id); manual rows (null
+        source_id) go through create_workout. Runs the workout->habit
+        auto-complete for the workout's local day after the row lands."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = None
+            if w.source_id is not None:
+                row = s.scalars(
+                    select(Workout)
+                    .where(Workout.source == w.source)
+                    .where(Workout.source_id == w.source_id)
+                ).first()
+            if row is None:
+                row = Workout(owner=settings.owner, source=w.source, source_id=w.source_id)
+                s.add(row)
+            row.name = w.name
+            row.sport = w.sport
+            row.started_at = _to_utc(w.started_at)
+            row.duration_min = w.duration_min
+            row.strain = w.strain
+            row.calories = w.calories
+            row.avg_hr = w.avg_hr
+            row.max_hr = w.max_hr
+            s.flush()
+            result = _workout_dict(row)
+            day = self._workout_local_day(row.started_at)
+        self.auto_complete_linked("workout", day, True)
+        return result
+
+    def create_workout(self, data: dict) -> dict:
+        """Manual workout: source='manual', source_id=None. Triggers the
+        workout->habit auto-complete for the started_at local day."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            fields = {k: v for k, v in data.items() if k in _WORKOUT_FIELDS and v is not None}
+            started = fields.pop("started_at")
+            row = Workout(
+                owner=settings.owner, source="manual", source_id=None,
+                started_at=_to_utc(started), **fields,
+            )
+            s.add(row)
+            s.flush()
+            result = _workout_dict(row)
+            day = self._workout_local_day(row.started_at)
+        self.auto_complete_linked("workout", day, True)
+        return result
+
+    def delete_workout(self, workout_id: int) -> bool:
+        with self._session() as s, s.begin():
+            row = s.get(Workout, workout_id)
+            if row is None:
+                return False
+            s.delete(row)
+            return True
 
     # ---- demo data ----
     def seed_demo(self) -> bool:

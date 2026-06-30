@@ -125,3 +125,93 @@ def test_upsert_snapshot_none_does_not_clobber():
     out = store.upsert_snapshot(NormalizedSnapshot(source="whoop", day=DAY, recovery_pct=None, day_strain=10.0))
     assert out["recovery_pct"] == 72  # None left the prior value intact
     assert out["day_strain"] == 10.0
+
+
+def _nw(**kw):
+    base = dict(
+        source="whoop", source_id="w-1", name="Morning run", sport="running",
+        started_at=datetime(2026, 6, 30, 6, 10, tzinfo=UTC), duration_min=42,
+        strain=11.3, calories=430, avg_hr=148, max_hr=171,
+    )
+    base.update(kw)
+    return NormalizedWorkout(**base)
+
+
+def test_upsert_workout_is_idempotent_by_source_id():
+    store.upsert_workout(_nw())
+    again = store.upsert_workout(_nw(name="Morning run (v2)", duration_min=45))
+    rows = store.list_workouts()
+    assert len(rows) == 1                      # same (source, source_id) -> one row
+    assert again["name"] == "Morning run (v2)"  # fields updated in place
+    assert again["duration_min"] == 45
+    assert again["source"] == "whoop"
+
+
+def test_workout_dict_has_derived_display_fields():
+    out = store.upsert_workout(_nw(sport="running"))
+    assert out["icon"]                          # sport-derived, non-empty
+    assert out["tint"] in {"green", "sky", "plum", "honey", "clay"}
+    assert isinstance(out["when"], str) and out["when"]
+    assert out["calories"] == 430
+
+
+def test_create_manual_workout_has_null_source_id():
+    out = store.create_workout({
+        "name": "Lunch lift", "sport": "strength",
+        "started_at": datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
+        "duration_min": 35, "strain": 8.0,
+    })
+    assert out["source"] == "manual"
+    assert out["id"] > 0
+    rows = store.list_workouts()
+    assert any(r["name"] == "Lunch lift" and r["source"] == "manual" for r in rows)
+
+
+def test_list_workouts_newest_started_first_and_limit():
+    store.upsert_workout(_nw(source_id="a", started_at=datetime(2026, 6, 28, 6, tzinfo=UTC)))
+    store.upsert_workout(_nw(source_id="b", started_at=datetime(2026, 6, 30, 6, tzinfo=UTC)))
+    store.upsert_workout(_nw(source_id="c", started_at=datetime(2026, 6, 29, 6, tzinfo=UTC)))
+    rows = store.list_workouts()
+    starts = [r["started_at"] for r in rows]
+    assert starts == sorted(starts, reverse=True)
+    assert len(store.list_workouts(limit=2)) == 2
+
+
+def test_delete_workout():
+    out = store.create_workout({
+        "name": "Doomed", "started_at": datetime(2026, 6, 30, 9, tzinfo=UTC),
+        "duration_min": 10,
+    })
+    assert store.delete_workout(out["id"]) is True
+    assert store.delete_workout(out["id"]) is False
+    assert store.list_workouts() == []
+
+
+def test_synced_workout_auto_completes_linked_habit():
+    store.create_habit({"name": "Workout", "link": "workout"})
+    local_day = datetime(2026, 6, 30, 6, 10, tzinfo=UTC).astimezone().date()
+    store.upsert_workout(_nw(started_at=datetime(2026, 6, 30, 6, 10, tzinfo=UTC)))
+    week = store.habits_week(local_day - timedelta(days=local_day.weekday()))
+    habit = week["habits"][0]
+    assert habit["days"][local_day.weekday()] is True
+
+
+def test_manual_workout_auto_completes_and_does_not_clobber_manual_tap():
+    h = store.create_habit({"name": "Workout", "link": "workout"})
+    local_day = datetime(2026, 6, 30, 12, 0, tzinfo=UTC).astimezone().date()
+    # User manually taps the habit first.
+    store.toggle_habit(h["id"], local_day)
+    # A manual workout lands -> auto-complete is a no-op on an already-complete day.
+    store.create_workout({
+        "name": "Lift", "started_at": datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
+        "duration_min": 30,
+    })
+    from sqlalchemy import select as _select
+
+    from app.models import HabitCompletion
+    with store._session() as s:
+        comp = s.scalars(
+            _select(HabitCompletion).where(HabitCompletion.date == local_day)
+        ).all()
+    assert len(comp) == 1
+    assert comp[0].source == "manual"  # the manual tap was never clobbered
