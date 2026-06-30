@@ -9,9 +9,11 @@ the next tick.
 
 Reads never depend on a live WHOOP call (the screen reads the normalized
 tables), so a failed sync just logs and retries next tick; the tick never
-crashes. Auth failures flip the provider to `needs_reauth`. Same test seam
-as reminders.py: `configure(None)` disables the loop, `configure("unset")`
-restores it; providers themselves are swapped via `providers.configure(...)`.
+crashes. Auth failures flip the provider to `needs_reauth`. The background
+`run_loop()` is gated ONLY by the lifespan (which starts it when
+`settings.fitness_sync_enabled` is true); `configure()` is a vestigial test
+seam that does not gate the loop. Providers are swapped via
+`providers.configure(...)`.
 """
 from __future__ import annotations
 
@@ -30,10 +32,11 @@ _override: object | None | str = "unset"
 
 
 def configure(override: object | None | str = "unset") -> None:
-    """None disables the background loop (tests); 'unset' restores it.
+    """Vestigial test seam consumed by conftest's no_external_services fixture.
 
-    The provider *registry* is swapped separately via providers.configure(...).
-    This seam only gates run_loop, mirroring reminders.configure.
+    Does NOT gate run_loop; the lifespan (gated by settings.fitness_sync_enabled)
+    is the sole controller. The provider *registry* is swapped separately via
+    providers.configure(...).
     """
     global _override
     _override = override
