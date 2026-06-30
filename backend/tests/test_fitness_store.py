@@ -268,3 +268,37 @@ def test_manual_workout_auto_completes_and_does_not_clobber_manual_tap():
         ).all()
     assert len(comp) == 1
     assert comp[0].source == "manual"  # the manual tap was never clobbered
+
+
+MONDAY = date(2026, 6, 29)  # 2026-06-29 is a Monday
+
+
+def test_fitness_week_empty_state():
+    out = store.fitness_week(MONDAY + timedelta(days=3))
+    assert len(out["days"]) == 7
+    assert [d["dow"] for d in out["days"]] == ["M", "T", "W", "T", "F", "S", "S"]
+    assert out["days"][0]["date"] == MONDAY
+    assert all(d["strain"] is None and d["frac"] == 0.0 for d in out["days"])
+    assert out["avg_strain"] == 0
+    assert out["peak_day"] is None
+
+
+def test_fitness_week_strain_trend_and_frac_cap():
+    store.upsert_snapshot(NormalizedSnapshot(source="whoop", day=MONDAY, day_strain=10.5))
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=MONDAY + timedelta(days=1), day_strain=21.0,
+    ))
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=MONDAY + timedelta(days=2), day_strain=5.0,
+    ))
+    out = store.fitness_week(MONDAY + timedelta(days=2))
+    days = out["days"]
+    assert days[0]["strain"] == 10.5
+    assert days[0]["frac"] == round(10.5 / 21, 2)
+    assert days[1]["strain"] == 21.0
+    assert days[1]["frac"] == 1.0                # capped
+    assert days[2]["strain"] == 5.0
+    assert all(d["strain"] is None and d["frac"] == 0.0 for d in days[3:])
+    # avg over days with a strain reading only.
+    assert out["avg_strain"] == round((10.5 + 21.0 + 5.0) / 3, 1)
+    assert out["peak_day"] == MONDAY + timedelta(days=1)  # day_strain 21 is the peak

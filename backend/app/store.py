@@ -1248,6 +1248,51 @@ class Store:
             "has_data": today_row is not None,
         }
 
+    def fitness_week(self, end_day: date | None = None) -> dict:
+        """Mon-first 7-day day_strain trend for the week containing `end_day`
+        (default today). frac = day_strain / 21, capped at 1.0. Scoped to the
+        owner; when several sources wrote the same day, 'whoop' wins (matching
+        _snapshot_row's precedence) so the trend doesn't flip between providers."""
+        from .config import settings
+
+        end_day = end_day or _local_today()
+        start = recurrence.week_start(end_day)
+        # 'whoop' (0) sorts before other sources (1); within a day the last
+        # write seen for that ordering wins.
+        precedence = case((DailySnapshot.source == "whoop", 0), else_=1)
+        with self._session() as s:
+            rows = s.scalars(
+                select(DailySnapshot)
+                .where(DailySnapshot.owner == settings.owner)
+                .where(DailySnapshot.day >= start)
+                .where(DailySnapshot.day <= start + timedelta(days=6))
+                .order_by(precedence.desc(), DailySnapshot.id.desc())
+            ).all()
+        # Iterating worst-precedence-first means the preferred ('whoop') row is
+        # written LAST and wins the dict slot for its day.
+        strain_by_day: dict[date, float] = {}
+        for r in rows:
+            if r.day_strain is not None:
+                strain_by_day[r.day] = r.day_strain
+        dows = ["M", "T", "W", "T", "F", "S", "S"]
+        days = []
+        for i in range(7):
+            d = start + timedelta(days=i)
+            strain = strain_by_day.get(d)
+            days.append({
+                "date": d,
+                "dow": dows[i],
+                "strain": strain,
+                "frac": min(1.0, round(strain / 21, 2)) if strain is not None else 0.0,
+            })
+        logged = [d["strain"] for d in days if d["strain"] is not None]
+        peak = max(days, key=lambda d: d["strain"] if d["strain"] is not None else -1.0)
+        return {
+            "days": days,
+            "avg_strain": round(sum(logged) / len(logged), 1) if logged else 0,
+            "peak_day": peak["date"] if logged else None,
+        }
+
     # ---- workouts ----
     def _workout_local_day(self, started_at: datetime) -> date:
         """The calendar day a workout belongs to = its start in local tz."""
