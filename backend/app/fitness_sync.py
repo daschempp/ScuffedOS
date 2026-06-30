@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import providers
 from .config import settings
-from .providers.base import NormalizedSnapshot
+from .providers.base import AuthError, NormalizedSnapshot
 from .store import store
 
 logger = logging.getLogger("scuffed_os.fitness_sync")
@@ -134,12 +134,33 @@ def _sync_provider(provider, now: datetime) -> int:
 
 def tick(now: datetime | None = None) -> int:
     """One sync pass over every connected pull-provider. Returns how many
-    snapshot/workout records were upserted. Safe to call any time; never
-    raises (per-provider errors are caught in a later task's hardening)."""
+    snapshot/workout records were upserted. Safe to call any time — per-provider
+    errors are caught and logged so the tick never crashes; auth failures flip
+    the provider to needs_reauth. Returns 0 when no database is configured
+    (RuntimeError caught, like reminders.tick)."""
     now = now or _utcnow()
+    try:
+        provider_list = providers.pull_providers()
+    except RuntimeError:  # no DATABASE_URL behind the registry — nothing to do
+        return 0
     total = 0
-    for provider in providers.pull_providers():
-        total += _sync_provider(provider, now)
+    for provider in provider_list:
+        try:
+            total += _sync_provider(provider, now)
+        except AuthError:
+            logger.warning("%s needs re-auth; flipping status", provider.name)
+            try:
+                store.set_provider_status(provider.name, "needs_reauth")
+            except Exception:
+                logger.exception("could not flip %s to needs_reauth", provider.name)
+        except RuntimeError as exc:
+            # No DATABASE_URL surfaced mid-pass (e.g. list_provider_accounts) —
+            # treat the whole pass as a no-op, like reminders.tick.
+            if "DATABASE_URL" in str(exc):
+                return total
+            logger.exception("sync failed for %s", provider.name)
+        except Exception:
+            logger.exception("sync failed for %s", provider.name)
     return total
 
 

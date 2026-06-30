@@ -1,9 +1,10 @@
 """Sync engine (M4): one tick pulls connected providers into normalized tables,
 advances the cursor, and never crashes — a near-clone of the reminders tick."""
+import pytest
 from datetime import date, datetime, timedelta, timezone
 
 from app import fitness_sync, providers
-from app.providers.base import NormalizedSnapshot, NormalizedWorkout, Tokens
+from app.providers.base import AuthError, NormalizedSnapshot, NormalizedWorkout, Tokens
 from app.store import store
 
 
@@ -135,3 +136,58 @@ def test_second_tick_uses_stored_cursor_as_since():
     since_values = {kind: s for kind, s in fake.since_seen}
     # The cursor from the first tick (its `now`) is the new `since`.
     assert since_values["recovery"] == first
+
+
+class _AuthFailProvider(FakeProvider):
+    """A pull provider whose fetch raises the typed auth error."""
+
+    def fetch_recovery(self, since):
+        raise AuthError("refresh failed; token revoked")
+
+
+class _BoomProvider(FakeProvider):
+    """A pull provider that raises a generic (non-auth) error."""
+
+    def fetch_recovery(self, since):
+        raise RuntimeError("WHOOP 500")
+
+
+def test_auth_failure_flips_needs_reauth_and_does_not_raise():
+    providers.configure([_AuthFailProvider()])
+    _connect()
+    # Must not raise.
+    assert fitness_sync.tick(now=_utc(2026, 6, 30, 12, 0)) == 0
+    acct = next(a for a in store.list_provider_accounts() if a["provider"] == "whoop")
+    assert acct["status"] == "needs_reauth"
+
+
+def test_generic_error_is_swallowed_and_other_providers_still_sync():
+    boom = _BoomProvider()
+    boom.name = "whoop"
+    healthy = FakeProvider(
+        recovery=[NormalizedSnapshot(source="oura", day=date(2026, 6, 28),
+                                     recovery_pct=70)],
+    )
+    healthy.name = "oura"
+    providers.configure([boom, healthy])
+    store.upsert_provider_account(
+        "whoop", Tokens(access_token="a", refresh_token="r", expires_at=_utc(2030, 1, 1)))
+    store.upsert_provider_account(
+        "oura", Tokens(access_token="a", refresh_token="r", expires_at=_utc(2030, 1, 1)))
+
+    # Boom is swallowed; the healthy provider's one snapshot still lands.
+    assert fitness_sync.tick(now=_utc(2026, 6, 30, 12, 0)) == 1
+    # The crashing provider is NOT flipped to needs_reauth (that's auth-only).
+    whoop = next(a for a in store.list_provider_accounts() if a["provider"] == "whoop")
+    assert whoop["status"] == "connected"
+
+
+def test_tick_returns_zero_when_no_database(monkeypatch):
+    from app.store import store as real_store
+    # Simulate the store with no DATABASE_URL: list_provider_accounts raises
+    # RuntimeError, exactly like reminders.tick's due_reminders guard.
+    def _boom():
+        raise RuntimeError("DATABASE_URL is not set")
+    monkeypatch.setattr(real_store, "list_provider_accounts", _boom)
+    providers.configure([FakeProvider()])
+    assert fitness_sync.tick(now=_utc(2026, 6, 30, 12, 0)) == 0
