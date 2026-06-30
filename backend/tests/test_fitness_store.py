@@ -270,6 +270,56 @@ def test_manual_workout_auto_completes_and_does_not_clobber_manual_tap():
     assert comp[0].source == "manual"  # the manual tap was never clobbered
 
 
+def test_fitness_today_whoop_source_wins_over_manual():
+    """When both 'manual' and 'whoop' rows exist for the same day,
+    fitness_today must surface the whoop values (recovery_pct / day_strain /
+    hrv_ms), not the manual ones. This exercises _snapshot_row's precedence
+    ORDER BY: case(source=='whoop', 0, else_=1) ASC, id DESC."""
+    # Insert manual row first (lower id) with distinct values.
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="manual", day=DAY,
+        recovery_pct=55, day_strain=8.0, hrv_ms=60.0,
+        resting_hr=62, sleep_quality_pct=70,
+    ))
+    # Insert whoop row second (higher id) with distinct, different values.
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=DAY,
+        recovery_pct=81, day_strain=17.5, hrv_ms=91.0,
+        resting_hr=49, sleep_quality_pct=88,
+    ))
+    out = store.fitness_today(DAY)
+    assert out["has_data"] is True
+    assert out["source"] == "whoop"
+    assert out["recovery_pct"] == 81,   "whoop recovery_pct must win"
+    assert out["day_strain"] == 17.5,   "whoop day_strain must win"
+    assert out["sleep_quality_pct"] == 88, "whoop sleep_quality_pct must win"
+    by_key = {v["key"]: v for v in out["vitals"]}
+    assert by_key["hrv"]["value"] == 91.0, "whoop hrv_ms must win"
+    assert by_key["resting_hr"]["value"] == 49, "whoop resting_hr must win"
+
+
+def test_fitness_week_whoop_source_wins_over_manual():
+    """When both 'manual' and 'whoop' rows exist for the same day inside the
+    current week, fitness_week must surface the whoop day_strain, not the
+    manual one. This exercises the inverted ORDER BY in fitness_week:
+    precedence.desc() + id.desc() means whoop is iterated last and
+    overwrites the manual entry in strain_by_day."""
+    # Use Tuesday of the test week so it's clearly within MONDAY's week.
+    tuesday = MONDAY + timedelta(days=1)
+    # Manual row first with a clearly different strain.
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="manual", day=tuesday, day_strain=6.0,
+    ))
+    # Whoop row second with a distinct higher strain.
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=tuesday, day_strain=19.3,
+    ))
+    out = store.fitness_week(tuesday)
+    tuesday_day = next(d for d in out["days"] if d["date"] == tuesday)
+    assert tuesday_day["strain"] == 19.3, "whoop day_strain must win in fitness_week"
+    assert tuesday_day["strain"] != 6.0,  "manual day_strain must NOT surface"
+
+
 MONDAY = date(2026, 6, 29)  # 2026-06-29 is a Monday
 
 
