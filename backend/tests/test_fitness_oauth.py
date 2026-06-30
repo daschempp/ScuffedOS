@@ -81,3 +81,62 @@ def test_status_reflects_a_connected_account_without_tokens(client):
 def res_text(obj) -> str:
     import json
     return json.dumps(obj)
+
+
+def test_callback_exchanges_persists_and_triggers_immediate_sync(client, monkeypatch):
+    from app import fitness_sync
+
+    fake = FakeProvider()
+    providers.configure([fake])
+    ticks: list[object] = []
+    monkeypatch.setattr(fitness_sync, "tick", lambda now=None: ticks.append(now) or 0)
+
+    state = _state_of(client.get("/api/fitness/connect/whoop").json()["authorize_url"])
+    res = client.get(
+        f"/auth/whoop/callback?code=the-code&state={state}",
+        follow_redirects=False,
+    )
+    assert res.status_code in (302, 307)
+    loc = res.headers["location"]
+    assert "screen=fitness" in loc and "connected=whoop" in loc
+
+    # The code was exchanged exactly once and the account was persisted.
+    assert fake.exchanged == ["the-code"]
+    accounts = store.list_provider_accounts()
+    assert [a["provider"] for a in accounts] == ["whoop"]
+    assert accounts[0]["status"] == "connected"
+    assert accounts[0]["provider_user_id"] == "whoop-user-1"
+    # An immediate sync (backfill) was triggered once.
+    assert len(ticks) == 1
+    # The state was one-time: it is gone from the store.
+    assert state not in fitness._STATES
+
+
+def test_callback_with_bad_state_is_400_and_persists_nothing(client, monkeypatch):
+    from app import fitness_sync
+
+    fake = FakeProvider()
+    providers.configure([fake])
+    monkeypatch.setattr(fitness_sync, "tick", lambda now=None: 0)
+
+    res = client.get(
+        "/auth/whoop/callback?code=x&state=forged-state",
+        follow_redirects=False,
+    )
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "bad_request"
+    assert fake.exchanged == []
+    assert store.list_provider_accounts() == []
+
+
+def test_callback_state_is_single_use(client, monkeypatch):
+    from app import fitness_sync
+
+    providers.configure([FakeProvider()])
+    monkeypatch.setattr(fitness_sync, "tick", lambda now=None: 0)
+    state = _state_of(client.get("/api/fitness/connect/whoop").json()["authorize_url"])
+    first = client.get(f"/auth/whoop/callback?code=a&state={state}", follow_redirects=False)
+    assert first.status_code in (302, 307)
+    # Replaying the same state must now fail — it was consumed.
+    replay = client.get(f"/auth/whoop/callback?code=a&state={state}", follow_redirects=False)
+    assert replay.status_code == 400

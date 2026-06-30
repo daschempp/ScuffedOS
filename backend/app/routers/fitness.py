@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import secrets
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import RedirectResponse
 
-from .. import providers
+from .. import fitness_sync, providers
 from ..schemas import ConnectUrl, FitnessStatus
 from ..store import store
 
@@ -58,3 +59,39 @@ def status() -> dict:
         "connected": any(a["status"] == "connected" for a in accounts),
         "providers": accounts,
     }
+
+
+# Redirect target after a successful connect — the SPA reads screen/connected.
+_FITNESS_REDIRECT = "/?screen=fitness&connected={provider}"
+
+
+@auth_router.get("/auth/{provider}/callback")
+def oauth_callback(
+    provider: str,
+    code: str = Query(...),
+    state: str = Query(...),
+) -> RedirectResponse:
+    """OAuth redirect target (outside /api). Verify the one-time CSRF state,
+    exchange the code, fetch the profile id, persist tokens server-side, kick
+    off an immediate sync+backfill, then bounce back to the Fitness screen."""
+    issued_for = _consume_state(state)
+    if issued_for is None or issued_for != provider:
+        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+    impl = providers.get(provider)
+    if impl is None:
+        raise HTTPException(status_code=404, detail=f"Unknown provider '{provider}'")
+    tokens = impl.exchange_code(code)
+    # exchange_code does NOT carry provider_user_id (the token payload has no
+    # profile). Fetch it from the provider's basic-profile endpoint and stamp
+    # it onto the tokens so upsert persists it server-side. fetch_profile is
+    # best-effort: a None just leaves provider_user_id unset.
+    fetch_profile = getattr(impl, "fetch_profile", None)
+    if fetch_profile is not None and tokens.provider_user_id is None:
+        uid = fetch_profile(tokens)
+        if uid is not None:
+            tokens.provider_user_id = uid
+    store.upsert_provider_account(provider, tokens)
+    # Immediate sync: the fresh account has no last_sync_at, so the sync
+    # engine backfills whoop_backfill_days on this first pass.
+    fitness_sync.tick()
+    return RedirectResponse(_FITNESS_REDIRECT.format(provider=provider), status_code=302)
