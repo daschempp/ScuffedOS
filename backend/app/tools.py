@@ -12,8 +12,8 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta
 
-from . import food_db, memory_engine, recurrence
-from .seeds import FINANCE_SUMMARY, FITNESS_TODAY
+from . import fitness_sync, food_db, memory_engine, recurrence
+from .seeds import FINANCE_SUMMARY
 from .store import store
 
 _GROUPS = ["Today", "Upcoming", "Someday"]
@@ -85,6 +85,11 @@ def _habit_action(title: str, meta: str) -> dict:
 def _nutrition_action(title: str, meta: str) -> dict:
     return {"icon": "utensils", "title": title, "meta": meta,
             "cta": "View nutrition", "screen": "nutrition"}
+
+
+def _fitness_action(title: str, meta: str) -> dict:
+    return {"icon": "activity", "title": title, "meta": meta,
+            "cta": "View fitness", "screen": "fitness"}
 
 
 # ---- executors (each returns (result, action | None)) ----------------------
@@ -370,6 +375,56 @@ def _search_food(args: dict):
                                    "otherwise — scale to the portion before logging."}, None
 
 
+# ---- fitness (real from M4) -------------------------------------------------
+
+def _get_fitness_today(args: dict):
+    return store.fitness_today(_parse_date(args.get("date"))), None
+
+
+def _get_workouts(args: dict):
+    rows = store.list_workouts(args.get("limit", 10))
+    return {"workouts": [{"id": w["id"], "name": w["name"], "source": w["source"],
+                          "sport": w["sport"], "duration_min": w["duration_min"],
+                          "strain": w["strain"], "calories": w["calories"],
+                          "when": w["when"]} for w in rows]}, None
+
+
+def _get_fitness_week(args: dict):
+    return store.fitness_week(_parse_date(args.get("date"))), None
+
+
+def _get_fitness_status(args: dict):
+    accounts = store.list_provider_accounts()
+    return {"connected": any(a["status"] == "connected" for a in accounts),
+            "providers": accounts}, None
+
+
+def _log_workout(args: dict):
+    data = {
+        "name": args["name"],
+        "sport": args.get("sport"),
+        "started_at": _parse_dt(args["started_at"]) if args.get("started_at")
+        else datetime.now().astimezone(),
+        "duration_min": max(0, int(args.get("duration_min") or 0)),
+        "strain": args.get("strain"),
+        "calories": args.get("calories"),
+        "avg_hr": args.get("avg_hr"),
+        "max_hr": args.get("max_hr"),
+    }
+    workout = store.create_workout({k: v for k, v in data.items() if v is not None})
+    return {"logged": {"id": workout["id"], "name": workout["name"],
+                       "source": workout["source"]}}, _fitness_action(
+        "Workout logged", f"{workout['name']} · {workout['duration_min']} min"
+    )
+
+
+def _sync_fitness(args: dict):
+    count = fitness_sync.tick()
+    return {"synced": count}, _fitness_action(
+        "Fitness synced", f"{count} record{'s' if count != 1 else ''} updated"
+    )
+
+
 # ---- task reminders (real from M3) -------------------------------------------
 
 def _add_reminder(args: dict):
@@ -567,9 +622,44 @@ TOOLS: list[dict] = [
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
      "run": _seed_reader(FINANCE_SUMMARY)},
     {"name": "get_fitness_today",
-     "description": "Read today's recovery/sleep/strain numbers.",
+     "description": "Read today's recovery/sleep/strain rings and vitals (HRV, resting HR, respiratory rate, sleep). Call for any recovery/readiness/sleep question.",
+     "input_schema": {"type": "object", "properties": {
+         "date": {"type": "string", "description": "YYYY-MM-DD, default today."}},
+         "additionalProperties": False},
+     "run": _get_fitness_today},
+    {"name": "get_workouts",
+     "description": "List recent workouts (synced from WHOOP + manually logged), newest first. Call when the user asks about their training or recent sessions.",
+     "input_schema": {"type": "object", "properties": {
+         "limit": {"type": "integer", "description": "How many to return (default 10)."}},
+         "additionalProperties": False},
+     "run": _get_workouts},
+    {"name": "get_fitness_week",
+     "description": "Read the weekly strain trend (7-day, Mon-first). Call when the user asks how their training load looked this week.",
+     "input_schema": {"type": "object", "properties": {
+         "date": {"type": "string", "description": "YYYY-MM-DD inside the week, default this week."}},
+         "additionalProperties": False},
+     "run": _get_fitness_week},
+    {"name": "get_fitness_status",
+     "description": "Check whether a wearable (WHOOP) is connected and when it last synced. Call before suggesting a sync or when the user asks if their device is linked.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
-     "run": _seed_reader(FITNESS_TODAY)},
+     "run": _get_fitness_status},
+    {"name": "log_workout",
+     "description": "Log a manual workout (one WHOOP didn't capture). Call when the user says they did a session ('I lifted for 30 minutes'). A logged workout auto-completes a habit linked to workouts.",
+     "input_schema": {"type": "object", "properties": {
+         "name": _STRING,
+         "sport": {"type": "string", "description": "e.g. running, cycling, strength."},
+         "started_at": {"type": "string", "description": "ISO datetime; defaults to now (user's local time if no offset)."},
+         "duration_min": {"type": "integer"},
+         "strain": {"type": "number"},
+         "calories": {"type": "integer"},
+         "avg_hr": {"type": "integer"},
+         "max_hr": {"type": "integer"}},
+         "required": ["name"], "additionalProperties": False},
+     "run": _log_workout},
+    {"name": "sync_fitness",
+     "description": "Trigger a WHOOP sync now to pull the latest recovery/sleep/strain/workouts. Call when the user asks to refresh or says their latest data is missing.",
+     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+     "run": _sync_fitness},
 ]
 
 DEFINITIONS = [{k: t[k] for k in ("name", "description", "input_schema")} for t in TOOLS]
