@@ -12,6 +12,7 @@ with NO prefix so the WHOOP-registered redirect lands at exactly
 """
 from __future__ import annotations
 
+import logging
 import secrets
 
 from fastapi import APIRouter, HTTPException, Query
@@ -28,6 +29,8 @@ auth_router = APIRouter(tags=["fitness-oauth"])
 # a single-user desktop app (the spec's "stored server-side, one-time CSRF
 # check"); a process restart mid-flow just makes the user click Connect again.
 _STATES: dict[str, str] = {}
+
+logger = logging.getLogger("scuffed_os.fitness")
 
 
 def _issue_state(provider: str) -> str:
@@ -95,3 +98,24 @@ def oauth_callback(
     # engine backfills whoop_backfill_days on this first pass.
     fitness_sync.tick()
     return RedirectResponse(_FITNESS_REDIRECT.format(provider=provider), status_code=302)
+
+
+@router.post("/disconnect/{provider}", response_model=FitnessStatus)
+def disconnect(provider: str) -> dict:
+    """Revoke at the provider (best-effort), then delete its tokens + synced
+    data. Manual workouts are preserved (the store keeps source != provider).
+    Deletion is the user-facing guarantee, so a failed revoke never blocks it."""
+    impl = providers.get(provider)
+    tokens = store.get_provider_tokens(provider)
+    if impl is not None and tokens is not None:
+        try:
+            impl.revoke(tokens)
+        except Exception as exc:  # noqa: BLE001 — revoke is best-effort
+            logger.warning("revoke failed for %s, deleting anyway: %s", provider, exc)
+    if not store.delete_provider_data(provider):
+        raise HTTPException(status_code=404, detail=f"No connected '{provider}' account")
+    accounts = store.list_provider_accounts()
+    return {
+        "connected": any(a["status"] == "connected" for a in accounts),
+        "providers": accounts,
+    }

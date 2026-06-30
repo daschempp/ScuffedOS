@@ -140,3 +140,47 @@ def test_callback_state_is_single_use(client, monkeypatch):
     # Replaying the same state must now fail — it was consumed.
     replay = client.get(f"/auth/whoop/callback?code=a&state={state}", follow_redirects=False)
     assert replay.status_code == 400
+
+
+def test_disconnect_revokes_then_deletes_and_returns_status(client):
+    fake = FakeProvider()
+    providers.configure([fake])
+    store.upsert_provider_account(
+        "whoop",
+        Tokens(access_token="a", refresh_token="r", expires_at=None,
+               scopes="read:recovery", provider_user_id="u1"),
+    )
+    assert client.get("/api/fitness/status").json()["connected"] is True
+
+    res = client.post("/api/fitness/disconnect/whoop")
+    assert res.status_code == 200
+    assert res.json() == {"connected": False, "providers": []}
+    # The provider's revoke was attempted with the stored tokens.
+    assert len(fake.revoked) == 1
+    assert fake.revoked[0].access_token == "a"
+    # And the account is gone.
+    assert store.list_provider_accounts() == []
+
+
+def test_disconnect_deletes_even_when_revoke_fails(client):
+    class Boom(FakeProvider):
+        def revoke(self, tokens):
+            raise RuntimeError("whoop revoke endpoint down")
+
+    providers.configure([Boom()])
+    store.upsert_provider_account(
+        "whoop",
+        Tokens(access_token="a", refresh_token="r", expires_at=None,
+               scopes="", provider_user_id=None),
+    )
+    res = client.post("/api/fitness/disconnect/whoop")
+    assert res.status_code == 200
+    assert res.json()["connected"] is False
+    assert store.list_provider_accounts() == []  # deleted despite the revoke error
+
+
+def test_disconnect_unknown_provider_is_404(client):
+    providers.configure([FakeProvider()])
+    res = client.post("/api/fitness/disconnect/whoop")  # nothing connected
+    assert res.status_code == 404
+    assert res.json()["error"]["code"] == "not_found"
