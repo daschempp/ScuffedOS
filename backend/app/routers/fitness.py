@@ -17,7 +17,8 @@ import secrets
 from fastapi import APIRouter, HTTPException
 
 from .. import providers
-from ..schemas import ConnectUrl
+from ..schemas import ConnectUrl, FitnessStatus
+from ..store import store
 
 router = APIRouter(prefix="/api/fitness", tags=["fitness"])
 auth_router = APIRouter(tags=["fitness-oauth"])
@@ -47,3 +48,13 @@ def connect(provider: str) -> dict:
         raise HTTPException(status_code=404, detail=f"Unknown provider '{provider}'")
     state = _issue_state(provider)
     return {"authorize_url": impl.authorize_url(state)}
+
+
+@router.get("/status", response_model=FitnessStatus)
+def status() -> dict:
+    """Per-provider connection state. Reads safe dicts only — no tokens."""
+    accounts = store.list_provider_accounts()
+    return {
+        "connected": any(a["status"] == "connected" for a in accounts),
+        "providers": accounts,
+    }
