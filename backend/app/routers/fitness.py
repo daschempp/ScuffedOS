@@ -15,11 +15,21 @@ from __future__ import annotations
 import logging
 import secrets
 
-from fastapi import APIRouter, HTTPException, Query
+from datetime import date
+
+from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 
 from .. import fitness_sync, providers
-from ..schemas import ConnectUrl, FitnessStatus
+from ..providers import pull_providers
+from ..schemas import (
+    ConnectUrl,
+    FitnessStatus,
+    FitnessToday,
+    FitnessWeek,
+    WorkoutCreate,
+    WorkoutOut,
+)
 from ..store import store
 
 router = APIRouter(prefix="/api/fitness", tags=["fitness"])
@@ -119,3 +129,44 @@ def disconnect(provider: str) -> dict:
         "connected": any(a["status"] == "connected" for a in accounts),
         "providers": accounts,
     }
+
+
+# ---- reads (normalized tables only; never a live provider call) ------------
+@router.get("/today", response_model=FitnessToday)
+def fitness_today(date_: date | None = Query(default=None, alias="date")) -> dict:
+    return store.fitness_today(date_)
+
+
+@router.get("/week", response_model=FitnessWeek)
+def fitness_week(date_: date | None = Query(default=None, alias="date")) -> dict:
+    return store.fitness_week(date_)
+
+
+@router.get("/workouts", response_model=list[WorkoutOut])
+def list_workouts(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]:
+    return store.list_workouts(limit)
+
+
+# ---- manual workout write --------------------------------------------------
+@router.post("/workouts", response_model=WorkoutOut, status_code=201)
+def create_workout(body: WorkoutCreate) -> dict:
+    return store.create_workout(body.model_dump())
+
+
+@router.delete("/workouts/{workout_id}", status_code=204)
+def delete_workout(workout_id: int) -> Response:
+    if not store.delete_workout(workout_id):
+        raise HTTPException(status_code=404, detail="Workout not found")
+    return Response(status_code=204)
+
+
+# ---- on-demand sync --------------------------------------------------------
+@router.post("/sync")
+def sync_now() -> dict:
+    """Run one sync pass now (post-connect, manual test, assistant tool).
+
+    Delegates to fitness_sync.tick(); reads never depend on it, so a failing
+    tick just returns 0. `providers` lists the pull-providers that were polled.
+    """
+    count = fitness_sync.tick()
+    return {"synced": count, "providers": [p.name for p in pull_providers()]}

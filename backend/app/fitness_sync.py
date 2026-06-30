@@ -140,7 +140,14 @@ def tick(now: datetime | None = None) -> int:
     snapshot/workout records were upserted. Safe to call any time — per-provider
     errors are caught and logged so the tick never crashes; auth failures flip
     the provider to needs_reauth. Returns 0 when no database is configured
-    (RuntimeError caught, like reminders.tick)."""
+    (RuntimeError caught, like reminders.tick).
+
+    Test seam: if configure() was called with an object that has a .tick()
+    method (e.g. FakeSync), that method is called instead of the real sync pass
+    so /sync tests don't need a live provider or database.
+    """
+    if _override not in ("unset", None) and hasattr(_override, "tick"):
+        return _override.tick(now)  # type: ignore[union-attr]
     now = now or _utcnow()
     try:
         provider_list = providers.pull_providers()
