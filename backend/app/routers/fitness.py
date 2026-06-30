@@ -169,4 +169,8 @@ def sync_now() -> dict:
     tick just returns 0. `providers` lists the pull-providers that were polled.
     """
     count = fitness_sync.tick()
-    return {"synced": count, "providers": [p.name for p in pull_providers()]}
+    try:
+        providers_list = [p.name for p in pull_providers()]
+    except RuntimeError:
+        providers_list = []
+    return {"synced": count, "providers": providers_list}

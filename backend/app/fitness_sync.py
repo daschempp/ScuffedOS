@@ -11,8 +11,9 @@ Reads never depend on a live WHOOP call (the screen reads the normalized
 tables), so a failed sync just logs and retries next tick; the tick never
 crashes. Auth failures flip the provider to `needs_reauth`. The background
 `run_loop()` is gated ONLY by the lifespan (which starts it when
-`settings.fitness_sync_enabled` is true); `configure()` is a vestigial test
-seam that does not gate the loop. Providers are swapped via
+`settings.fitness_sync_enabled` is true). Test seam: `configure(fake)` installs
+a fake whose `.tick()` is delegated to by `tick()` (used by tests); `configure(None)`
+or `configure("unset")` run the real tick. Providers are swapped via
 `providers.configure(...)`.
 """
 from __future__ import annotations
@@ -32,7 +33,9 @@ _override: object | None | str = "unset"
 
 
 def configure(override: object | None | str = "unset") -> None:
-    """Vestigial test seam consumed by conftest's no_external_services fixture.
+    """Test seam for mocking tick() in tests. Install a fake with a .tick()
+    method (e.g. FakeSync) to delegate to it instead of the real sync pass.
+    Pass None or "unset" to run real tick.
 
     Does NOT gate run_loop; the lifespan (gated by settings.fitness_sync_enabled)
     is the sole controller. The provider *registry* is swapped separately via
