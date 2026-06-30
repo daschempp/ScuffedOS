@@ -16,7 +16,7 @@ import contextlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import reminders
+from . import fitness_sync, reminders
 from .config import settings
 from .errors import install_error_handlers
 from .routers import assistant, calendar, habits, memory, nutrition, tasks
@@ -24,15 +24,20 @@ from .routers import assistant, calendar, habits, memory, nutrition, tasks
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Start the reminder tick alongside the server; stop it on shutdown."""
-    loop_task: asyncio.Task | None = None
+    """Start the reminder tick and the fitness-sync loop alongside the server;
+    stop them on shutdown."""
+    reminder_task: asyncio.Task | None = None
+    fitness_task: asyncio.Task | None = None
     if settings.reminders_enabled:
-        loop_task = asyncio.create_task(reminders.run_loop())
+        reminder_task = asyncio.create_task(reminders.run_loop())
+    if settings.fitness_sync_enabled:
+        fitness_task = asyncio.create_task(fitness_sync.run_loop())
     yield
-    if loop_task is not None:
-        loop_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await loop_task
+    for task in (reminder_task, fitness_task):
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 app = FastAPI(title="Scuffed OS API", version="0.1.0", lifespan=lifespan)

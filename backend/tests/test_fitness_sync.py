@@ -206,3 +206,49 @@ def test_trigger_runs_one_tick_and_returns_count():
     n = asyncio.run(fitness_sync.trigger())
     assert n == 1
     assert [w["source_id"] for w in store.list_workouts()] == ["w-1"]
+
+
+def test_lifespan_starts_fitness_sync_loop_when_enabled(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.config import settings as app_settings
+    from app.main import app
+
+    started = {"fitness": False}
+
+    async def fake_run_loop():
+        started["fitness"] = True
+        # Sleep forever so the task is alive across the client's lifetime;
+        # cancellation on shutdown ends it.
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(app_settings, "fitness_sync_enabled", True)
+    monkeypatch.setattr(app_settings, "reminders_enabled", False)  # isolate this loop
+    monkeypatch.setattr(fitness_sync, "run_loop", fake_run_loop)
+
+    with TestClient(app):
+        pass  # entering/exiting runs startup then shutdown
+
+    assert started["fitness"] is True
+
+
+def test_lifespan_skips_fitness_sync_loop_when_disabled(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.config import settings as app_settings
+    from app.main import app
+
+    started = {"fitness": False}
+
+    async def fake_run_loop():
+        started["fitness"] = True
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(app_settings, "fitness_sync_enabled", False)
+    monkeypatch.setattr(app_settings, "reminders_enabled", False)
+    monkeypatch.setattr(fitness_sync, "run_loop", fake_run_loop)
+
+    with TestClient(app):
+        pass
+
+    assert started["fitness"] is False
