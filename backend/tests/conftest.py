@@ -11,7 +11,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from app import food_db, llm, memory_engine, reminders
+from app import fitness_sync, food_db, llm, memory_engine, providers, reminders
 from app.config import settings
 from app.db import Base, make_engine, make_session_factory
 from app.main import app
@@ -34,17 +34,21 @@ def fresh_db():
 
 @pytest.fixture(autouse=True)
 def no_external_services():
-    """Tests never reach the Claude API, OpenAI, Mem0, USDA, or osascript —
-    install a fake explicitly (each module's configure seam) when needed."""
+    """Tests never reach the Claude API, OpenAI, Mem0, USDA, osascript, or
+    WHOOP — install a fake explicitly (each module's configure seam) when needed."""
     llm.configure(None)
     memory_engine.configure(None)
     food_db.configure(None)
     reminders.configure(None)
+    providers.configure([])
+    fitness_sync.configure(None)
     yield
     llm.configure()
     memory_engine.configure("unset")
     food_db.configure("unset")
     reminders.configure("unset")
+    providers.configure("unset")
+    fitness_sync.configure("unset")
 
 
 @pytest.fixture(autouse=True)
