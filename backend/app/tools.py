@@ -622,7 +622,7 @@ TOOLS: list[dict] = [
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
      "run": _seed_reader(FINANCE_SUMMARY)},
     {"name": "get_fitness_today",
-     "description": "Read today's recovery/sleep/strain rings and vitals (HRV, resting HR, respiratory rate, sleep). Call for any recovery/readiness/sleep question.",
+     "description": "Read today's WHOOP recovery, sleep and strain plus vitals (HRV, resting HR). Call for any 'how am I doing / how recovered am I' question, and ALWAYS read this first before scheduling training — then use create_event to block a session or create_task to set an intention based on how recovered they are.",
      "input_schema": {"type": "object", "properties": {
          "date": {"type": "string", "description": "YYYY-MM-DD, default today."}},
          "additionalProperties": False},
@@ -657,7 +657,7 @@ TOOLS: list[dict] = [
          "required": ["name"], "additionalProperties": False},
      "run": _log_workout},
     {"name": "sync_fitness",
-     "description": "Trigger a WHOOP sync now to pull the latest recovery/sleep/strain/workouts. Call when the user asks to refresh or says their latest data is missing.",
+     "description": "Pull the latest WHOOP data now (recovery, sleep, workouts). Call when the user says their numbers look stale or right after they ask you to act on today's recovery and the data might be old. Returns how many records changed.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
      "run": _sync_fitness},
 ]
