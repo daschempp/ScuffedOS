@@ -164,16 +164,24 @@ def tick(now: datetime | None = None) -> int:
     return total
 
 
+async def trigger() -> int:
+    """Run one sync pass off the event loop and return its count.
+
+    Awaited by the OAuth callback (immediate post-connect sync + backfill)
+    and by POST /api/fitness/sync. Errors are already swallowed inside tick,
+    so this never raises for provider problems.
+    """
+    return await asyncio.to_thread(tick)
+
+
 async def run_loop() -> None:
     """The lifespan background task; ticks forever until cancelled."""
-    if _override is None:
-        return
     logger.info("fitness sync loop started (every %ss)", settings.fitness_sync_seconds)
     while True:
         try:
-            upserted = await asyncio.to_thread(tick)
-            if upserted:
-                logger.info("fitness sync: upserted %d record(s)", upserted)
+            synced = await asyncio.to_thread(tick)
+            if synced:
+                logger.info("synced %d fitness record(s)", synced)
         except Exception:
             logger.exception("fitness sync tick failed")
         await asyncio.sleep(settings.fitness_sync_seconds)

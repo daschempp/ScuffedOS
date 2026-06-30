@@ -1,5 +1,6 @@
 """Sync engine (M4): one tick pulls connected providers into normalized tables,
 advances the cursor, and never crashes — a near-clone of the reminders tick."""
+import asyncio
 import pytest
 from datetime import date, datetime, timedelta, timezone
 
@@ -191,3 +192,17 @@ def test_tick_returns_zero_when_no_database(monkeypatch):
     monkeypatch.setattr(real_store, "list_provider_accounts", _boom)
     providers.configure([FakeProvider()])
     assert fitness_sync.tick(now=_utc(2026, 6, 30, 12, 0)) == 0
+
+
+def test_trigger_runs_one_tick_and_returns_count():
+    fake = FakeProvider(
+        workouts=[NormalizedWorkout(source="whoop", source_id="w-1", name="Lift",
+                                    sport="weightlifting",
+                                    started_at=_utc(2026, 6, 29, 7, 0),
+                                    duration_min=55)],
+    )
+    providers.configure([fake])
+    _connect()
+    n = asyncio.run(fitness_sync.trigger())
+    assert n == 1
+    assert [w["source_id"] for w in store.list_workouts()] == ["w-1"]
