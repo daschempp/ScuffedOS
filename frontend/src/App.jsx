@@ -25,7 +25,7 @@ import { useSpeech } from './lib/useSpeech.js'
 const SCREENS = {
   home: { title: 'Good morning, Sam', sub: 'Tuesday, June 9 · 4 things need you today' },
   nutrition: { title: 'Nutrition', sub: '1,690 of 2,100 kcal · 410 to go' },
-  fitness: { title: 'Fitness', sub: '82% recovered · ready for a hard session' },
+  fitness: { title: 'Fitness', sub: 'Recovery, sleep, strain & workouts' },
   finance: { title: 'Finance', sub: '$129,050 net worth · on budget for June' },
   memory: { title: 'Second Brain', sub: '142 memories · learning from your notes' },
   calendar: { title: 'Calendar', sub: '3 events today' },
