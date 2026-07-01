@@ -12,7 +12,7 @@ This policy describes what data ScuffedOS stores, how it is used, and which serv
 
 **Derived information.** After each assistant conversation, the app may extract short factual "memories" (for example, a stated preference or goal) and store them, along with vector embeddings of that text, so the assistant can recall relevant context later. Conversation history with the assistant is also stored so conversations can resume.
 
-**Connected service data (with your consent).** If you connect a WHOOP account, ScuffedOS retrieves your WHOOP data via the official WHOOP API after you authorize access through WHOOP's OAuth flow. Depending on the scopes you grant, this may include basic profile information, recovery scores, sleep data, strain and workout data, and related physiological measurements such as heart rate. See Section 4 for how WHOOP data is handled.
+**Connected service data (with your consent).** If you connect a WHOOP account, ScuffedOS retrieves your WHOOP data via the official WHOOP API after you authorize access through WHOOP's OAuth flow. Depending on the scopes you grant, this may include basic profile information, recovery scores, sleep data, strain and workout data, and related physiological measurements such as heart rate. If you connect a Gmail account, ScuffedOS reads your inbox messages read-only via the Gmail API after you authorize access through Google's OAuth flow (the `gmail.readonly` scope); it stores email metadata (sender, subject, snippet, and an AI-derived category and summary) but never the message bodies. See Section 4 for how WHOOP and Gmail data are handled.
 
 **What we do not collect.** ScuffedOS contains no advertising, no third-party analytics, and no tracking technologies. We do not collect data about anyone other than the user of the app.
 
@@ -45,7 +45,7 @@ If you use voice dictation, audio is processed by your browser's built-in speech
 
 File attachments and the memory change-history database are stored locally on the machine running the app, not with any cloud provider. Notifications are generated locally on-device.
 
-## 4. WHOOP data
+## 4. WHOOP and Gmail data
 
 If you choose to connect WHOOP:
 
