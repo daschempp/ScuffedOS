@@ -19,7 +19,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import fitness_sync, reminders
 from .config import settings
 from .errors import install_error_handlers
-from .routers import assistant, calendar, fitness, habits, memory, nutrition, tasks
+from .routers import (
+    assistant,
+    calendar,
+    fitness,
+    habits,
+    memory,
+    nutrition,
+    oauth,
+    tasks,
+)
 
 
 @contextlib.asynccontextmanager
@@ -58,6 +67,8 @@ app.include_router(calendar.router)
 app.include_router(habits.router)
 app.include_router(nutrition.router)
 app.include_router(fitness.router)
+app.include_router(oauth.router)
+app.include_router(oauth.auth_router)
 app.include_router(fitness.auth_router)
 
 

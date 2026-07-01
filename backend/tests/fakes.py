@@ -152,6 +152,11 @@ class FakeProvider:
 
     def on_connected(self) -> None:
         self.connected_calls = getattr(self, "connected_calls", 0) + 1
+        # Mirror WhoopProvider: kick an immediate sync so the callback test's
+        # tick-count assertion (len(ticks) == 1) passes against either the
+        # old fitness callback or the new shared oauth callback.
+        from app import fitness_sync  # noqa: PLC0415
+        fitness_sync.tick()
 
     def on_disconnect(self) -> None:
         # Mirror the real provider: delete this provider's normalized data.
