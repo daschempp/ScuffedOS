@@ -164,3 +164,57 @@ def test_google_auth_error_is_an_auth_error_subclass():
     """The email sync engine catches `except AuthError`; GoogleAuthError must be one."""
     from app.providers.base import AuthError
     assert issubclass(GoogleAuthError, AuthError)
+
+
+def test_fetch_profile_returns_google_sub_as_provider_user_id():
+    p = _provider()
+    p.configure(fake_http=FakeHttp({
+        GOOGLE_USERINFO_URL: FakeResp(200, {"sub": "108124972", "email": "a@b.com"}),
+    }))
+    uid = p.fetch_profile(Tokens("AT", "RT", None))
+    assert uid == "108124972"                     # stringified Google sub
+    assert p._http.gets[0][0] == GOOGLE_USERINFO_URL
+
+
+def test_fetch_profile_failure_returns_none():
+    p = _provider()
+    p.configure(fake_http=FakeHttp({}))            # 404 default → best-effort None
+    assert p.fetch_profile(Tokens("AT", "RT", None)) is None
+
+
+def test_success_redirect_targets_the_email_screen():
+    assert GoogleProvider().success_redirect() == "/?screen=email&connected=google"
+
+
+def test_gmail_methods_are_stubs_this_phase():
+    # fetch_messages/get_message are filled in the Gmail phase; here they are
+    # inert so the provider satisfies EmailProvider without doing network I/O.
+    p = _provider()
+    p.configure(fake_http=FakeHttp({}))
+    assert p.fetch_messages(None) == []
+    assert p.get_message("anyid") == ""
+
+
+def test_name_and_no_kind_attr():
+    p = GoogleProvider()
+    assert p.name == "google"
+    # No `kind` → naturally excluded from pull_providers() (fitness sync).
+    assert getattr(p, "kind", None) is None
+
+
+def test_real_registry_includes_google():
+    import importlib.util
+
+    from app import providers
+    providers.configure()  # real registry
+    try:
+        if importlib.util.find_spec("app.providers.google") is None:
+            return  # module not authored yet (defensive; it exists in this phase)
+        names = [pr.name for pr in providers.all_providers()]
+        assert "google" in names
+        assert providers.get("google") is not None
+        assert providers.get("google").name == "google"
+        # google has no `kind`, so it is NOT a pull (fitness) provider.
+        assert "google" not in [pr.name for pr in providers.pull_providers()]
+    finally:
+        providers.configure([])  # restore the conftest test default (no external services)

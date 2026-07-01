@@ -158,3 +158,61 @@ class GoogleProvider:
             )
         except Exception as exc:
             log.warning("Google revoke failed (continuing): %s", exc)
+
+    def fetch_profile(self, tokens: Tokens) -> str | None:
+        """GET the Google userinfo endpoint and return the 'sub' (provider_user_id).
+
+        Called by the shared OAuth callback right after exchange_code so the
+        account's provider_user_id is populated. Best-effort: a failure returns
+        None rather than blocking the connect. The 'sub' field is [confirm-against-live]."""
+        try:
+            res = self._transport().get(
+                GOOGLE_USERINFO_URL,
+                headers={"Authorization": f"Bearer {tokens.access_token}"},
+                params=None,
+            )
+            if getattr(res, "status_code", 200) >= 400:
+                log.warning("Google userinfo returned %s", getattr(res, "status_code", "?"))
+                return None
+            body = res.json() or {}
+            sub = body.get("sub")
+            return str(sub) if sub is not None else None
+        except Exception as exc:
+            log.warning("Google userinfo fetch failed (continuing): %s", exc)
+            return None
+
+    # ---- OAuthProvider connect/disconnect hooks ----
+    def success_redirect(self) -> str:
+        return "/?screen=email&connected=google"
+
+    def on_connected(self) -> None:
+        """Post-connect hook (called by the shared callback AFTER tokens persist):
+        kick an immediate first-sync backfill. Imported lazily so this module
+        does not hard-depend on the Gmail-sync phase; a not-yet-authored
+        email_sync is swallowed (the connect still succeeds)."""
+        try:
+            from .. import email_sync
+
+            email_sync.tick()
+        except Exception as exc:  # noqa: BLE001 — first-sync is best-effort
+            log.warning("Google on_connected sync skipped: %s", exc)
+
+    def on_disconnect(self) -> None:
+        """Disconnect hook (called by the shared disconnect AFTER best-effort
+        revoke): delete this provider's emails. Imported lazily; a store without
+        delete_email_data yet (mid-plan) is swallowed."""
+        try:
+            from ..store import store
+
+            store.delete_email_data(self.name)
+        except Exception as exc:  # noqa: BLE001 — data deletion is idempotent/best-effort here
+            log.warning("Google on_disconnect email delete skipped: %s", exc)
+
+    # ---- Gmail (STUBS — filled in the Gmail-fetch phase) ----
+    def fetch_messages(self, since):
+        """[stub] Inbox messages → list[NormalizedEmail]. Filled in the Gmail phase."""
+        return []
+
+    def get_message(self, source_id: str) -> str:
+        """[stub] Full plain-text body on demand. Filled in the Gmail phase."""
+        return ""
