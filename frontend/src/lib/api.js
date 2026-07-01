@@ -176,6 +176,14 @@ export const api = {
   deleteWorkout: (id) => request(`/api/fitness/workouts/${id}`, { method: 'DELETE' }),
   fitnessSync: () => request('/api/fitness/sync', { method: 'POST' }),
 
+  // Email (M5) — the inbox/detail come straight from the emails table server-
+  // side (list never triggers a live Gmail call). Only emailDetail fetches the
+  // body live, with a graceful fallback string if Gmail is unreachable. Bodies
+  // are never persisted. emailSync kicks a foreground sync pass.
+  emailInbox: () => request('/api/email/inbox'),
+  emailDetail: (id) => request(`/api/email/${id}`),
+  emailSync: () => request('/api/email/sync', { method: 'POST' }),
+
   // Second-brain memories.
   listMemories: () => request('/api/memory'),
   createMemory: (text, extras) => request('/api/memory', {
