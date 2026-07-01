@@ -24,6 +24,7 @@ from .db import make_engine, make_session_factory
 from .display import (
     aware_utc,
     clock,
+    email_when_display,
     event_when_display,
     meal_time_display,
     relative_when,
@@ -34,6 +35,7 @@ from .models import (
     Conversation,
     ConversationMessage,
     DailySnapshot,
+    Email,
     Event,
     Habit,
     HabitCompletion,
@@ -47,7 +49,7 @@ from .models import (
     Workout,
     utcnow,
 )
-from .providers.base import NormalizedSnapshot, NormalizedWorkout, Tokens
+from .providers.base import NormalizedEmail, NormalizedSnapshot, NormalizedWorkout, Tokens
 
 _TASK_FIELDS = {
     "label", "done", "group", "deadline", "prio", "list", "description",
@@ -93,6 +95,11 @@ _WORKOUT_FIELDS = {
     "name", "sport", "started_at", "duration_min", "strain",
     "calories", "avg_hr", "max_hr",
 }
+
+_EMAIL_FIELDS = (
+    "thread_id", "from_name", "from_email", "subject", "snippet",
+    "received_at", "unread",
+)
 
 # The four vitals shown under the rings — fixed layout; values + deltas
 # derive on read from the day's snapshot (None when absent).
@@ -373,6 +380,28 @@ def _workout_dict(w: Workout) -> dict:
         "when": event_when_display(started, end),
         "icon": icon,
         "tint": tint,
+    }
+
+
+def _email_dict(e: Email) -> dict:
+    received = aware_utc(e.received_at)
+    return {
+        "id": e.id,
+        "source": e.source,
+        "source_id": e.source_id,
+        "thread_id": e.thread_id,
+        "from_name": e.from_name,
+        "from_email": e.from_email,
+        "subject": e.subject,
+        "snippet": e.snippet,
+        "received_at": received,
+        "unread": e.unread,
+        "category": e.category,
+        "summary": e.summary_json or [],
+        "triaged_at": aware_utc(e.triaged_at),
+        "when": email_when_display(received),
+        "created_at": aware_utc(e.created_at),
+        "updated_at": aware_utc(e.updated_at),
     }
 
 
@@ -1194,6 +1223,57 @@ class Store:
             ):
                 s.delete(w)
             return existed
+
+    # ---- emails (M5) ----
+    def _email_row(self, s: Session, source: str, source_id: str) -> Email | None:
+        from .config import settings
+
+        return s.scalars(
+            select(Email)
+            .where(Email.owner == settings.owner)
+            .where(Email.source == source)
+            .where(Email.source_id == source_id)
+        ).first()
+
+    def email_exists(self, source: str, source_id: str) -> bool:
+        """Sync skips messages.get + triage for ids already stored (idempotency)."""
+        with self._session() as s:
+            return self._email_row(s, source, source_id) is not None
+
+    @_retry_integrity
+    def upsert_email(
+        self,
+        email: NormalizedEmail,
+        category: str | None,
+        summary: list[str] | None,
+    ) -> dict:
+        """Get-or-create by (owner, source, source_id); writes metadata every
+        pass. Triage fields (category/summary_json/triaged_at) are written
+        ONLY when category is not None — a triage failure passes category=None,
+        leaving the row untriaged for retry (and never clobbering prior good
+        triage). Body is never persisted."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._email_row(s, email.source, email.source_id)
+            if row is None:
+                row = Email(
+                    owner=settings.owner,
+                    source=email.source,
+                    source_id=email.source_id,
+                )
+                s.add(row)
+            for field in _EMAIL_FIELDS:
+                value = getattr(email, field)
+                if field == "received_at":
+                    value = _to_utc(value)
+                setattr(row, field, value)
+            if category is not None:
+                row.category = category
+                row.summary_json = summary
+                row.triaged_at = utcnow()
+            s.flush()
+            return _email_dict(row)
 
     # ---- snapshots (derive-on-read) ----
     @_retry_integrity
