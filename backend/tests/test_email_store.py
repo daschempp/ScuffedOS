@@ -145,3 +145,15 @@ def test_delete_email_data_removes_only_that_source():
     assert box["needs_reply"] == [] and box["fyi"] == [] and box["untriaged"] == []
     # A second delete with nothing left returns False.
     assert store.delete_email_data("google") is False
+
+
+def test_delete_email_data_is_source_scoped():
+    # A row from a DIFFERENT source must survive delete_email_data("google").
+    # This locks the source filter: an owner-only delete would wrongly remove it.
+    store.upsert_email(_email(source="google", source_id="g-1"),
+                       category="fyi", summary=["a"])
+    store.upsert_email(_email(source="outlook", source_id="o-1"),
+                       category="fyi", summary=["b"])
+    assert store.delete_email_data("google") is True
+    assert store.email_exists("google", "g-1") is False
+    assert store.email_exists("outlook", "o-1") is True   # untouched
