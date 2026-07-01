@@ -38,7 +38,7 @@ export function FitnessScreen() {
   const setField = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }))
 
   const refresh = React.useCallback(() => {
-    api.fitnessStatus().then((s) => { if (s) setStatus(s) }).catch(() => {})
+    api.oauthStatus().then((s) => { if (s) setStatus(s) }).catch(() => {})
     api.fitnessToday().then((t) => { if (t) setToday(t) }).catch(() => {})
     api.fitnessWorkouts().then((w) => { if (Array.isArray(w)) setWorkouts(w) }).catch(() => {})
     api.fitnessWeek().then((w) => { if (w) setWeek(w) }).catch(() => {})
@@ -54,12 +54,12 @@ export function FitnessScreen() {
   const syncing = connected && !needsReauth && today != null && today.has_data === false && !whoop?.last_sync_at
 
   const connect = () => {
-    api.fitnessConnect('whoop')
+    api.oauthConnect('whoop')
       .then((r) => { if (r?.authorize_url) window.location = r.authorize_url })
       .catch(() => {})
   }
   const disconnect = () => {
-    api.fitnessDisconnect('whoop')
+    api.oauthDisconnect('whoop')
       .then((s) => { if (s) setStatus(s); refresh() })
       .catch(() => {})
   }
