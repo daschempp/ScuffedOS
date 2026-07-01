@@ -22,6 +22,7 @@ from .errors import install_error_handlers
 from .routers import (
     assistant,
     calendar,
+    email,
     fitness,
     habits,
     memory,
@@ -72,6 +73,7 @@ app.include_router(nutrition.router)
 app.include_router(fitness.router)
 app.include_router(oauth.router)
 app.include_router(oauth.auth_router)
+app.include_router(email.router)
 
 
 @app.get("/api/health", tags=["meta"])
