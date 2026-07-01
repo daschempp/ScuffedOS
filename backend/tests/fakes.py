@@ -83,3 +83,64 @@ class FakeMem0:
 
     def delete(self, memory_id):
         self.deleted.append(memory_id)
+
+
+# ---- fitness provider seam (M4) -------------------------------------------
+from app.providers.base import NormalizedSnapshot, NormalizedWorkout, Tokens
+
+
+class FakeProvider:
+    """Scriptable stand-in for WhoopProvider — no network.
+
+    Installed with ``providers.configure([FakeProvider()])``. Records the
+    calls the OAuth router makes so tests can assert exchange/revoke ran.
+    """
+
+    name = "whoop"
+    kind = "pull"
+
+    def __init__(
+        self,
+        *,
+        tokens: Tokens | None = None,
+        snapshots: list[NormalizedSnapshot] | None = None,
+        workouts: list[NormalizedWorkout] | None = None,
+    ) -> None:
+        self.tokens = tokens or Tokens(
+            access_token="fake-access",
+            refresh_token="fake-refresh",
+            expires_at=None,
+            scopes="read:recovery read:workout",
+            provider_user_id="whoop-user-1",
+        )
+        self.snapshots = snapshots or []
+        self.workouts = workouts or []
+        self.exchanged: list[str] = []
+        self.refreshed: list[Tokens] = []
+        self.revoked: list[Tokens] = []
+
+    def authorize_url(self, state: str) -> str:
+        return (
+            "https://api.prod.whoop.com/oauth/oauth2/auth"
+            f"?client_id=fake-client&response_type=code&state={state}"
+        )
+
+    def exchange_code(self, code: str) -> Tokens:
+        self.exchanged.append(code)
+        return self.tokens
+
+    def refresh(self, tokens: Tokens) -> Tokens:
+        self.refreshed.append(tokens)
+        return self.tokens
+
+    def fetch_recovery(self, since):
+        return list(self.snapshots)
+
+    def fetch_sleep(self, since):
+        return []
+
+    def fetch_workouts(self, since):
+        return list(self.workouts)
+
+    def revoke(self, tokens: Tokens) -> None:
+        self.revoked.append(tokens)

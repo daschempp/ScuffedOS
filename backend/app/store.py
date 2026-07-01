@@ -15,7 +15,7 @@ import functools
 import logging
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -33,17 +33,21 @@ from .display import (
 from .models import (
     Conversation,
     ConversationMessage,
+    DailySnapshot,
     Event,
     Habit,
     HabitCompletion,
     Meal,
     Memory,
     NutritionTargets,
+    ProviderAccount,
     Task,
     TaskReminder,
     WaterDay,
+    Workout,
     utcnow,
 )
+from .providers.base import NormalizedSnapshot, NormalizedWorkout, Tokens
 
 _TASK_FIELDS = {
     "label", "done", "group", "deadline", "prio", "list", "description",
@@ -57,6 +61,10 @@ _HABIT_FIELDS = {"name", "icon", "tint", "schedule", "link"}
 _HABIT_NULLABLE = {"link"}
 _MEAL_FIELDS = {"name", "slot", "kcal", "protein_g", "carbs_g", "fat_g"}
 _TARGET_FIELDS = {"calories", "protein_g", "carbs_g", "fat_g", "water_cups"}
+_SNAPSHOT_FIELDS = (
+    "recovery_pct", "day_strain", "sleep_quality_pct", "hrv_ms",
+    "resting_hr", "respiratory_rate", "sleep_hours",
+)
 
 # Meal chip icon/tint by slot — the prototype's mapping, derived on read.
 _SLOT_CHIP = {
@@ -65,6 +73,35 @@ _SLOT_CHIP = {
     "Snack": ("apple", "green"),
     "Dinner": ("utensils", "plum"),
 }
+
+# Workout chip icon/tint by sport — derived on read (mirrors _SLOT_CHIP).
+# Every icon name here MUST exist in frontend/src/lib/Icon.jsx's ICONS map or it
+# renders blank. 'running' uses 'activity' (Lucide has no plain run glyph);
+# 'swimming' uses 'waves', which Task 27 adds to the Icon registry.
+_SPORT_CHIP = {
+    "running": ("activity", "green"),
+    "cycling": ("bike", "sky"),
+    "strength": ("dumbbell", "clay"),
+    "weightlifting": ("dumbbell", "clay"),
+    "swimming": ("waves", "sky"),
+    "yoga": ("flower-2", "plum"),
+    "walking": ("footprints", "honey"),
+}
+_WORKOUT_CHIP_DEFAULT = ("activity", "clay")
+
+_WORKOUT_FIELDS = {
+    "name", "sport", "started_at", "duration_min", "strain",
+    "calories", "avg_hr", "max_hr",
+}
+
+# The four vitals shown under the rings — fixed layout; values + deltas
+# derive on read from the day's snapshot (None when absent).
+_VITALS_SPEC = (
+    ("hrv", "hrv_ms", "HRV", "ms", "activity", "green"),
+    ("resting_hr", "resting_hr", "Resting HR", "bpm", "heart", "clay"),
+    ("respiratory_rate", "respiratory_rate", "Respiratory", "rpm", "wind", "sky"),
+    ("sleep_hours", "sleep_hours", "Sleep", "h", "moon", "plum"),
+)
 
 
 def _local_today() -> date:
@@ -279,6 +316,63 @@ def _message_dict(m: ConversationMessage) -> dict:
         "content": m.content,
         "actions": m.actions,
         "created_at": aware_utc(m.created_at),
+    }
+
+
+def _provider_account_dict(p: ProviderAccount) -> dict:
+    """Client-safe view of a provider account — NEVER includes tokens,
+    scopes, or meta (those are server-side only; see /status)."""
+    return {
+        "provider": p.provider,
+        "status": p.status,
+        "connected_at": aware_utc(p.connected_at),
+        "last_sync_at": aware_utc(p.last_sync_at),
+        "provider_user_id": p.provider_user_id,
+    }
+
+
+def _snapshot_dict(d: DailySnapshot) -> dict:
+    return {
+        "source": d.source,
+        "day": d.day,
+        "recovery_pct": d.recovery_pct,
+        "day_strain": d.day_strain,
+        "sleep_quality_pct": d.sleep_quality_pct,
+        "hrv_ms": d.hrv_ms,
+        "resting_hr": d.resting_hr,
+        "respiratory_rate": d.respiratory_rate,
+        "sleep_hours": d.sleep_hours,
+        "metrics_json": d.metrics_json or {},
+        "created_at": aware_utc(d.created_at),
+        "updated_at": aware_utc(d.updated_at),
+    }
+
+
+def _workout_chip(sport: str | None) -> tuple[str, str]:
+    if not sport:
+        return _WORKOUT_CHIP_DEFAULT
+    return _SPORT_CHIP.get(sport.lower(), _WORKOUT_CHIP_DEFAULT)
+
+
+def _workout_dict(w: Workout) -> dict:
+    started = aware_utc(w.started_at)
+    icon, tint = _workout_chip(w.sport)
+    end = started + timedelta(minutes=w.duration_min or 0)
+    return {
+        "id": w.id,
+        "source": w.source,
+        "source_id": w.source_id,
+        "name": w.name,
+        "sport": w.sport,
+        "started_at": started,
+        "duration_min": w.duration_min,
+        "strain": w.strain,
+        "calories": w.calories,
+        "avg_hr": w.avg_hr,
+        "max_hr": w.max_hr,
+        "when": event_when_display(started, end),
+        "icon": icon,
+        "tint": tint,
     }
 
 
@@ -1003,6 +1097,299 @@ class Store:
             "days_met": sum(1 for k in logged if k <= goal),
             "goal": goal,
         }
+
+    # ---- provider accounts (OAuth, server-side only) ----
+    def _provider_row(self, s: Session, provider: str) -> ProviderAccount | None:
+        from .config import settings
+
+        return s.scalars(
+            select(ProviderAccount)
+            .where(ProviderAccount.owner == settings.owner)
+            .where(ProviderAccount.provider == provider)
+        ).first()
+
+    def get_provider_account(self, provider: str) -> dict | None:
+        with self._session() as s:
+            row = self._provider_row(s, provider)
+            return _provider_account_dict(row) if row else None
+
+    def get_provider_tokens(self, provider: str) -> Tokens | None:
+        with self._session() as s:
+            row = self._provider_row(s, provider)
+            if row is None:
+                return None
+            return Tokens(
+                access_token=row.access_token,
+                refresh_token=row.refresh_token,
+                expires_at=aware_utc(row.expires_at),
+                scopes=row.scopes or "",
+                provider_user_id=row.provider_user_id,
+                meta=dict(row.meta or {}),
+            )
+
+    def list_provider_accounts(self) -> list[dict]:
+        with self._session() as s:
+            rows = s.scalars(select(ProviderAccount).order_by(ProviderAccount.id)).all()
+            return [_provider_account_dict(p) for p in rows]
+
+    @_retry_integrity
+    def upsert_provider_account(self, provider: str, tokens: Tokens) -> dict:
+        """Get-or-create by (owner, provider); writes the tokens, scopes,
+        provider_user_id and meta, sets status='connected' (a reconnect
+        clears a prior needs_reauth). connected_at is stamped only on create."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._provider_row(s, provider)
+            if row is None:
+                row = ProviderAccount(owner=settings.owner, provider=provider)
+                s.add(row)
+            row.access_token = tokens.access_token
+            row.refresh_token = tokens.refresh_token
+            row.expires_at = _to_utc(tokens.expires_at) if tokens.expires_at else None
+            row.scopes = tokens.scopes or ""
+            if tokens.provider_user_id is not None:
+                row.provider_user_id = tokens.provider_user_id
+            if tokens.meta:
+                row.meta = dict(tokens.meta)
+            row.status = "connected"
+            s.flush()
+            return _provider_account_dict(row)
+
+    def set_provider_status(self, provider: str, status: str) -> None:
+        with self._session() as s, s.begin():
+            row = self._provider_row(s, provider)
+            if row is not None:
+                row.status = status
+
+    def set_provider_synced(self, provider: str, when: datetime | None = None) -> None:
+        with self._session() as s, s.begin():
+            row = self._provider_row(s, provider)
+            if row is not None:
+                row.last_sync_at = _to_utc(when) if when else utcnow()
+
+    def delete_provider_data(self, provider: str) -> bool:
+        """Disconnect: delete the provider_accounts row + that provider's
+        daily_snapshots and workouts (source == provider). Manual workouts
+        are preserved (their source is 'manual'). Returns True iff an account
+        existed. Deletion is the user-facing guarantee, so the router calls
+        this even when the remote revoke fails."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._provider_row(s, provider)
+            existed = row is not None
+            if row is not None:
+                s.delete(row)
+            for snap in s.scalars(
+                select(DailySnapshot)
+                .where(DailySnapshot.owner == settings.owner)
+                .where(DailySnapshot.source == provider)
+            ):
+                s.delete(snap)
+            for w in s.scalars(
+                select(Workout)
+                .where(Workout.owner == settings.owner)
+                .where(Workout.source == provider)
+            ):
+                s.delete(w)
+            return existed
+
+    # ---- snapshots (derive-on-read) ----
+    @_retry_integrity
+    def upsert_snapshot(self, snap: NormalizedSnapshot) -> dict:
+        """Get-or-create by (owner, source, day); merges non-None fields onto
+        the existing row so a day's recovery and sleep records fold together
+        (non-None wins, None never clobbers). metrics_json shallow-merges."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(DailySnapshot)
+                .where(DailySnapshot.owner == settings.owner)
+                .where(DailySnapshot.source == snap.source)
+                .where(DailySnapshot.day == snap.day)
+            ).first()
+            if row is None:
+                row = DailySnapshot(owner=settings.owner, source=snap.source, day=snap.day)
+                s.add(row)
+            for field in _SNAPSHOT_FIELDS:
+                value = getattr(snap, field)
+                if value is not None:
+                    setattr(row, field, value)
+            if snap.metrics_json:
+                row.metrics_json = {**(row.metrics_json or {}), **snap.metrics_json}
+            s.flush()
+            return _snapshot_dict(row)
+
+    def _snapshot_row(self, s: Session, day: date) -> DailySnapshot | None:
+        """The owner's snapshot for `day`. When multiple sources wrote the same
+        day (e.g. a future 'oura' alongside 'whoop'), prefer 'whoop' so reads
+        don't flip between providers; ties fall back to newest id."""
+        from .config import settings
+
+        # Source precedence: prefer 'whoop' (0) over any other source (1).
+        precedence = case((DailySnapshot.source == "whoop", 0), else_=1)
+        return s.scalars(
+            select(DailySnapshot)
+            .where(DailySnapshot.owner == settings.owner)
+            .where(DailySnapshot.day == day)
+            .order_by(precedence, DailySnapshot.id.desc())
+        ).first()
+
+    @staticmethod
+    def _vital_delta(field: str, today_val, prior_val):
+        if today_val is None or prior_val is None:
+            return None
+        if field == "resting_hr":
+            return today_val - prior_val
+        return round(today_val - prior_val, 1)
+
+    def fitness_today(self, day: date | None = None) -> dict:
+        """Rings + vitals for `day` (default today). Vital deltas are this-day
+        minus the prior-day snapshot (None if there's no prior)."""
+        day = day or _local_today()
+        with self._session() as s:
+            today_row = self._snapshot_row(s, day)
+            prior_row = self._snapshot_row(s, day - timedelta(days=1))
+        vitals = []
+        for key, field, label, unit, icon, tint in _VITALS_SPEC:
+            value = getattr(today_row, field) if today_row else None
+            prior = getattr(prior_row, field) if prior_row else None
+            vitals.append({
+                "key": key,
+                "label": label,
+                "value": value,
+                "unit": unit,
+                "delta": self._vital_delta(field, value, prior),
+                "icon": icon,
+                "tint": tint,
+            })
+        return {
+            "date": day,
+            "source": today_row.source if today_row else None,
+            "recovery_pct": today_row.recovery_pct if today_row else None,
+            "day_strain": today_row.day_strain if today_row else None,
+            "sleep_quality_pct": today_row.sleep_quality_pct if today_row else None,
+            "vitals": vitals,
+            "has_data": today_row is not None,
+        }
+
+    def fitness_week(self, end_day: date | None = None) -> dict:
+        """Mon-first 7-day day_strain trend for the week containing `end_day`
+        (default today). frac = day_strain / 21, capped at 1.0. Scoped to the
+        owner; when several sources wrote the same day, 'whoop' wins (matching
+        _snapshot_row's precedence) so the trend doesn't flip between providers."""
+        from .config import settings
+
+        end_day = end_day or _local_today()
+        start = recurrence.week_start(end_day)
+        # 'whoop' (0) sorts before other sources (1); within a day the last
+        # write seen for that ordering wins.
+        precedence = case((DailySnapshot.source == "whoop", 0), else_=1)
+        with self._session() as s:
+            rows = s.scalars(
+                select(DailySnapshot)
+                .where(DailySnapshot.owner == settings.owner)
+                .where(DailySnapshot.day >= start)
+                .where(DailySnapshot.day <= start + timedelta(days=6))
+                .order_by(precedence.desc(), DailySnapshot.id.desc())
+            ).all()
+        # Iterating worst-precedence-first means the preferred ('whoop') row is
+        # written LAST and wins the dict slot for its day.
+        strain_by_day: dict[date, float] = {}
+        for r in rows:
+            if r.day_strain is not None:
+                strain_by_day[r.day] = r.day_strain
+        dows = ["M", "T", "W", "T", "F", "S", "S"]
+        days = []
+        for i in range(7):
+            d = start + timedelta(days=i)
+            strain = strain_by_day.get(d)
+            days.append({
+                "date": d,
+                "dow": dows[i],
+                "strain": strain,
+                "frac": min(1.0, round(strain / 21, 2)) if strain is not None else 0.0,
+            })
+        logged = [d["strain"] for d in days if d["strain"] is not None]
+        peak = max(days, key=lambda d: d["strain"] if d["strain"] is not None else -1.0)
+        return {
+            "days": days,
+            "avg_strain": round(sum(logged) / len(logged), 1) if logged else 0,
+            "peak_day": peak["date"] if logged else None,
+        }
+
+    # ---- workouts ----
+    def _workout_local_day(self, started_at: datetime) -> date:
+        """The calendar day a workout belongs to = its start in local tz."""
+        return aware_utc(started_at).astimezone().date()
+
+    def list_workouts(self, limit: int = 50) -> list[dict]:
+        with self._session() as s:
+            rows = s.scalars(
+                select(Workout).order_by(Workout.started_at.desc()).limit(limit)
+            ).all()
+            return [_workout_dict(w) for w in rows]
+
+    @_retry_integrity
+    def upsert_workout(self, w: NormalizedWorkout) -> dict:
+        """Upsert a synced workout by (source, source_id); manual rows (null
+        source_id) go through create_workout. Runs the workout->habit
+        auto-complete for the workout's local day after the row lands."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = None
+            if w.source_id is not None:
+                row = s.scalars(
+                    select(Workout)
+                    .where(Workout.source == w.source)
+                    .where(Workout.source_id == w.source_id)
+                ).first()
+            if row is None:
+                row = Workout(owner=settings.owner, source=w.source, source_id=w.source_id)
+                s.add(row)
+            row.name = w.name
+            row.sport = w.sport
+            row.started_at = _to_utc(w.started_at)
+            row.duration_min = w.duration_min
+            row.strain = w.strain
+            row.calories = w.calories
+            row.avg_hr = w.avg_hr
+            row.max_hr = w.max_hr
+            s.flush()
+            result = _workout_dict(row)
+            day = self._workout_local_day(row.started_at)
+        self.auto_complete_linked("workout", day, True)
+        return result
+
+    def create_workout(self, data: dict) -> dict:
+        """Manual workout: source='manual', source_id=None. Triggers the
+        workout->habit auto-complete for the started_at local day."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            fields = {k: v for k, v in data.items() if k in _WORKOUT_FIELDS and v is not None}
+            started = fields.pop("started_at")
+            row = Workout(
+                owner=settings.owner, source="manual", source_id=None,
+                started_at=_to_utc(started), **fields,
+            )
+            s.add(row)
+            s.flush()
+            result = _workout_dict(row)
+            day = self._workout_local_day(row.started_at)
+        self.auto_complete_linked("workout", day, True)
+        return result
+
+    def delete_workout(self, workout_id: int) -> bool:
+        with self._session() as s, s.begin():
+            row = s.get(Workout, workout_id)
+            if row is None:
+                return False
+            s.delete(row)
+            return True
 
     # ---- demo data ----
     def seed_demo(self) -> bool:

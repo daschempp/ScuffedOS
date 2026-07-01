@@ -6,6 +6,18 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
       "port": 5173
+    },
+    {
+      "name": "scuffed-proto",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4173", "--directory", "/tmp/scuffed-proto"],
+      "port": 4173
+    },
+    {
+      "name": "corp-site",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8311", "--directory", "/Users/dylanschempp/PycharmProjects/scuffed-corporation"],
+      "port": 8311
     }
   ]
 }

@@ -66,5 +66,18 @@ class Settings(BaseSettings):
     # DEMO_KEY works rate-limited; a free key from api.data.gov lifts it.
     fdc_api_key: str = "DEMO_KEY"
 
+    # WHOOP fitness (M4). OAuth credentials come from the WHOOP developer
+    # dashboard; the redirect URI must be registered there verbatim (WHOOP
+    # rejects localhost — use a tunnel URL in dev, see the M4 design §14).
+    # Tokens themselves are never config: they live in provider_accounts.
+    whoop_client_id: str = ""
+    whoop_client_secret: str = ""
+    whoop_redirect_uri: str = "https://scuffedcorporation.com/auth/whoop/callback"
+
+    # Background pull-sync (mirrors reminders_enabled / reminder_tick_seconds).
+    fitness_sync_enabled: bool = True
+    fitness_sync_seconds: int = 1800            # 30 min
+    whoop_backfill_days: int = 30               # first-connect backfill window
+
 
 settings = Settings()

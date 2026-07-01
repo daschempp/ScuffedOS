@@ -1,0 +1,9 @@
+{
+  "name": "run-scuffedos-driver",
+  "private": true,
+  "type": "module",
+  "description": "Playwright driver for the run-scuffedos skill. node_modules is gitignored.",
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
