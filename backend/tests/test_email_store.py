@@ -137,6 +137,28 @@ def test_get_email_returns_dict_or_none():
     assert store.get_email(999999) is None
 
 
+def test_get_email_is_owner_scoped():
+    # get_email keys on id alone; without an owner predicate it would return a
+    # row owned by a DIFFERENT owner (an IDOR the moment ids are URL-exposed or a
+    # second owner exists). Lock the owner filter like _email_row/inbox/delete.
+    from app.models import Email
+
+    mine = store.upsert_email(_email(source_id="mine-1", subject="Mine"),
+                              category="fyi", summary=["ok"])
+    with store._session() as s, s.begin():
+        foreign = Email(
+            owner="someone_else", source="google", source_id="theirs-1",
+            subject="Theirs",
+            received_at=datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
+        )
+        s.add(foreign)
+        s.flush()
+        foreign_id = foreign.id
+
+    assert store.get_email(mine["id"]) is not None   # my own row still returned
+    assert store.get_email(foreign_id) is None        # other owner's row invisible
+
+
 def test_delete_email_data_removes_only_that_source():
     store.upsert_email(_email(source_id="g-1"), category="fyi", summary=["a"])
     store.upsert_email(_email(source_id="g-2"), category="needs_reply", summary=["b"])

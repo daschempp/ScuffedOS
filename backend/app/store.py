@@ -1316,8 +1316,14 @@ class Store:
         }
 
     def get_email(self, email_id: int) -> dict | None:
+        from .config import settings
+
         with self._session() as s:
-            row = s.get(Email, email_id)
+            row = s.scalars(
+                select(Email)
+                .where(Email.id == email_id)
+                .where(Email.owner == settings.owner)
+            ).first()
             return _email_dict(row) if row is not None else None
 
     def delete_email_data(self, source: str) -> bool:
