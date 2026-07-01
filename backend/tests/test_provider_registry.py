@@ -64,3 +64,34 @@ def test_empty_fake_list_disables_everything():
         assert providers.get("whoop") is None
     finally:
         providers.configure()
+
+
+# --- M5 widening tests: registry spans both fitness and email domains ---
+
+class _PullFake:
+    name = "whoop"
+    kind = "pull"
+
+
+class _EmailFake:
+    name = "google"  # NO kind attribute — an email provider
+
+
+def test_all_providers_and_get_span_both_domains():
+    providers.configure([_PullFake(), _EmailFake()])
+    try:
+        names = {p.name for p in providers.all_providers()}
+        assert names == {"whoop", "google"}
+        assert providers.get("google").name == "google"
+        assert providers.get("nope") is None
+    finally:
+        providers.configure("unset")
+
+
+def test_pull_providers_excludes_kindless_email_provider():
+    providers.configure([_PullFake(), _EmailFake()])
+    try:
+        pulls = providers.pull_providers()
+        assert [p.name for p in pulls] == ["whoop"]  # email fake excluded, no crash
+    finally:
+        providers.configure("unset")
