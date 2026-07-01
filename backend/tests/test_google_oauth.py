@@ -76,3 +76,91 @@ def test_scopes_include_openid_email_profile_and_gmail_readonly():
     assert GOOGLE_SCOPES == (
         "openid email profile https://www.googleapis.com/auth/gmail.readonly"
     )
+
+
+def test_exchange_code_returns_tokens():
+    p = _provider()
+    p.configure(fake_http=FakeHttp({
+        GOOGLE_TOKEN_URL: FakeResp(200, {
+            "access_token": "AT", "refresh_token": "RT",
+            "expires_in": 3600, "scope": GOOGLE_SCOPES,
+        }),
+    }))
+    tok = p.exchange_code("thecode")
+    assert tok.access_token == "AT"
+    assert tok.refresh_token == "RT"
+    assert tok.scopes == GOOGLE_SCOPES
+    assert tok.expires_at is not None and tok.expires_at.tzinfo is not None
+    # exchange posted grant_type=authorization_code with the code + redirect_uri + secret
+    url, data = p._http.posts[0]
+    assert url == GOOGLE_TOKEN_URL
+    assert data["grant_type"] == "authorization_code"
+    assert data["code"] == "thecode"
+    assert data["redirect_uri"] == settings.google_redirect_uri
+    assert data["client_id"] == "gid"
+    assert data["client_secret"] == "gsecret"
+
+
+def test_refresh_rotates_access_and_keeps_old_refresh_when_omitted():
+    p = _provider()
+    # Google commonly omits refresh_token on refresh — keep the old one.
+    p.configure(fake_http=FakeHttp({
+        GOOGLE_TOKEN_URL: FakeResp(200, {"access_token": "AT2", "expires_in": 3600}),
+    }))
+    tok = Tokens("old", "oldRT", None, scopes=GOOGLE_SCOPES)
+    fresh = p.refresh(tok)
+    assert fresh.access_token == "AT2"
+    assert fresh.refresh_token == "oldRT"      # preserved
+    assert fresh.scopes == GOOGLE_SCOPES        # preserved
+    url, data = p._http.posts[0]
+    assert data["grant_type"] == "refresh_token"
+    assert data["refresh_token"] == "oldRT"
+    assert data["client_id"] == "gid"
+    assert data["client_secret"] == "gsecret"
+
+
+def test_refresh_uses_new_refresh_token_when_google_returns_one():
+    p = _provider()
+    p.configure(fake_http=FakeHttp({
+        GOOGLE_TOKEN_URL: FakeResp(200, {
+            "access_token": "AT2", "refresh_token": "RT2", "expires_in": 3600,
+        }),
+    }))
+    fresh = p.refresh(Tokens("old", "oldRT", None))
+    assert fresh.refresh_token == "RT2"
+
+
+def test_refresh_failure_raises_google_auth_error():
+    p = _provider()
+    p.configure(fake_http=FakeHttp({GOOGLE_TOKEN_URL: FakeResp(400, {})}))
+    with pytest.raises(GoogleAuthError):
+        p.refresh(Tokens("old", "oldRT", None))
+
+
+def test_refresh_without_refresh_token_raises():
+    p = _provider()
+    p.configure(fake_http=FakeHttp({}))
+    with pytest.raises(GoogleAuthError):
+        p.refresh(Tokens("old", None, None))
+
+
+def test_revoke_posts_to_revoke_url():
+    p = _provider()
+    p.configure(fake_http=FakeHttp({GOOGLE_REVOKE_URL: FakeResp(200, {})}))
+    p.revoke(Tokens("AT", "RT", None))
+    url, data = p._http.posts[0]
+    assert url == GOOGLE_REVOKE_URL
+    assert data["token"] == "AT"
+
+
+def test_revoke_swallows_errors():
+    """Disconnect must delete local data even if remote revoke fails (design §3/§7)."""
+    p = _provider()
+    p.configure(fake_http=FakeHttp({GOOGLE_REVOKE_URL: FakeResp(500, {})}))
+    p.revoke(Tokens("AT", "RT", None))  # no raise
+
+
+def test_google_auth_error_is_an_auth_error_subclass():
+    """The email sync engine catches `except AuthError`; GoogleAuthError must be one."""
+    from app.providers.base import AuthError
+    assert issubclass(GoogleAuthError, AuthError)

@@ -91,3 +91,70 @@ class GoogleProvider:
             "state": state,
         })
         return f"{GOOGLE_AUTH_URL}?{q}"
+
+    def _token_request(self, data: dict) -> Tokens:
+        res = self._transport().post(GOOGLE_TOKEN_URL, data=data)
+        if getattr(res, "status_code", 200) >= 400:
+            raise GoogleAuthError(
+                f"Google token endpoint returned {getattr(res, 'status_code', '?')}"
+            )
+        payload = res.json()
+        expires_at = None
+        if payload.get("expires_in") is not None:
+            expires_at = datetime.now(timezone.utc) + timedelta(
+                seconds=int(payload["expires_in"])
+            )
+        return Tokens(
+            access_token=payload["access_token"],
+            refresh_token=payload.get("refresh_token"),
+            expires_at=expires_at,
+            scopes=payload.get("scope", "") or "",
+        )
+
+    def exchange_code(self, code: str) -> Tokens:
+        return self._token_request({
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": settings.google_redirect_uri,
+            "client_id": settings.google_client_id,
+            "client_secret": settings.google_client_secret,
+        })
+
+    def refresh(self, tokens: Tokens) -> Tokens:
+        if not tokens.refresh_token:
+            raise GoogleAuthError("no refresh_token on record")
+        try:
+            fresh = self._token_request({
+                "grant_type": "refresh_token",
+                "refresh_token": tokens.refresh_token,
+                "client_id": settings.google_client_id,
+                "client_secret": settings.google_client_secret,
+            })
+        except GoogleAuthError:
+            raise
+        except Exception as exc:  # network etc. — treat as reauth-needed
+            raise GoogleAuthError(f"refresh failed: {exc}") from exc
+        # Google usually omits refresh_token on refresh — keep the old one.
+        if fresh.refresh_token is None:
+            fresh.refresh_token = tokens.refresh_token
+        if not fresh.scopes:
+            fresh.scopes = tokens.scopes
+        return fresh
+
+    def _ensure_fresh(self, tokens: Tokens) -> Tokens:
+        """Refresh transparently if within the skew of expiry; else pass through."""
+        if tokens.expires_at is None:
+            return tokens
+        if datetime.now(timezone.utc) >= tokens.expires_at - _REFRESH_SKEW:
+            return self.refresh(tokens)
+        return tokens
+
+    def revoke(self, tokens: Tokens) -> None:
+        """Best-effort remote revoke; disconnect deletes local data regardless."""
+        try:
+            self._transport().post(
+                GOOGLE_REVOKE_URL,
+                data={"token": tokens.access_token},
+            )
+        except Exception as exc:
+            log.warning("Google revoke failed (continuing): %s", exc)
