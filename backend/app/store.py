@@ -1275,6 +1275,62 @@ class Store:
             s.flush()
             return _email_dict(row)
 
+    def inbox(self) -> dict:
+        """The two-pane inbox: needs_reply / fyi / untriaged lists (each sorted
+        received_at desc) + the needs_reply count and the unread count.
+        Always served from the emails table — never a live Gmail call."""
+        from .config import settings
+
+        with self._session() as s:
+            rows = s.scalars(
+                select(Email)
+                .where(Email.owner == settings.owner)
+                .order_by(Email.received_at.desc())
+            ).all()
+        needs_reply, fyi, untriaged = [], [], []
+        unread_count = 0
+        for r in rows:
+            if r.unread:
+                unread_count += 1
+            d = _email_dict(r)
+            if r.category == "needs_reply":
+                needs_reply.append(d)
+            elif r.category == "fyi":
+                fyi.append(d)
+            else:
+                untriaged.append(d)
+        return {
+            "needs_reply": needs_reply,
+            "fyi": fyi,
+            "untriaged": untriaged,
+            "needs_reply_count": len(needs_reply),
+            "unread_count": unread_count,
+        }
+
+    def get_email(self, email_id: int) -> dict | None:
+        with self._session() as s:
+            row = s.get(Email, email_id)
+            return _email_dict(row) if row is not None else None
+
+    def delete_email_data(self, source: str) -> bool:
+        """Disconnect hook (GoogleProvider.on_disconnect): delete emails where
+        (owner, source). Returns True iff any row was deleted. Separate from
+        delete_provider_data (which owns the provider_accounts row + fitness
+        tables); the shared router deletes the account, this deletes the domain
+        data."""
+        from .config import settings
+
+        deleted = False
+        with self._session() as s, s.begin():
+            for row in s.scalars(
+                select(Email)
+                .where(Email.owner == settings.owner)
+                .where(Email.source == source)
+            ):
+                s.delete(row)
+                deleted = True
+        return deleted
+
     # ---- snapshots (derive-on-read) ----
     @_retry_integrity
     def upsert_snapshot(self, snap: NormalizedSnapshot) -> dict:
