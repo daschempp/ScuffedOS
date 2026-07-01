@@ -163,3 +163,167 @@ class FakeProvider:
         # Idempotent with the router's own delete_provider_data (row gone).
         from app.store import store
         store.delete_provider_data(self.name)
+
+
+# ---- email provider seam (M5) ---------------------------------------------
+from app.providers.base import NormalizedEmail
+
+
+class _FakeResponse:
+    """Minimal httpx.Response stand-in: .status_code + .json()."""
+
+    def __init__(self, payload, status_code: int = 200):
+        self._payload = payload
+        self.status_code = status_code
+
+    def json(self):
+        return self._payload
+
+
+class FakeGmailHTTP:
+    """Scriptable transport for GoogleProvider.configure(fake_http=...).
+
+    Routes GET by URL substring: '/messages/<id>' returns per-message JSON from
+    `messages`; '/messages' (list) returns `{'messages': [{'id': ...}, ...]}`.
+    A `status` override (keyed by url substring) forces an error status so the
+    provider raises GoogleAuthError. Records every GET so tests can assert the
+    label/maxResults query params reached Gmail.
+    """
+
+    def __init__(self, messages: dict | None = None, list_ids: list[str] | None = None,
+                 status: dict | None = None):
+        self.messages = messages or {}          # id -> messages.get JSON
+        self.list_ids = list_ids if list_ids is not None else list(self.messages)
+        self.status = status or {}               # url-substring -> status_code
+        self.gets: list[tuple[str, dict]] = []
+
+    def _status_for(self, url: str) -> int:
+        for frag, code in self.status.items():
+            if frag in url:
+                return code
+        return 200
+
+    def get(self, url, headers=None, params=None):
+        self.gets.append((url, dict(params or {})))
+        code = self._status_for(url)
+        if code >= 400:
+            return _FakeResponse({}, code)
+        # messages.get: '/messages/<id>' (has a segment after '/messages/')
+        if "/messages/" in url:
+            msg_id = url.rsplit("/messages/", 1)[1]
+            return _FakeResponse(self.messages.get(msg_id, {}))
+        # messages.list
+        return _FakeResponse({"messages": [{"id": i} for i in self.list_ids]})
+
+    def post(self, url, data=None, headers=None):  # exchange/refresh/revoke
+        return _FakeResponse({})
+
+
+def gmail_message(msg_id: str, *, thread_id: str = "t1", from_hdr: str,
+                  subject: str, date_hdr: str, snippet: str = "",
+                  label_ids: list[str] | None = None, body_text: str = "") -> dict:
+    """Build a Gmail messages.get?format=full payload with a text/plain part."""
+    import base64
+
+    b64 = base64.urlsafe_b64encode(body_text.encode("utf-8")).decode("ascii")
+    return {
+        "id": msg_id,
+        "threadId": thread_id,
+        "snippet": snippet,
+        "labelIds": label_ids or [],
+        "payload": {
+            "mimeType": "multipart/alternative",
+            "headers": [
+                {"name": "From", "value": from_hdr},
+                {"name": "Subject", "value": subject},
+                {"name": "Date", "value": date_hdr},
+            ],
+            "parts": [
+                {"mimeType": "text/plain", "body": {"data": b64}},
+                {"mimeType": "text/html", "body": {"data": ""}},
+            ],
+        },
+    }
+
+
+class FakeEmailProvider:
+    """Scriptable EmailProvider stand-in (name='google') — no network.
+
+    Installed via ``providers.configure([FakeEmailProvider(...)])``. Satisfies the
+    new EmailProvider protocol so the shared oauth router and email_sync accept it.
+    """
+
+    name = "google"
+
+    def __init__(
+        self,
+        *,
+        tokens: Tokens | None = None,
+        messages: list[NormalizedEmail] | None = None,
+        body: str = "Full body text.",
+        raise_auth: bool = False,
+    ) -> None:
+        self.tokens = tokens or Tokens(
+            access_token="g-access", refresh_token="g-refresh", expires_at=None,
+            scopes="openid email https://www.googleapis.com/auth/gmail.readonly",
+            provider_user_id="google-sub-1",
+        )
+        self.messages = messages or []
+        self.body = body
+        self.raise_auth = raise_auth
+        self.exchanged: list[str] = []
+        self.refreshed: list[Tokens] = []
+        self.revoked: list[Tokens] = []
+        self.injected: list[Tokens | None] = []
+        self.fetched_since: list = []
+        self.fetched_bodies: list[str] = []
+
+    # ---- OAuthProvider ----
+    def set_tokens(self, tokens):
+        self.injected.append(tokens)
+
+    def authorize_url(self, state: str) -> str:
+        return (
+            "https://accounts.google.com/o/oauth2/v2/auth"
+            f"?client_id=fake-google&response_type=code&state={state}"
+        )
+
+    def exchange_code(self, code: str) -> Tokens:
+        self.exchanged.append(code)
+        return self.tokens
+
+    def refresh(self, tokens: Tokens) -> Tokens:
+        self.refreshed.append(tokens)
+        return self.tokens
+
+    def revoke(self, tokens: Tokens) -> None:
+        self.revoked.append(tokens)
+
+    def fetch_profile(self, tokens: Tokens) -> str | None:
+        return "google-sub-1"
+
+    def success_redirect(self) -> str:
+        return "/?screen=email&connected=google"
+
+    def on_connected(self) -> None:
+        from app import email_sync
+
+        email_sync.tick()
+
+    def on_disconnect(self) -> None:
+        from app.store import store
+
+        store.delete_email_data(self.name)
+
+    # ---- EmailProvider ----
+    def fetch_messages(self, since):
+        from app.providers.google import GoogleAuthError
+
+        if self.raise_auth:
+            raise GoogleAuthError("gmail 401")
+        self.fetched_since.append(since)
+        return list(self.messages)
+
+    def get_message(self, source_id: str) -> str:
+        self.fetched_bodies.append(source_id)
+        return self.body

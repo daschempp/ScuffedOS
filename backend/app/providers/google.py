@@ -19,12 +19,14 @@ their constant NAMES are frozen by the interface contract.
 """
 from __future__ import annotations
 
+import base64
 import logging
 from datetime import datetime, timedelta, timezone
+from email.utils import parseaddr, parsedate_to_datetime
 from urllib.parse import urlencode
 
 from ..config import settings
-from .base import AuthError, Tokens
+from .base import AuthError, NormalizedEmail, Tokens
 
 log = logging.getLogger("scuffed_os.google")
 
@@ -38,6 +40,73 @@ GOOGLE_SCOPES = "openid email profile https://www.googleapis.com/auth/gmail.read
 
 # Refresh when the access token is within this many seconds of expiring.
 _REFRESH_SKEW = timedelta(seconds=60)
+
+# ~2 KB bounded plain-text excerpt sent to triage (never persisted).
+_EXCERPT_LIMIT = 2048
+
+
+def _decode_b64url(data: str | None) -> str:
+    """Decode a Gmail base64url body part to text. Gmail omits '=' padding and
+    uses the URL-safe alphabet; pad back to a multiple of 4 before decoding."""
+    if not data:
+        return ""
+    padded = data + "=" * (-len(data) % 4)
+    try:
+        return base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8", "replace")
+    except Exception:  # malformed part — treat as empty rather than crashing sync
+        return ""
+
+
+def _walk_plaintext(part: dict) -> str:
+    """Depth-first walk of a Gmail payload tree, returning the first text/plain
+    body found (falling back to any decodable body if no text/plain exists)."""
+    if not part:
+        return ""
+    mime = part.get("mimeType", "")
+    body = part.get("body") or {}
+    if mime == "text/plain" and body.get("data"):
+        return _decode_b64url(body["data"])
+    for child in part.get("parts") or []:
+        found = _walk_plaintext(child)
+        if found:
+            return found
+    # Leaf with a body but no text/plain sibling (rare single-part text emails).
+    if not part.get("parts") and body.get("data") and mime.startswith("text/"):
+        return _decode_b64url(body["data"])
+    return ""
+
+
+def _excerpt(text: str) -> str:
+    return text[:_EXCERPT_LIMIT]
+
+
+def _header(headers: list[dict], name: str) -> str:
+    lname = name.lower()
+    for h in headers:
+        if (h.get("name") or "").lower() == lname:
+            return h.get("value") or ""
+    return ""
+
+
+def _parse_from(value: str) -> tuple[str, str]:
+    """'Priya Rao <priya@x.io>' -> ('Priya Rao', 'priya@x.io'); a bare address
+    -> ('', addr). Uses stdlib parseaddr so quoting/comments are handled."""
+    name, addr = parseaddr(value)
+    return name.strip(), addr.strip()
+
+
+def _parse_date(value: str) -> datetime:
+    """RFC 2822 Date header -> aware UTC. Falls back to now(UTC) on a bad/absent
+    header so a single malformed message never breaks the sort key."""
+    try:
+        dt = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        dt = None
+    if dt is None:
+        return datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class GoogleAuthError(AuthError):
@@ -208,11 +277,66 @@ class GoogleProvider:
         except Exception as exc:  # noqa: BLE001 — data deletion is idempotent/best-effort here
             log.warning("Google on_disconnect email delete skipped: %s", exc)
 
-    # ---- Gmail (STUBS — filled in the Gmail-fetch phase) ----
-    def fetch_messages(self, since):
-        """[stub] Inbox messages → list[NormalizedEmail]. Filled in the Gmail phase."""
-        return []
+    # ---- authed Gmail read ----
+    def _headers(self) -> dict:
+        tokens = self._ensure_fresh(self._tokens) if self._tokens else None
+        if tokens is not None:
+            self._tokens = tokens
+        access = tokens.access_token if tokens else ""
+        return {"Authorization": f"Bearer {access}"}
+
+    def _get(self, url: str, params: dict | None = None) -> dict:
+        res = self._transport().get(url, headers=self._headers(), params=params)
+        if getattr(res, "status_code", 200) >= 400:
+            raise GoogleAuthError(f"Gmail GET {url} returned {res.status_code}")
+        return res.json() or {}
+
+    def fetch_messages(self, since: datetime | None) -> list[NormalizedEmail]:
+        """List the INBOX (maxResults=email_backfill_count) then map each message
+        (headers + snippet + a bounded plain-text body excerpt) to a
+        NormalizedEmail. `since` is accepted for signature parity with the pull
+        providers; Gmail idempotency is handled by store.email_exists in the
+        sync (list returns the newest INBOX ids each pass). Auth/transport
+        failures raise GoogleAuthError so the sync flips needs_reauth."""
+        listing = self._get(
+            f"{GMAIL_API_BASE}/messages",
+            params={"labelIds": "INBOX", "maxResults": settings.email_backfill_count},
+        )
+        out: list[NormalizedEmail] = []
+        for ref in listing.get("messages") or []:
+            msg_id = ref.get("id")
+            if not msg_id:
+                continue
+            msg = self._get(
+                f"{GMAIL_API_BASE}/messages/{msg_id}", params={"format": "full"}
+            )
+            out.append(self._to_email(msg))
+        return out
+
+    @staticmethod
+    def _to_email(msg: dict) -> NormalizedEmail:
+        payload = msg.get("payload") or {}
+        headers = payload.get("headers") or []
+        from_name, from_email = _parse_from(_header(headers, "From"))
+        label_ids = msg.get("labelIds") or []
+        return NormalizedEmail(
+            source="google",
+            source_id=str(msg.get("id") or ""),
+            thread_id=str(msg.get("threadId") or ""),
+            from_name=from_name,
+            from_email=from_email,
+            subject=_header(headers, "Subject"),
+            snippet=msg.get("snippet") or "",
+            received_at=_parse_date(_header(headers, "Date")),
+            unread="UNREAD" in label_ids,
+            body_excerpt=_excerpt(_walk_plaintext(payload)),
+        )
 
     def get_message(self, source_id: str) -> str:
-        """[stub] Full plain-text body on demand. Filled in the Gmail phase."""
-        return ""
+        """On-demand full plain-text body for the reading pane. Raises
+        GoogleAuthError on a transport error; the router/store catches it and
+        substitutes the fallback string."""
+        msg = self._get(
+            f"{GMAIL_API_BASE}/messages/{source_id}", params={"format": "full"}
+        )
+        return _walk_plaintext(msg.get("payload") or {})

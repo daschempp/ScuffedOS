@@ -186,15 +186,6 @@ def test_success_redirect_targets_the_email_screen():
     assert GoogleProvider().success_redirect() == "/?screen=email&connected=google"
 
 
-def test_gmail_methods_are_stubs_this_phase():
-    # fetch_messages/get_message are filled in the Gmail phase; here they are
-    # inert so the provider satisfies EmailProvider without doing network I/O.
-    p = _provider()
-    p.configure(fake_http=FakeHttp({}))
-    assert p.fetch_messages(None) == []
-    assert p.get_message("anyid") == ""
-
-
 def test_name_and_no_kind_attr():
     p = GoogleProvider()
     assert p.name == "google"
