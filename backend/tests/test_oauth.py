@@ -175,3 +175,12 @@ def test_disconnect_unknown_provider_is_404(client):
     res = client.post("/api/oauth/disconnect/whoop")  # nothing connected
     assert res.status_code == 404
     assert res.json()["error"]["code"] == "not_found"
+
+
+def test_fitness_oauth_routes_are_removed(client):
+    # The OAuth surface moved to /api/oauth/*; /api/fitness/connect|status|
+    # disconnect must no longer be routable.
+    providers.configure([FakeProvider()])
+    assert client.get("/api/fitness/connect/whoop").status_code == 404
+    assert client.get("/api/fitness/status").status_code == 404
+    assert client.post("/api/fitness/disconnect/whoop").status_code == 404

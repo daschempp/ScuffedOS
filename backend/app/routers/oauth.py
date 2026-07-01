@@ -20,11 +20,6 @@ from fastapi.responses import RedirectResponse
 from .. import providers
 from ..schemas import ConnectUrl, OAuthStatus
 from ..store import store
-# Lazy import helper — imported at call time to avoid circular reference
-# (fitness imports providers; this avoids an import-time cycle).
-def _fitness_states() -> "dict[str, str]":
-    from . import fitness  # noqa: PLC0415 — deferred to avoid cycles
-    return fitness._STATES
 
 router = APIRouter(prefix="/api/oauth", tags=["oauth"])
 auth_router = APIRouter(tags=["oauth"])
@@ -44,16 +39,8 @@ def _issue_state(provider: str) -> str:
 
 
 def _consume_state(state: str) -> str | None:
-    """Pop a state, returning the provider it was issued for (one-time use).
-    Falls back to fitness._STATES so both the /api/oauth/connect and
-    /api/fitness/connect paths work with a single callback route."""
-    result = _STATES.pop(state, None)
-    if result is None:
-        # During coexistence (Task 5), the fitness connect endpoint stores
-        # states in fitness._STATES; fall back there so test_fitness_oauth
-        # passes even when oauth.auth_router is included first.
-        result = _fitness_states().pop(state, None)
-    return result
+    """Pop a state, returning the provider it was issued for (one-time use)."""
+    return _STATES.pop(state, None)
 
 
 def _status_dict() -> dict:
@@ -116,23 +103,26 @@ def disconnect(provider: str) -> dict:
     to clear its domain data. Deletion is the user-facing guarantee, so a
     failed revoke never blocks it. A missing account → 404."""
     impl = providers.get(provider)
+    # Guard: if the provider is unregistered, we cannot call on_disconnect to
+    # clean its domain data, so refuse rather than orphaning data silently.
+    if impl is None:
+        raise HTTPException(status_code=404, detail=f"Unknown provider '{provider}'")
     tokens = store.get_provider_tokens(provider)
-    if impl is not None and tokens is not None:
+    if tokens is not None:
         try:
             impl.revoke(tokens)
         except Exception as exc:  # noqa: BLE001 — revoke is best-effort
             logger.warning("revoke failed for %s, deleting anyway: %s", provider, exc)
     # delete_provider_data removes the account row (+ fitness tables where
-    # source==provider); its existed return drives the 404.
+    # source==provider); its return value drives the 404 when no row exists.
     if not store.delete_provider_data(provider):
         raise HTTPException(status_code=404, detail=f"No connected '{provider}' account")
     # on_disconnect clears the provider's domain data. For WHOOP this re-calls
     # delete_provider_data (idempotent — row already gone); for Google it
     # deletes the emails table. Best-effort so a hook error never 500s the
     # user-facing delete.
-    if impl is not None:
-        try:
-            impl.on_disconnect()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("on_disconnect hook failed for %s: %s", provider, exc)
+    try:
+        impl.on_disconnect()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("on_disconnect hook failed for %s: %s", provider, exc)
     return _status_dict()

@@ -69,7 +69,6 @@ app.include_router(nutrition.router)
 app.include_router(fitness.router)
 app.include_router(oauth.router)
 app.include_router(oauth.auth_router)
-app.include_router(fitness.auth_router)
 
 
 @app.get("/api/health", tags=["meta"])
