@@ -1,111 +1,182 @@
-/* Scuffed OS — Email triage & response drafting */
+/* Scuffed OS — Email triage (live, synced with Gmail via Google OAuth).
+   Owns its own state (App.jsx renders <EmailScreen /> with no props), mirroring
+   FitnessScreen's in-component fetch convention. /api/oauth/status drives which
+   connection state renders; /api/email/inbox feeds the two-pane view. The inbox
+   comes straight from the emails table server-side (never a live Gmail call), so
+   it works while a sync is mid-flight or Gmail is down — it shows what's landed.
+   Only the reading pane fetches a body live (/api/email/{id}), with a graceful
+   fallback string. Message bodies are never persisted; tokens never reach the
+   client. Draft/send is a later slice — no draft UI here. */
 import React from 'react'
-import { Card, Badge, IconButton, Button } from '../components/ui.jsx'
+import { Card, Badge, Button } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
+import { api } from '../lib/api.js'
+
+/* Category → the left-column group label + list. Untriaged messages still show
+   (under 'Other') so a triage hiccup never hides mail. */
+const GROUPS = [
+  { key: 'needs_reply', label: 'Needs reply' },
+  { key: 'fyi', label: 'FYI' },
+  { key: 'untriaged', label: 'Other' },
+]
 
 export function EmailScreen() {
-  const emails = [
-    { id: 1, from: 'Priya Anand', time: '8:24am', cat: 'Needs reply', unread: true, tint: 'sky',
-      subject: 'Lighthouse timeline — can we confirm the 30th?',
-      snippet: 'Wanted to lock the new ship date before I update the roadmap…',
-      summary: ['Priya wants to confirm the June 30 ship date.', 'She needs it before updating the public roadmap.', 'Asking you to loop in design review by the 20th.'],
-      drafts: {
-        Friendly: "Hi Priya,\n\nThe 30th works on my end — let's lock it in. I'll get design review scheduled before the 20th and send you the calendar invite today.\n\nThanks for keeping this moving!\nSam",
-        Brief: "Hi Priya — 30th works. I'll set up design review before the 20th and send the invite today. — Sam",
-        Formal: "Hi Priya,\n\nConfirming June 30 works. I'll arrange the design review ahead of the 20th and forward an invitation shortly.\n\nBest,\nSam",
-      } },
-    { id: 2, from: 'Oak St. Realty', time: 'Yesterday', cat: 'Needs reply', unread: true, tint: 'honey',
-      subject: 'Lease renewal — action needed by Jun 25',
-      snippet: 'Your lease is up for renewal. Please confirm whether you intend to…',
-      summary: ['Lease renews; they need your decision by Jun 25.', 'Rent stays at $1,450 if you renew for 12 months.', 'Month-to-month would increase to $1,610.'],
-      drafts: {
-        Friendly: "Hi,\n\nThanks for the heads up — I'd like to renew for another 12 months at the current rate. Happy to sign whenever the paperwork's ready.\n\nBest,\nSam",
-        Brief: "Hi — I'll renew for 12 months at $1,450. Send the paperwork whenever. — Sam",
-        Formal: "Hello,\n\nI would like to renew for a 12-month term at the current rate of $1,450. Please send the renewal documents at your convenience.\n\nRegards,\nSam",
-      } },
-    { id: 3, from: 'Jordan Lee', time: 'Tue', cat: 'Needs reply', unread: false, tint: 'green',
-      subject: 'Dinner this weekend?',
-      snippet: "It's been ages! Free Saturday for that ramen place we talked about?",
-      summary: ["Jordan's inviting you to dinner Saturday.", "Suggesting the ramen place you'd discussed.", "It's been a while since you caught up."],
-      drafts: {
-        Friendly: "Yes!! Saturday's perfect — I've been craving that ramen. 7pm? Can't wait to catch up.\n\n— Sam",
-        Brief: 'Saturday works — 7pm at the ramen place? — Sam',
-        Formal: 'Hi Jordan,\n\nSaturday works well. Shall we say 7pm at the ramen restaurant?\n\nBest,\nSam',
-      } },
-    { id: 4, from: 'Vanguard', time: 'Jun 5', cat: 'FYI', unread: false, tint: 'clay',
-      subject: 'Your June statement is ready',
-      snippet: 'Your account statement for the period ending May 31 is now available…',
-      summary: ['Monthly statement is available.', 'Portfolio up 0.9% for the period.', 'No action required.'] },
-    { id: 5, from: 'Figma', time: 'Jun 4', cat: 'FYI', unread: false, tint: 'plum',
-      subject: "What's new this month",
-      snippet: "New cursor chat, dev mode updates, and more in this month's roundup…",
-      summary: ['Product newsletter — feature roundup.', 'Highlights: cursor chat, dev mode updates.', 'No action required.'] },
-  ]
-  const [selId, setSelId] = React.useState(1)
-  const [tone, setTone] = React.useState('Friendly')
-  const sel = emails.find((e) => e.id === selId)
-  const cats = ['Needs reply', 'FYI']
+  const [status, setStatus] = React.useState(null)   // null = /status not answered yet
+  const [inbox, setInbox] = React.useState(null)     // null = not loaded
+  const [selId, setSelId] = React.useState(null)
+  const [detail, setDetail] = React.useState(null)   // full email incl. body, for selId
+
+  const refresh = React.useCallback(() => {
+    api.oauthStatus().then((s) => { if (s) setStatus(s) }).catch(() => {})
+    api.emailInbox().then((i) => { if (i) setInbox(i) }).catch(() => {})
+  }, [])
+
+  React.useEffect(() => { refresh() }, [refresh])
+
+  const google = (status?.providers || []).find((p) => p.provider === 'google') || null
+  const connected = !!google
+  const needsReauth = google?.status === 'needs_reauth'
+
+  const groups = React.useMemo(() => GROUPS.map((g) => ({
+    ...g, items: (inbox?.[g.key] || []),
+  })), [inbox])
+  const total = groups.reduce((n, g) => n + g.items.length, 0)
+  // Connected, no reauth, nothing has landed yet, and google has never synced →
+  // first backfill is still running. This is a pre-first-tick state (matches
+  // FitnessScreen): email_sync always stamps last_sync_at, so once the first
+  // tick completes a genuinely-empty inbox shows the "Inbox is clear" state, not
+  // this banner.
+  const syncing = connected && !needsReauth && inbox != null && total === 0 && !google?.last_sync_at
+
+  // Auto-select the first message once the inbox lands (and keep a valid
+  // selection if the current one disappears after a refresh).
+  React.useEffect(() => {
+    if (total === 0) { setSelId(null); return }
+    const flat = groups.flatMap((g) => g.items)
+    if (selId == null || !flat.some((e) => e.id === selId)) setSelId(flat[0].id)
+  }, [groups, total, selId])
+
+  // Load the body (and fresh metadata) whenever the selection changes.
+  React.useEffect(() => {
+    if (selId == null) { setDetail(null); return }
+    let live = true
+    setDetail(null)
+    api.emailDetail(selId).then((d) => { if (live && d) setDetail(d) }).catch(() => {})
+    return () => { live = false }
+  }, [selId])
+
+  const connect = () => {
+    api.oauthConnect('google')
+      .then((r) => { if (r?.authorize_url) window.location = r.authorize_url })
+      .catch(() => {})
+  }
+  const sync = () => { api.emailSync().then(() => refresh()).catch(() => {}) }
+
+  // —— not connected: single CTA card ——
+  if (status && !connected && !needsReauth) {
+    return (
+      <Card variant="flat" style={{ textAlign: 'center', padding: '56px 24px' }}>
+        <div style={{ display: 'inline-flex', width: 56, height: 56, borderRadius: 'var(--radius-lg)', background: 'var(--accent-soft)', color: 'var(--accent-text)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
+          <Icon name="mail" />
+        </div>
+        <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--text-xl)', color: 'var(--text-strong)', margin: '0 0 6px' }}>Connect Google</h3>
+        <p className="kit-muted" style={{ maxWidth: 380, margin: '0 auto 18px' }}>Sync your Gmail inbox into Scuffed OS. Messages are triaged into what needs a reply vs. FYI, with AI summaries. Read-only — your tokens stay server-side and message bodies are never stored.</p>
+        <Button variant="primary" iconLeft={<Icon name="mail" />} onClick={connect}>Connect Google</Button>
+      </Card>
+    )
+  }
+
+  const eyebrow = google?.last_sync_at
+    ? `Synced with Gmail · ${new Date(google.last_sync_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+    : 'Connected with Gmail'
+  const needCount = inbox?.needs_reply_count ?? 0
 
   return (
-    <div className="kit-grid" style={{ gridTemplateColumns: '1fr 1.15fr' }}>
-      <Card title="Inbox" eyebrow="12 new · I triaged & cleared 8" action={<Badge color="green" dot>4 need you</Badge>}>
-        {cats.map((c) => (
-          <div key={c}>
-            <p className="sa-card__eyebrow" style={{ margin: '12px 0 4px' }}>{c}</p>
-            {emails.filter((e) => e.cat === c).map((e) => (
-              <div key={e.id} className={'kit-mail' + (e.id === selId ? ' is-active' : '')} onClick={() => { setSelId(e.id); setTone('Friendly') }}>
-                <span className={'kit-mail__dot' + (e.unread ? '' : ' read')} />
-                <div className="kit-mail__main">
-                  <div className="kit-mail__top">
-                    <span className="kit-mail__from">{e.from}</span>
-                    <span className="kit-mail__time">{e.time}</span>
+    <div className="kit-stack" style={{ gap: 'var(--gutter)' }}>
+      {needsReauth && (
+        <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <span className="kit-statline__ico" style={{ background: 'var(--clay-100)', color: 'var(--clay-600)' }}><Icon name="alert-triangle" /></span>
+          <div style={{ flex: 1 }}>
+            <p className="kit-row__title">Google needs to be reconnected</p>
+            <p className="kit-muted">Your authorization expired or was revoked. Reconnect to resume syncing your inbox.</p>
+          </div>
+          <Button variant="primary" size="sm" onClick={connect}>Reconnect</Button>
+        </Card>
+      )}
+
+      {syncing && (
+        <Card variant="flat" style={{ textAlign: 'center', padding: '48px 24px' }}>
+          <div style={{ display: 'inline-flex', width: 56, height: 56, borderRadius: 'var(--radius-lg)', background: 'var(--accent-soft)', color: 'var(--accent-text)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
+            <Icon name="refresh-cw" />
+          </div>
+          <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--text-xl)', color: 'var(--text-strong)', margin: '0 0 6px' }}>Syncing…</h3>
+          <p className="kit-muted" style={{ maxWidth: 380, margin: '0 auto 18px' }}>Pulling and triaging your inbox from Gmail. This usually takes a moment — hang tight.</p>
+          <Button variant="secondary" size="sm" iconLeft={<Icon name="refresh-cw" />} onClick={sync}>Check again</Button>
+        </Card>
+      )}
+
+      {!syncing && (
+        <div className="kit-grid" style={{ gridTemplateColumns: '1fr 1.15fr' }}>
+          <Card title="Inbox" eyebrow={eyebrow}
+            action={
+              <div className="kit-inline" style={{ gap: 8, alignItems: 'center' }}>
+                {needCount > 0 && <Badge color="green" dot>{needCount} need you</Badge>}
+                <Button variant="soft" size="sm" iconLeft={<Icon name="refresh-cw" />} onClick={sync}>Sync</Button>
+              </div>
+            }>
+            {total === 0 && <p className="kit-muted" style={{ marginTop: 6 }}>Inbox is clear — nothing to triage right now.</p>}
+            {groups.map((g) => g.items.length === 0 ? null : (
+              <div key={g.key}>
+                <p className="sa-card__eyebrow" style={{ margin: '12px 0 4px' }}>{g.label}</p>
+                {g.items.map((e) => (
+                  <div key={e.id} className={'kit-mail' + (e.id === selId ? ' is-active' : '')} onClick={() => setSelId(e.id)}>
+                    <span className={'kit-mail__dot' + (e.unread ? '' : ' read')} />
+                    <div className="kit-mail__main">
+                      <div className="kit-mail__top">
+                        <span className="kit-mail__from">{e.from_name || e.from_email}</span>
+                        <span className="kit-mail__time">{e.when}</span>
+                      </div>
+                      <p className="kit-mail__subj">{e.subject || '(no subject)'}</p>
+                      <p className="kit-mail__snip">{e.snippet}</p>
+                    </div>
                   </div>
-                  <p className="kit-mail__subj">{e.subject}</p>
-                  <p className="kit-mail__snip">{e.snippet}</p>
-                </div>
+                ))}
               </div>
             ))}
-          </div>
-        ))}
-      </Card>
-
-      <div className="kit-col">
-        <Card eyebrow={sel.from} title={sel.subject} action={<IconButton label="Archive"><Icon name="archive" /></IconButton>}>
-          <p className="sa-card__eyebrow" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}><Icon name="sparkles" style={{ width: 13, height: 13 }} />AI summary</p>
-          <div className="kit-bullets">
-            {sel.summary.map((b, i) => (
-              <div className="kit-bullet" key={i}><Icon name="check" />{b}</div>
-            ))}
-          </div>
-        </Card>
-
-        {sel.drafts ? (
-          <Card title="Suggested reply" action={
-            <div className="kit-cal__seg" style={{ marginLeft: 0 }}>
-              {['Friendly', 'Brief', 'Formal'].map((t) => (
-                <button key={t} className={tone === t ? 'is-on' : ''} onClick={() => setTone(t)}>{t}</button>
-              ))}
-            </div>
-          }>
-            <div className="kit-draft">{sel.drafts[tone]}</div>
-            <div className="kit-inline" style={{ marginTop: 14 }}>
-              <Button variant="primary" iconLeft={<Icon name="send" />}>Send</Button>
-              <Button variant="secondary" iconLeft={<Icon name="pen-line" />}>Edit</Button>
-              <Button variant="ghost" iconLeft={<Icon name="refresh-cw" />}>Regenerate</Button>
-            </div>
           </Card>
-        ) : (
-          <Card variant="sunken">
-            <div className="kit-insight">
-              <div className="kit-insight__icon"><Icon name="check-check" /></div>
-              <p>No reply needed — I've filed this as <strong>FYI</strong>. Archive it or keep for later.</p>
-            </div>
-            <div className="kit-inline" style={{ marginTop: 12 }}>
-              <Button variant="soft" size="sm" iconLeft={<Icon name="archive" />}>Archive</Button>
-            </div>
-          </Card>
-        )}
-      </div>
+
+          <div className="kit-col">
+            {detail ? (
+              <>
+                <Card eyebrow={`${detail.from_name || detail.from_email}${detail.from_email && detail.from_name ? ` · ${detail.from_email}` : ''}`} title={detail.subject || '(no subject)'}>
+                  {(detail.summary || []).length > 0 && (
+                    <>
+                      <p className="sa-card__eyebrow" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}><Icon name="sparkles" style={{ width: 13, height: 13 }} />AI summary</p>
+                      <div className="kit-bullets" style={{ marginBottom: 14 }}>
+                        {detail.summary.map((b, i) => (
+                          <div className="kit-bullet" key={i}><Icon name="check" />{b}</div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  <div className="kit-draft">{detail.body}</div>
+                </Card>
+
+                {detail.category === 'fyi' && (
+                  <Card variant="sunken">
+                    <div className="kit-insight">
+                      <div className="kit-insight__icon"><Icon name="check-check" /></div>
+                      <p>No reply needed — I've filed this as <strong>FYI</strong>.</p>
+                    </div>
+                  </Card>
+                )}
+              </>
+            ) : (
+              <Card><p className="kit-muted">{selId == null ? 'Select a message to read it.' : 'Loading…'}</p></Card>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
