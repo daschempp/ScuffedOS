@@ -166,6 +166,17 @@ class WhoopProvider:
         except Exception as exc:
             log.warning("WHOOP revoke failed (continuing): %s", exc)
 
+    # ---- OAuthProvider hooks (wired to real logic in Task 2) ----
+    def success_redirect(self) -> str:
+        """The screen to land on after a successful WHOOP connect."""
+        return "/fitness"
+
+    def on_connected(self) -> None:
+        """Post-connect hook — kicks an initial sync (implemented in Task 2)."""
+
+    def on_disconnect(self) -> None:
+        """Delete all WHOOP domain data for this user (implemented in Task 2)."""
+
     def fetch_profile(self, tokens: Tokens) -> str | None:
         """GET the WHOOP basic profile and return the provider user id.
 

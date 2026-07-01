@@ -72,6 +72,10 @@ class _MinimalProvider:
     def fetch_sleep(self, since): return []
     def fetch_workouts(self, since): return []
     def revoke(self, tokens): return None
+    def set_tokens(self, tokens): pass
+    def success_redirect(self): return ""
+    def on_connected(self): pass
+    def on_disconnect(self): pass
 
 
 def test_runtime_checkable_protocol_accepts_a_conforming_object():
