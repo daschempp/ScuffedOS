@@ -4,7 +4,7 @@
 
 ScuffedOS is a personal assistant application operated by Dylan Schempp ("we," "us"). It combines tasks, calendar, habits, nutrition, notes, and connected health data behind a single AI assistant. ScuffedOS is a self-hosted application: in the current deployment, the operator and the sole user are the same person, and there are no third-party user accounts.
 
-This policy describes what data ScuffedOS stores, how it is used, and which service providers process it. It applies to the ScuffedOS application and any data obtained through connected services such as WHOOP.
+This policy describes what data ScuffedOS stores, how it is used, and which service providers process it. It applies to the ScuffedOS application and any data obtained through connected services such as WHOOP and Gmail.
 
 ## 1. Information we collect
 
@@ -32,10 +32,11 @@ ScuffedOS sends data to a small set of service providers, each for a specific fu
 
 | Provider | Purpose | What is shared |
 | --- | --- | --- |
-| **Anthropic** (Claude API) | Powers the AI assistant and memory extraction | Your messages to the assistant, conversation history, and data the assistant reads from your stored domains (tasks, calendar, health data, etc.) in order to respond |
+| **Anthropic** (Claude API) | Powers the AI assistant, memory extraction, and email triage | Your messages to the assistant, conversation history, and data the assistant reads from your stored domains (tasks, calendar, health data, etc.) in order to respond. When you connect Gmail, each email's sender, subject, preview snippet, and a bounded body excerpt (~2 KB) are sent to Anthropic to classify it and generate a short summary |
 | **OpenAI** | Text embeddings for memory search (embeddings only — the assistant itself never calls OpenAI) | The text of stored memories |
-| **Supabase** | Managed Postgres database hosting | Structured app data: tasks, events, habits, nutrition logs, conversations, memories and their embeddings, and synced WHOOP data |
+| **Supabase** | Managed Postgres database hosting | Structured app data: tasks, events, habits, nutrition logs, conversations, memories and their embeddings, synced WHOOP data, and email metadata (sender, subject, snippet, and AI-derived category/summary — no message bodies) |
 | **WHOOP** | Health data source (only if you connect it) | OAuth authorization; ScuffedOS receives data from WHOOP, not the reverse |
+| **Google (Gmail)** | Email source, read-only (only if you connect it) | OAuth authorization; ScuffedOS reads your Gmail messages via the Gmail API. Message content is retrieved to display it and (subject + a bounded body excerpt) is sent to Anthropic for triage — see Section 4 |
 | **USDA FoodData Central** | Food nutrition lookup | Only the food search text you enter (e.g., "chicken wrap") |
 
 Anthropic and OpenAI process API data under their published API data-usage policies, which (as of the effective date) state that API inputs and outputs are not used to train their models.
@@ -55,6 +56,16 @@ If you choose to connect WHOOP:
 
 ScuffedOS is an independent application and is not affiliated with, endorsed by, or sponsored by WHOOP.
 
+If you choose to connect Gmail:
+
+- Access is **read-only** and is granted only after you explicitly authorize ScuffedOS through Google's OAuth consent flow (the `gmail.readonly` scope). You can review and revoke this access at any time from your Google Account's security settings.
+- ScuffedOS reads your inbox messages to display them and to triage them. For each message, the sender, subject, preview snippet, and a bounded plain-text body excerpt (~2 KB) are sent to **Anthropic** to classify the message (needs-reply vs. FYI) and generate a short summary. Only the derived category and summary — never the message body — are stored.
+- **Message bodies are not stored.** The inbox list and AI summaries live in the database; the full body of a message is fetched live from the Gmail API only when you open that message, and is never written to disk.
+- Gmail data is never sold, never shared with third parties for their own purposes, and never used for advertising.
+- You can disconnect Gmail within ScuffedOS at any time. On disconnect, stored email metadata and your Google OAuth tokens are deleted, and ScuffedOS revokes its Google access token. As with all deletions, this is honored within 30 days.
+
+ScuffedOS is an independent application and is not affiliated with, endorsed by, or sponsored by Google.
+
 ## 5. Data storage and security
 
 - App data is stored in a Postgres database hosted by Supabase; attachments and the memory history file are stored on the operator's machine.
@@ -66,11 +77,11 @@ No system is perfectly secure, but as a single-user, self-hosted application, Sc
 
 ## 6. Data retention and deletion
 
-Data is retained until you delete it. ScuffedOS provides in-app deletion for every domain (tasks, events, habits, logs, memories, conversations), and the operator can delete any record — or all data — directly from the database at any time. Disconnecting WHOOP triggers deletion of synced WHOOP data and tokens as described in Section 4. For any deletion request, contact us at the address below and it will be honored within 30 days.
+Data is retained until you delete it. ScuffedOS provides in-app deletion for every domain (tasks, events, habits, logs, memories, conversations), and the operator can delete any record — or all data — directly from the database at any time. Disconnecting WHOOP triggers deletion of synced WHOOP data and tokens as described in Section 4; disconnecting Gmail likewise deletes stored email metadata and Google OAuth tokens. For any deletion request, contact us at the address below and it will be honored within 30 days.
 
 ## 7. Your rights and choices
 
-You can access, correct, export, or delete your data at any time — in-app, via the assistant, or by direct database access. You can decline to connect WHOOP (the rest of the app works without it), disable voice dictation by simply not using the microphone, and disconnect any integration at any time.
+You can access, correct, export, or delete your data at any time — in-app, via the assistant, or by direct database access. You can decline to connect WHOOP or Gmail (the rest of the app works without either), disable voice dictation by simply not using the microphone, and disconnect any integration at any time.
 
 ## 8. Children
 
