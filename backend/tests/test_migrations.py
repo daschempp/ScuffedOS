@@ -31,7 +31,7 @@ ALL_TABLES = {
     "tasks", "memories", "conversations", "conversation_messages",
     "task_reminders", "events", "habits", "habit_completions",
     "meals", "water_days", "nutrition_targets",
-    "provider_accounts", "daily_snapshots", "workouts",
+    "provider_accounts", "daily_snapshots", "workouts", "emails",
 }
 
 
@@ -45,6 +45,12 @@ def test_upgrade_head_builds_full_schema(alembic_cfg, tmp_path):
     assert {"bucket", "deadline", "prio", "list", "subtasks", "labels",
             "recurrence", "files", "created_at", "completed_at"} <= task_cols
     assert "reminders" not in task_cols  # dropped in 0003 — they fire from task_reminders now
+
+    email_cols = {c["name"] for c in inspect(engine).get_columns("emails")}
+    assert {"owner", "source", "source_id", "thread_id", "from_name",
+            "from_email", "subject", "snippet", "received_at", "unread",
+            "category", "summary_json", "triaged_at"} <= email_cols
+    assert "body" not in email_cols  # privacy: bodies never persisted
     engine.dispose()
 
 
