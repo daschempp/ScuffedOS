@@ -118,6 +118,7 @@ class FakeProvider:
         self.exchanged: list[str] = []
         self.refreshed: list[Tokens] = []
         self.revoked: list[Tokens] = []
+        self.connected_calls = 0
 
     def authorize_url(self, state: str) -> str:
         return (
@@ -144,3 +145,16 @@ class FakeProvider:
 
     def revoke(self, tokens: Tokens) -> None:
         self.revoked.append(tokens)
+
+    # ---- OAuthProvider hooks (M5) — the shared oauth router drives these ----
+    def success_redirect(self) -> str:
+        return "/?screen=fitness&connected=whoop"
+
+    def on_connected(self) -> None:
+        self.connected_calls = getattr(self, "connected_calls", 0) + 1
+
+    def on_disconnect(self) -> None:
+        # Mirror the real provider: delete this provider's normalized data.
+        # Idempotent with the router's own delete_provider_data (row gone).
+        from app.store import store
+        store.delete_provider_data(self.name)
