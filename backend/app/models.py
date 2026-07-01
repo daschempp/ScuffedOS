@@ -322,3 +322,35 @@ class Workout(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+class Email(Base):
+    """A synced email (M5). Keyed (owner, source, source_id) = ('google', gmail id)
+    so re-sync upserts idempotently. Triage output (category + summary_json) is
+    written on sync; NO body column — bodies are privacy-sensitive and fetched
+    on demand via EmailProvider.get_message, never stored."""
+
+    __tablename__ = "emails"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_emails_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'google'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # gmail message id
+    thread_id: Mapped[str] = mapped_column(String(128), default="")
+    from_name: Mapped[str] = mapped_column(Text, default="")
+    from_email: Mapped[str] = mapped_column(String(320), default="")
+    subject: Mapped[str] = mapped_column(Text, default="")
+    snippet: Mapped[str] = mapped_column(Text, default="")
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    unread: Mapped[bool] = mapped_column(default=False)
+    category: Mapped[str | None] = mapped_column(String(16))            # 'needs_reply' | 'fyi' | None
+    summary_json: Mapped[list | None] = mapped_column(JSONField)        # list[str] bullets, or None
+    triaged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
