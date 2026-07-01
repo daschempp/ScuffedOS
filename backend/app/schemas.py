@@ -390,6 +390,14 @@ class FitnessStatus(BaseModel):
     providers: List[ProviderStatus]
 
 
+# M5: generic OAuth status returned by the shared /api/oauth/status endpoint.
+# Structurally identical to FitnessStatus (domain-agnostic) so the moved M4
+# status test passes unchanged. FitnessStatus stays for the assistant tool shape.
+class OAuthStatus(BaseModel):
+    connected: bool  # any provider connected
+    providers: List[ProviderStatus]
+
+
 class ConnectUrl(BaseModel):
     authorize_url: str
 
