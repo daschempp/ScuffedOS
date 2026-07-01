@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 
-from app.display import relative_when, task_due_display
+from app.display import relative_when, task_due_display, email_when_display
 
 NOW = datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc)
 TODAY = date(2026, 6, 10)
@@ -38,3 +38,30 @@ def test_due_display_done_beats_overdue():
     assert due.startswith("Done ")
     assert late is False
     assert task_due_display(None, True, None, TODAY) == ("Done", False)
+
+
+def test_email_when_today_shows_clock():
+    now = datetime(2026, 6, 30, 17, 0, tzinfo=timezone.utc)
+    received = datetime(2026, 6, 30, 15, 24, tzinfo=timezone.utc)
+    # Same local calendar day -> clock time (e.g. '8:24am' in local tz).
+    out = email_when_display(received, now)
+    assert out == _local_clock_expected(received)
+
+
+def test_email_when_yesterday():
+    now = datetime(2026, 6, 30, 17, 0, tzinfo=timezone.utc)
+    received = datetime(2026, 6, 29, 15, 0, tzinfo=timezone.utc)
+    assert email_when_display(received, now) == "Yesterday"
+
+
+def test_email_when_older_shows_month_day():
+    now = datetime(2026, 6, 30, 17, 0, tzinfo=timezone.utc)
+    received = datetime(2026, 6, 5, 15, 0, tzinfo=timezone.utc)
+    # Older than yesterday -> 'Mon D' in local tz.
+    expected = received.astimezone().strftime("%b %-d")
+    assert email_when_display(received, now) == expected
+
+
+def _local_clock_expected(dt):
+    from app.display import clock
+    return clock(dt)
