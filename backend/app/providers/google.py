@@ -20,7 +20,9 @@ their constant NAMES are frozen by the interface contract.
 from __future__ import annotations
 
 import base64
+import html
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr, parsedate_to_datetime
 from urllib.parse import urlencode
@@ -70,10 +72,31 @@ def _walk_plaintext(part: dict) -> str:
         found = _walk_plaintext(child)
         if found:
             return found
-    # Leaf with a body but no text/plain sibling (rare single-part text emails).
+    # Leaf with a body but no text/plain sibling (rare single-part text emails,
+    # or an html-only multipart/alternative with no text/plain part at all).
     if not part.get("parts") and body.get("data") and mime.startswith("text/"):
-        return _decode_b64url(body["data"])
+        decoded = _decode_b64url(body["data"])
+        return _html_to_text(decoded) if mime == "text/html" else decoded
     return ""
+
+
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _html_to_text(markup: str) -> str:
+    """Best-effort HTML -> readable plain text: drop script/style, strip tags,
+    unescape entities, collapse whitespace. Used only when the sole decodable
+    body part is text/html (no text/plain), so triage + the reading pane never
+    receive raw markup."""
+    if not markup:
+        return ""
+    text = _SCRIPT_STYLE_RE.sub(" ", markup)
+    text = _TAG_RE.sub(" ", text)
+    text = html.unescape(text)
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    text = re.sub(r"\n\s*\n\s*", "\n\n", text)
+    return text.strip()
 
 
 def _excerpt(text: str) -> str:

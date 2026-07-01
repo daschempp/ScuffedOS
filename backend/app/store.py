@@ -1240,6 +1240,14 @@ class Store:
         with self._session() as s:
             return self._email_row(s, source, source_id) is not None
 
+    def email_triaged(self, source: str, source_id: str) -> bool:
+        """True iff a row exists for (owner, source, source_id) AND it has been
+        triaged (category is not None). The sync skips fully-triaged rows but
+        RE-triages rows that are stored-but-untriaged (category IS NULL)."""
+        with self._session() as s:
+            row = self._email_row(s, source, source_id)
+            return row is not None and row.category is not None
+
     @_retry_integrity
     def upsert_email(
         self,

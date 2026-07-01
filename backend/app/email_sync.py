@@ -91,7 +91,7 @@ def _sync_provider(provider, now: datetime) -> int:
     since = acct["last_sync_at"]  # None on a fresh account -> full backfill via list
     count = 0
     for email in provider.fetch_messages(since):
-        if store.email_exists(email.source, email.source_id):
+        if store.email_triaged(email.source, email.source_id):
             continue
         category, summary = email_triage.triage(
             email.subject, email.from_name, email.from_email,

@@ -96,3 +96,46 @@ def test_get_message_raises_on_transport_error():
     http = FakeGmailHTTP(messages={"m1": {}}, status={"/messages/m1": 500})
     with pytest.raises(GoogleAuthError):
         _provider(http).get_message("m1")
+
+
+def _html_only_message(msg_id: str, *, html_body: str) -> dict:
+    """A Gmail messages.get payload whose ONLY decodable body part is
+    text/html (no text/plain part at all) — e.g. a newsletter sent as
+    multipart/alternative with just an HTML part."""
+    import base64
+
+    b64 = base64.urlsafe_b64encode(html_body.encode("utf-8")).decode("ascii")
+    return {
+        "id": msg_id,
+        "threadId": "th1",
+        "snippet": "snippet",
+        "labelIds": ["INBOX", "UNREAD"],
+        "payload": {
+            "mimeType": "multipart/alternative",
+            "headers": [
+                {"name": "From", "value": "a@x.com"},
+                {"name": "Subject", "value": "Newsletter"},
+                {"name": "Date", "value": "Mon, 30 Jun 2026 08:00:00 +0000"},
+            ],
+            "parts": [
+                {"mimeType": "text/html", "body": {"data": b64}},
+            ],
+        },
+    }
+
+
+def test_html_only_body_is_stripped_to_plain_text_for_triage():
+    html_body = "<html><body><b>Hello</b> Ada &amp; team, please review.</body></html>"
+    http = FakeGmailHTTP(messages={"m1": _html_only_message("m1", html_body=html_body)})
+
+    e = _provider(http).fetch_messages(since=None)[0]
+
+    assert "Hello" in e.body_excerpt
+    assert "review" in e.body_excerpt
+    assert "&" in e.body_excerpt  # &amp; unescaped
+    assert "<" not in e.body_excerpt  # no raw tags leaked into the excerpt
+
+    body = _provider(http).get_message("m1")
+    assert "Hello" in body
+    assert "review" in body
+    assert "<" not in body

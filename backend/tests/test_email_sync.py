@@ -81,6 +81,32 @@ def test_tick_stores_untriaged_message_when_triage_returns_none():
     assert "m1" in ids  # shows as untriaged, retried next pass
 
 
+def test_tick_retriages_untriaged_message_on_later_tick():
+    prov = FakeEmailProvider(messages=[_email("m1")])
+    providers.configure([prov])
+    triage = _FakeTriage((None, None))
+    email_triage.configure(triage)
+    _connect_google()
+
+    # Tick 1: triage fails (returns None, None) -> message stored untriaged.
+    count1 = email_sync.tick(now=datetime(2026, 6, 30, 18, tzinfo=timezone.utc))
+    assert count1 == 1
+    assert len(triage.calls) == 1
+    inbox = store.inbox()
+    assert {e["source_id"] for e in inbox["untriaged"]} == {"m1"}
+    assert inbox["needs_reply"] == []
+
+    # Tick 2: same provider/message still returned by fetch_messages; triage
+    # now succeeds -> the untriaged row must be re-triaged and promoted.
+    triage.result = ("needs_reply", ["reply"])
+    count2 = email_sync.tick(now=datetime(2026, 6, 30, 19, tzinfo=timezone.utc))
+    assert count2 == 1
+    assert len(triage.calls) == 2  # triage was called again on the 2nd tick
+    inbox = store.inbox()
+    assert {e["source_id"] for e in inbox["needs_reply"]} == {"m1"}
+    assert inbox["untriaged"] == []  # no longer untriaged
+
+
 def test_tick_ignores_fitness_pull_providers():
     # A WHOOP FakeProvider has no fetch_messages -> email_sync must skip it.
     providers.configure([FakeProvider()])
