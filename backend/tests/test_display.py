@@ -1,3 +1,7 @@
+import os
+import time
+
+import pytest
 from datetime import date, datetime, timedelta, timezone
 
 from app.display import relative_when, task_due_display, email_when_display
@@ -65,3 +69,26 @@ def test_email_when_older_shows_month_day():
 def _local_clock_expected(dt):
     from app.display import clock
     return clock(dt)
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="tzset unavailable (non-Unix)")
+def test_email_when_uses_local_calendar_day_not_utc():
+    """Locks the §F rule: comparison is on the LOCAL calendar day, not UTC.
+    received and now share a UTC calendar day (Jun 30) but received falls on
+    the previous LOCAL day in America/New_York (UTC-4 in June), so the correct
+    result is 'Yesterday'. A naive UTC-date comparison would wrongly return the
+    clock time — this test fails against that bug and passes for the local-day
+    implementation."""
+    prev_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "America/New_York"
+    time.tzset()
+    try:
+        now = datetime(2026, 6, 30, 5, 0, tzinfo=timezone.utc)       # 01:00 EDT Jun 30
+        received = datetime(2026, 6, 30, 1, 0, tzinfo=timezone.utc)  # 21:00 EDT Jun 29
+        assert email_when_display(received, now) == "Yesterday"
+    finally:
+        if prev_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = prev_tz
+        time.tzset()
