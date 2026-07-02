@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta
 
-from . import fitness_sync, food_db, memory_engine, providers, recurrence
+from . import email_draft, fitness_sync, food_db, memory_engine, providers, recurrence
 from .seeds import FINANCE_SUMMARY
 from .store import store
 
@@ -466,6 +466,45 @@ def _get_email(args: dict):
             "summary": row["summary"], "when": row["when"], "body": body}, None
 
 
+# Max characters of the original message's live body handed to the drafting
+# model as context — same bound as routers/email.py's _draft_original
+# (contract §G: body_excerpt is fetched live via provider.get_message +
+# truncation, never the DB-cached snippet). Kept as a separate module-level
+# constant here since tools.py and routers/email.py don't share imports for
+# this value.
+_DRAFT_EXCERPT_CHARS = 2048
+
+
+def _draft_email(args: dict):
+    """User-initiated AI draft (slice-2's only write-adjacent email tool).
+    Never sends/trashes/labels — the result is a draft the user reviews in
+    compose. email_id is optional; when given, its row becomes reply_to
+    context for both the model prompt and the returned action payload."""
+    reply_to = None
+    original = None
+    if args.get("email_id") is not None:
+        row = store.get_email(args["email_id"])
+        if row is None:
+            return {"error": f"No email with id {args['email_id']}."}, None
+        reply_to = _compact_email(row)
+        excerpt = ""
+        impl = providers.get(row["source"])
+        get_message = getattr(impl, "get_message", None)
+        if get_message is not None:
+            try:
+                excerpt = get_message(row["source_id"])[:_DRAFT_EXCERPT_CHARS]
+            except Exception:  # noqa: BLE001 — excerpt fetch is best-effort
+                excerpt = ""
+        original = {"from_name": row["from_name"], "from_email": row["from_email"],
+                    "subject": row["subject"], "body_excerpt": excerpt}
+    text = email_draft.draft(args["instructions"], "", "reply" if original else "new", original)
+    if text is None:
+        return {"error": "Couldn't draft right now — try again."}, None
+    return {"draft": text, "reply_to": reply_to}, _email_action(
+        "Draft ready", "Open compose to review & send"
+    )
+
+
 # ---- task reminders (real from M3) -------------------------------------------
 
 def _add_reminder(args: dict):
@@ -711,6 +750,13 @@ TOOLS: list[dict] = [
          "email_id": {"type": "integer"}},
          "required": ["email_id"], "additionalProperties": False},
      "run": _get_email},
+    {"name": "draft_email",
+     "description": "Draft an email with AI from the user's instructions — optionally replying to an existing message by id (from get_inbox). Returns the draft text; the user reviews and sends it from the compose pane. Never sends.",
+     "input_schema": {"type": "object", "properties": {
+         "instructions": {"type": "string"},
+         "email_id": {"type": "integer"}},
+         "required": ["instructions"], "additionalProperties": False},
+     "run": _draft_email},
 ]
 
 DEFINITIONS = [{k: t[k] for k in ("name", "description", "input_schema")} for t in TOOLS]
