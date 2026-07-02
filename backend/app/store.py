@@ -326,15 +326,31 @@ def _message_dict(m: ConversationMessage) -> dict:
     }
 
 
+_EMAIL_WRITE_SCOPES = (
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
+)
+
+
+def _can_write_email(scopes: str) -> bool:
+    """True iff the stored scope string grants BOTH gmail.modify and
+    gmail.send (write capability for trash/flags/labels AND send/reply/
+    forward). A readonly-only or partially-upgraded token is False."""
+    return all(scope in scopes for scope in _EMAIL_WRITE_SCOPES)
+
+
 def _provider_account_dict(p: ProviderAccount) -> dict:
     """Client-safe view of a provider account — NEVER includes tokens,
-    scopes, or meta (those are server-side only; see /status)."""
+    scopes, or meta (those are server-side only; see /status). Exposes ONE
+    derived boolean (can_write_email) computed from raw scopes so the
+    frontend gate never sees the scope string itself."""
     return {
         "provider": p.provider,
         "status": p.status,
         "connected_at": aware_utc(p.connected_at),
         "last_sync_at": aware_utc(p.last_sync_at),
         "provider_user_id": p.provider_user_id,
+        "can_write_email": _can_write_email(p.scopes or ""),
     }
 
 

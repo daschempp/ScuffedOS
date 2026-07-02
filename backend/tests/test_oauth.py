@@ -14,7 +14,7 @@ from app.providers.base import Tokens
 from app.routers import oauth
 from app.store import store
 
-from .fakes import FakeProvider
+from .fakes import FakeEmailProvider, FakeProvider
 
 
 def _state_of(url: str) -> str:
@@ -184,3 +184,56 @@ def test_fitness_oauth_routes_are_removed(client):
     assert client.get("/api/fitness/connect/whoop").status_code == 404
     assert client.get("/api/fitness/status").status_code == 404
     assert client.post("/api/fitness/disconnect/whoop").status_code == 404
+
+
+def test_status_surfaces_can_write_email_false_when_scopes_lack_write(client):
+    providers.configure([FakeEmailProvider()])
+    store.upsert_provider_account(
+        "google",
+        Tokens(
+            access_token="a", refresh_token="r", expires_at=None,
+            scopes="openid email https://www.googleapis.com/auth/gmail.readonly",
+            provider_user_id="g1",
+        ),
+    )
+    body = client.get("/api/oauth/status").json()
+    p = body["providers"][0]
+    assert p["provider"] == "google"
+    assert p["can_write_email"] is False
+
+
+def test_status_surfaces_can_write_email_true_when_modify_and_send_both_granted(client):
+    providers.configure([FakeEmailProvider()])
+    store.upsert_provider_account(
+        "google",
+        Tokens(
+            access_token="a", refresh_token="r", expires_at=None,
+            scopes=(
+                "openid email profile "
+                "https://www.googleapis.com/auth/gmail.readonly "
+                "https://www.googleapis.com/auth/gmail.modify "
+                "https://www.googleapis.com/auth/gmail.send"
+            ),
+            provider_user_id="g1",
+        ),
+    )
+    body = client.get("/api/oauth/status").json()
+    p = body["providers"][0]
+    assert p["can_write_email"] is True
+
+
+def test_status_can_write_email_requires_both_scopes_not_just_one(client):
+    providers.configure([FakeEmailProvider()])
+    store.upsert_provider_account(
+        "google",
+        Tokens(
+            access_token="a", refresh_token="r", expires_at=None,
+            # modify only, no send — must NOT count as write-capable.
+            scopes="openid email https://www.googleapis.com/auth/gmail.modify",
+            provider_user_id="g1",
+        ),
+    )
+    body = client.get("/api/oauth/status").json()
+    assert body["providers"][0]["can_write_email"] is False
+    # Raw scopes are still never serialized to the client (existing privacy rule).
+    assert "scopes" not in body["providers"][0]

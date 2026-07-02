@@ -38,7 +38,10 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-GOOGLE_SCOPES = "openid email profile https://www.googleapis.com/auth/gmail.readonly"
+GOOGLE_SCOPES = ("openid email profile "
+                 "https://www.googleapis.com/auth/gmail.readonly "
+                 "https://www.googleapis.com/auth/gmail.modify "
+                 "https://www.googleapis.com/auth/gmail.send")   # [confirm-against-live]
 
 # Refresh when the access token is within this many seconds of expiring.
 _REFRESH_SKEW = timedelta(seconds=60)

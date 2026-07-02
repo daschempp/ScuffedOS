@@ -383,6 +383,7 @@ class ProviderStatus(BaseModel):
     connected_at: datetime
     last_sync_at: datetime | None
     provider_user_id: str | None = None
+    can_write_email: bool = False
 
 
 class FitnessStatus(BaseModel):

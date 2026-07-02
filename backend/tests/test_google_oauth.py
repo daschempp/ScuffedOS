@@ -71,11 +71,17 @@ def test_authorize_url_has_all_oauth_params_and_offline_consent():
     assert q["prompt"] == ["consent"]
 
 
-def test_scopes_include_openid_email_profile_and_gmail_readonly():
-    # The frozen scope string — read-only Gmail plus identity for the sub.
+def test_scopes_include_openid_email_profile_readonly_modify_and_send():
+    # The frozen scope string — readonly KEPT (slice-1 URL assertions hold)
+    # plus modify (read-state/labels/trash) plus send.
     assert GOOGLE_SCOPES == (
-        "openid email profile https://www.googleapis.com/auth/gmail.readonly"
+        "openid email profile "
+        "https://www.googleapis.com/auth/gmail.readonly "
+        "https://www.googleapis.com/auth/gmail.modify "
+        "https://www.googleapis.com/auth/gmail.send"
     )
+    assert "https://www.googleapis.com/auth/gmail.modify" in GOOGLE_SCOPES
+    assert "https://www.googleapis.com/auth/gmail.send" in GOOGLE_SCOPES
 
 
 def test_exchange_code_returns_tokens():
