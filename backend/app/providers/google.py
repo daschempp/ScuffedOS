@@ -24,6 +24,7 @@ import html
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
 from urllib.parse import urlencode
 
@@ -133,6 +134,27 @@ def _parse_date(value: str) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _build_rfc822(*, to: str, subject: str, body: str, cc: str | None = None,
+                   in_reply_to: str | None = None, references: str | None = None) -> bytes:
+    """Assemble a plain-text RFC-822 message for Gmail's messages.send (base64url
+    of these bytes becomes the 'raw' field — see send_message). From is
+    omitted: Gmail always sets it to the authenticated account regardless of
+    what's supplied, so setting it here would be misleading. Uses stdlib
+    email.message.EmailMessage so multi-byte body text (emoji, accents) is
+    MIME-encoded correctly without a third-party dependency."""
+    msg = EmailMessage()
+    msg["To"] = to
+    if cc:
+        msg["Cc"] = cc
+    msg["Subject"] = subject
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
+    msg.set_content(body, subtype="plain", charset="utf-8")
+    return msg.as_bytes()
 
 
 class GoogleAuthError(AuthError):
