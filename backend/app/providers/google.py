@@ -339,6 +339,12 @@ class GoogleProvider:
             raise GoogleAuthError(f"Gmail GET {url} returned {res.status_code}")
         return res.json() or {}
 
+    def _post(self, url: str, json: dict) -> dict:
+        res = self._transport().post(url, headers=self._headers(), json=json)
+        if getattr(res, "status_code", 200) >= 400:
+            raise GoogleAuthError(f"Gmail POST {url} returned {res.status_code}")
+        return res.json() or {}
+
     def fetch_messages(self, since: datetime | None) -> list[NormalizedEmail]:
         """List the INBOX (maxResults=email_backfill_count) then map each message
         (headers + snippet + a bounded plain-text body excerpt) to a
@@ -388,3 +394,14 @@ class GoogleProvider:
             f"{GMAIL_API_BASE}/messages/{source_id}", params={"format": "full"}
         )
         return _walk_plaintext(msg.get("payload") or {})
+
+    def send_message(self, raw_rfc822: bytes, thread_id: str | None = None) -> str:
+        """POST messages.send with the RFC-822 bytes (from _build_rfc822)
+        base64url-encoded into 'raw'. thread_id (when given, e.g. a reply)
+        tells Gmail to thread the new message onto the existing conversation
+        instead of starting a new one. Returns the new Gmail message id."""
+        payload: dict = {"raw": base64.urlsafe_b64encode(raw_rfc822).decode("ascii").rstrip("=")}
+        if thread_id:
+            payload["threadId"] = thread_id
+        result = self._post(f"{GMAIL_API_BASE}/messages/send", json=payload)
+        return str(result["id"])

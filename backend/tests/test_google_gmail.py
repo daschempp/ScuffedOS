@@ -1,4 +1,5 @@
 """GoogleProvider Gmail fetch (M5) — real provider, fake httpx transport."""
+import base64
 from datetime import datetime, timezone
 
 import pytest
@@ -139,3 +140,29 @@ def test_html_only_body_is_stripped_to_plain_text_for_triage():
     assert "Hello" in body
     assert "review" in body
     assert "<" not in body
+
+
+def test_send_message_posts_base64url_raw_and_returns_new_id():
+    http = FakeGmailHTTP()
+    raw = b"To: a@x.com\r\nSubject: s\r\n\r\nbody text\r\n"
+    new_id = _provider(http).send_message(raw)
+    assert new_id == "sent-1"
+    url, payload = http.posts[0]
+    assert url.endswith("/messages/send")
+    decoded = base64.urlsafe_b64decode(payload["raw"] + "=" * (-len(payload["raw"]) % 4))
+    assert decoded == raw
+    assert "threadId" not in payload
+
+
+def test_send_message_passes_thread_id_when_given():
+    http = FakeGmailHTTP()
+    new_id = _provider(http).send_message(b"To: a@x.com\r\n\r\nb\r\n", thread_id="th1")
+    assert new_id == "sent-1"
+    url, payload = http.posts[0]
+    assert payload["threadId"] == "th1"
+
+
+def test_send_message_auth_failure_raises_google_auth_error():
+    http = FakeGmailHTTP(status={"/messages/send": 401})
+    with pytest.raises(GoogleAuthError):
+        _provider(http).send_message(b"To: a@x.com\r\n\r\nb\r\n")

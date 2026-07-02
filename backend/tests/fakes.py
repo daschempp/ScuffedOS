@@ -196,6 +196,7 @@ class FakeGmailHTTP:
         self.list_ids = list_ids if list_ids is not None else list(self.messages)
         self.status = status or {}               # url-substring -> status_code
         self.gets: list[tuple[str, dict]] = []
+        self.posts: list[tuple[str, dict]] = []
 
     def _status_for(self, url: str) -> int:
         for frag, code in self.status.items():
@@ -215,7 +216,22 @@ class FakeGmailHTTP:
         # messages.list
         return _FakeResponse({"messages": [{"id": i} for i in self.list_ids]})
 
-    def post(self, url, data=None, headers=None):  # exchange/refresh/revoke
+    def post(self, url, data=None, headers=None, json=None):
+        """OAuth token/revoke calls use data=; Gmail write calls use json=.
+        Routes by URL suffix: /messages/send -> a synthetic sent message id
+        (echoing threadId if the caller supplied one so threading tests can
+        assert it round-trips); /trash and /modify -> {} (Gmail returns the
+        updated message, but callers here don't need the body); anything
+        else (OAuth) -> {} as before."""
+        self.posts.append((url, json if json is not None else data))
+        code = self._status_for(url)
+        if code >= 400:
+            return _FakeResponse({}, code)
+        if url.endswith("/messages/send"):
+            body = json or {}
+            return _FakeResponse({"id": "sent-1", "threadId": body.get("threadId")})
+        if url.endswith("/trash") or url.endswith("/modify"):
+            return _FakeResponse({})
         return _FakeResponse({})
 
 
