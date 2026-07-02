@@ -36,6 +36,9 @@ export function EmailScreen() {
   const google = (status?.providers || []).find((p) => p.provider === 'google') || null
   const connected = !!google
   const needsReauth = google?.status === 'needs_reauth'
+  // Raw scopes never reach the client (privacy decision from slice-1) — the
+  // server derives this boolean from the stored granted scopes (contract §A).
+  const canWrite = connected && !needsReauth && !!google?.can_write_email
 
   const groups = React.useMemo(() => GROUPS.map((g) => ({
     ...g, items: (inbox?.[g.key] || []),
@@ -101,6 +104,17 @@ export function EmailScreen() {
             <p className="kit-muted">Your authorization expired or was revoked. Reconnect to resume syncing your inbox.</p>
           </div>
           <Button variant="primary" size="sm" onClick={connect}>Reconnect</Button>
+        </Card>
+      )}
+
+      {connected && !needsReauth && !canWrite && (
+        <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <span className="kit-statline__ico" style={{ background: 'var(--sky-100)', color: 'var(--sky-600)' }}><Icon name="mail" /></span>
+          <div style={{ flex: 1 }}>
+            <p className="kit-row__title">Enable email actions</p>
+            <p className="kit-muted">ScuffedOS has read-only access. Re-connect Google and tick the Gmail checkboxes to allow replying, deleting, starring and labeling.</p>
+          </div>
+          <Button variant="primary" size="sm" onClick={connect}>Enable</Button>
         </Card>
       )}
 
