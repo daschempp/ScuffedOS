@@ -520,6 +520,22 @@ class LabelOut(BaseModel):
     type: str
 
 
+class SendEmail(BaseModel):
+    to: str
+    cc: str | None = None
+    subject: str
+    body: str
+
+
+class ReplyEmail(BaseModel):
+    body: str
+
+
+class ForwardEmail(BaseModel):
+    to: str
+    body: str
+
+
 class Inbox(BaseModel):
     needs_reply: List[EmailOut]
     fyi: List[EmailOut]

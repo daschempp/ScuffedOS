@@ -363,3 +363,182 @@ def test_get_labels_502_on_gmail_failure(client):
 
     assert res.status_code == 502
     assert res.json()["error"]["message"] == "Gmail rejected the action"
+
+
+# policy.default gives EmailMessage-compatible parses (get_content works);
+# the legacy compat32 default would lack .get_content().
+from email import message_from_bytes, policy
+
+
+def _parse_raw(raw: bytes):
+    return message_from_bytes(raw, policy=policy.default)
+
+
+def test_send_builds_rfc822_and_posts_via_provider(client):
+    fake = FakeEmailProvider(send_result={"id": "sent-42"})
+    providers.configure([fake])
+
+    res = client.post("/api/email/send", json={
+        "to": "priya@lighthouse.io", "cc": "team@lighthouse.io",
+        "subject": "Kickoff", "body": "See you Monday.",
+    })
+
+    assert res.status_code == 200
+    assert res.json() == {"id": "sent-42"}
+    assert len(fake.sent) == 1
+    raw, thread_id = fake.sent[0]
+    assert thread_id is None
+    msg = _parse_raw(raw)
+    assert msg["To"] == "priya@lighthouse.io"
+    assert msg["Cc"] == "team@lighthouse.io"
+    assert msg["Subject"] == "Kickoff"
+    assert msg.get_content().strip() == "See you Monday."
+
+
+def test_send_502_on_gmail_failure(client):
+    fake = FakeEmailProvider(raise_on_write=True)
+    providers.configure([fake])
+
+    res = client.post("/api/email/send", json={
+        "to": "a@x.com", "subject": "S", "body": "B",
+    })
+
+    assert res.status_code == 502
+    assert res.json()["error"]["message"] == "Gmail rejected the action"
+
+
+def test_reply_threads_and_prefixes_subject_with_re(client):
+    fake = FakeEmailProvider(
+        send_result={"id": "reply-1"},
+        meta={"message_id": "<orig@gmail.com>", "references": "<older@gmail.com>",
+              "subject": "Kickoff", "from_email": "priya@lighthouse.io"},
+    )
+    providers.configure([fake])
+    row = store.upsert_email(_email("m50", "Kickoff"), category="needs_reply", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/reply", json={"body": "Sounds good."})
+
+    assert res.status_code == 200
+    assert res.json() == {"id": "reply-1"}
+    assert fake.meta_fetched == ["m50"]
+    raw, thread_id = fake.sent[0]
+    assert thread_id == "t-m50"  # original row's thread_id, per _email() helper
+    msg = _parse_raw(raw)
+    assert msg["To"] == "priya@lighthouse.io"
+    assert msg["Subject"] == "Re: Kickoff"
+    assert msg["In-Reply-To"] == "<orig@gmail.com>"
+    assert msg["References"] == "<older@gmail.com> <orig@gmail.com>"
+    assert msg.get_content().strip() == "Sounds good."
+
+
+def test_reply_does_not_double_prefix_an_existing_re_subject(client):
+    fake = FakeEmailProvider(
+        meta={"message_id": "<orig@gmail.com>", "references": "",
+              "subject": "Re: Kickoff", "from_email": "priya@lighthouse.io"},
+    )
+    providers.configure([fake])
+    row = store.upsert_email(_email("m51", "Re: Kickoff"), category="needs_reply", summary=[])
+
+    client.post(f"/api/email/{row['id']}/reply", json={"body": "Ack."})
+
+    raw, _ = fake.sent[0]
+    msg = _parse_raw(raw)
+    assert msg["Subject"] == "Re: Kickoff"
+
+
+def test_reply_case_insensitive_re_prefix_check(client):
+    fake = FakeEmailProvider(
+        meta={"message_id": "<orig@gmail.com>", "references": "",
+              "subject": "RE: kickoff", "from_email": "priya@lighthouse.io"},
+    )
+    providers.configure([fake])
+    row = store.upsert_email(_email("m52", "RE: kickoff"), category="needs_reply", summary=[])
+
+    client.post(f"/api/email/{row['id']}/reply", json={"body": "Ack."})
+
+    raw, _ = fake.sent[0]
+    msg = _parse_raw(raw)
+    assert msg["Subject"] == "RE: kickoff"
+
+
+def test_reply_404_before_any_provider_call(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+
+    res = client.post("/api/email/999999/reply", json={"body": "Ack."})
+
+    assert res.status_code == 404
+    assert fake.sent == []
+    assert fake.meta_fetched == []
+
+
+def test_reply_502_on_gmail_failure(client):
+    fake = FakeEmailProvider(raise_on_write=True)
+    providers.configure([fake])
+    row = store.upsert_email(_email("m53", "Kickoff"), category="needs_reply", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/reply", json={"body": "Ack."})
+
+    assert res.status_code == 502
+    assert res.json()["error"]["message"] == "Gmail rejected the action"
+
+
+def test_forward_prefixes_subject_with_fwd_and_carries_no_threading_headers(client):
+    fake = FakeEmailProvider(
+        send_result={"id": "fwd-1"},
+        meta={"message_id": "<orig@gmail.com>", "references": "<older@gmail.com>",
+              "subject": "Kickoff", "from_email": "priya@lighthouse.io"},
+    )
+    providers.configure([fake])
+    row = store.upsert_email(_email("m54", "Kickoff"), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/forward",
+                      json={"to": "other@x.com", "body": "FYI, see below."})
+
+    assert res.status_code == 200
+    assert res.json() == {"id": "fwd-1"}
+    raw, thread_id = fake.sent[0]
+    assert thread_id is None  # forward does not thread
+    msg = _parse_raw(raw)
+    assert msg["To"] == "other@x.com"
+    assert msg["Subject"] == "Fwd: Kickoff"
+    assert msg["In-Reply-To"] is None
+    assert msg["References"] is None
+    assert msg.get_content().strip() == "FYI, see below."
+
+
+def test_forward_does_not_double_prefix_an_existing_fwd_subject(client):
+    fake = FakeEmailProvider(
+        meta={"message_id": "<orig@gmail.com>", "references": "",
+              "subject": "Fwd: Kickoff", "from_email": "priya@lighthouse.io"},
+    )
+    providers.configure([fake])
+    row = store.upsert_email(_email("m55", "Fwd: Kickoff"), category="fyi", summary=[])
+
+    client.post(f"/api/email/{row['id']}/forward", json={"to": "other@x.com", "body": "FYI."})
+
+    raw, _ = fake.sent[0]
+    msg = _parse_raw(raw)
+    assert msg["Subject"] == "Fwd: Kickoff"
+
+
+def test_forward_404_before_any_provider_call(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+
+    res = client.post("/api/email/999999/forward", json={"to": "a@x.com", "body": "FYI."})
+
+    assert res.status_code == 404
+    assert fake.sent == []
+
+
+def test_forward_502_on_gmail_failure(client):
+    fake = FakeEmailProvider(raise_on_write=True)
+    providers.configure([fake])
+    row = store.upsert_email(_email("m56", "Kickoff"), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/forward",
+                      json={"to": "other@x.com", "body": "FYI."})
+
+    assert res.status_code == 502
+    assert res.json()["error"]["message"] == "Gmail rejected the action"

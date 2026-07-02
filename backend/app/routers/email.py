@@ -13,7 +13,18 @@ import logging
 from fastapi import APIRouter, HTTPException, Response
 
 from .. import email_sync, providers
-from ..schemas import EmailDetail, EmailOut, FlagsPatch, Inbox, LabelOut, LabelsPatch
+from ..providers.google import _build_rfc822
+from ..schemas import (
+    EmailDetail,
+    EmailOut,
+    FlagsPatch,
+    ForwardEmail,
+    Inbox,
+    LabelOut,
+    LabelsPatch,
+    ReplyEmail,
+    SendEmail,
+)
 from ..store import store
 
 router = APIRouter(prefix="/api/email", tags=["email"])
@@ -44,6 +55,25 @@ def list_labels() -> list[dict]:
     except Exception as exc:  # noqa: BLE001 — any provider failure is a 502
         logger.warning("list_labels failed: %s", exc)
         raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+
+
+@router.post("/send")
+def send_email(payload: SendEmail) -> dict:
+    """Compose-new send. No local row is touched — sends are confirmed
+    straight through to Gmail; the Sent-folder truth lives in Gmail itself."""
+    impl = providers.get("google")
+    send_message = getattr(impl, "send_message", None)
+    if send_message is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    raw = _build_rfc822(
+        to=payload.to, cc=payload.cc, subject=payload.subject, body=payload.body,
+    )
+    try:
+        new_id = send_message(raw)
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502
+        logger.warning("send failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    return {"id": new_id}
 
 
 @router.get("/{email_id}", response_model=EmailDetail)
@@ -153,3 +183,68 @@ def set_email_labels(email_id: int, patch: LabelsPatch) -> dict:
     new_labels = list((current | set(patch.add)) - set(patch.remove))
     updated = store.set_email_labels(email_id, new_labels)
     return updated
+
+
+def _prefixed(subject: str, prefix: str) -> str:
+    """Add `prefix` (e.g. 'Re: ') unless subject already starts with it,
+    case-insensitively (contract: no double-Re/double-Fwd)."""
+    if subject.lower().startswith(prefix.lower()):
+        return subject
+    return f"{prefix}{subject}"
+
+
+@router.post("/{email_id}/reply")
+def reply_email(email_id: int, payload: ReplyEmail) -> dict:
+    """Reply threads on the original: In-Reply-To/References from Gmail's
+    live message-meta, thread_id from the stored row, subject 'Re: <orig>'
+    (no double-Re), to = the original sender. No local row changes — Gmail's
+    Sent folder is the source of truth for outbound mail."""
+    original = store.get_email(email_id)
+    if original is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    impl = providers.get(original["source"])
+    send_message = getattr(impl, "send_message", None)
+    get_message_meta = getattr(impl, "get_message_meta", None)
+    if send_message is None or get_message_meta is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    try:
+        meta = get_message_meta(original["source_id"])
+        subject = _prefixed(meta["subject"] or original["subject"], "Re: ")
+        references = f"{meta['references']} {meta['message_id']}".strip()
+        raw = _build_rfc822(
+            to=meta["from_email"], subject=subject, body=payload.body,
+            in_reply_to=meta["message_id"], references=references,
+        )
+        new_id = send_message(raw, thread_id=original["thread_id"])
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502
+        logger.warning("reply failed for email %s: %s", email_id, exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    return {"id": new_id}
+
+
+@router.post("/{email_id}/forward")
+def forward_email(email_id: int, payload: ForwardEmail) -> dict:
+    """Forward carries no threading headers (a fresh conversation for the new
+    recipient) and always prefixes 'Fwd: ' (no double-Fwd). To comes from the
+    payload, not the original sender."""
+    original = store.get_email(email_id)
+    if original is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    impl = providers.get(original["source"])
+    send_message = getattr(impl, "send_message", None)
+    get_message_meta = getattr(impl, "get_message_meta", None)
+    if send_message is None or get_message_meta is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    try:
+        meta = get_message_meta(original["source_id"])
+        subject = _prefixed(meta["subject"] or original["subject"], "Fwd: ")
+        raw = _build_rfc822(to=payload.to, subject=subject, body=payload.body)
+        new_id = send_message(raw)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502
+        logger.warning("forward failed for email %s: %s", email_id, exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    return {"id": new_id}
