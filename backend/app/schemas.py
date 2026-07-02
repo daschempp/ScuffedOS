@@ -499,6 +499,16 @@ class EmailDetail(EmailOut):
     body: str  # on-demand Gmail fetch (or a graceful fallback string)
 
 
+class FlagsPatch(BaseModel):
+    """None field = unchanged. unread=True adds Gmail's UNREAD label (marks
+    unread); unread=False removes it (marks read). starred=True adds
+    STARRED; starred=False removes it. See routers/email.py's add/remove
+    computation."""
+
+    unread: bool | None = None
+    starred: bool | None = None
+
+
 class Inbox(BaseModel):
     needs_reply: List[EmailOut]
     fyi: List[EmailOut]

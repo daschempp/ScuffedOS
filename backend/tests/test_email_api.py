@@ -176,3 +176,102 @@ def test_trash_email_502_on_gmail_failure_leaves_row_untouched(client):
     # App-wide error envelope (app/errors.py): {"error": {"code", "message"}}.
     assert res.json()["error"]["message"] == "Gmail rejected the action"
     assert store.get_email(row["id"]) is not None
+
+
+def test_flags_mark_read_removes_unread_label_and_updates_row(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+    row = store.upsert_email(_email("m30", "Ping", unread=True), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/flags", json={"unread": False})
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["unread"] is False
+    assert fake.modified == [("m30", [], ["UNREAD"])]
+
+
+def test_flags_mark_unread_adds_unread_label(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+    row = store.upsert_email(_email("m31", "Ping", unread=False), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/flags", json={"unread": True})
+
+    assert res.status_code == 200
+    assert res.json()["unread"] is True
+    assert fake.modified == [("m31", ["UNREAD"], [])]
+
+
+def test_flags_star_adds_starred_label(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+    row = store.upsert_email(_email("m32", "Ping"), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/flags", json={"starred": True})
+
+    assert res.status_code == 200
+    assert res.json()["starred"] is True
+    assert fake.modified == [("m32", ["STARRED"], [])]
+
+
+def test_flags_unstar_removes_starred_label(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+    row = store.upsert_email(_email("m33", "Ping"), category="fyi", summary=[])
+    store.set_email_flags(row["id"], starred=True)
+
+    res = client.post(f"/api/email/{row['id']}/flags", json={"starred": False})
+
+    assert res.status_code == 200
+    assert res.json()["starred"] is False
+    assert fake.modified == [("m33", [], ["STARRED"])]
+
+
+def test_flags_both_fields_combine_add_and_remove(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+    row = store.upsert_email(_email("m34", "Ping", unread=True), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/flags",
+                      json={"unread": False, "starred": True})
+
+    assert res.status_code == 200
+    assert fake.modified == [("m34", ["STARRED"], ["UNREAD"])]
+
+
+def test_flags_empty_patch_is_a_no_op_and_skips_the_provider_call(client):
+    # PINNED behavior: {} (both fields None/untouched) returns the current
+    # row unchanged and never calls modify_labels — there is nothing to
+    # confirm with Gmail, so no network round-trip is made.
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+    row = store.upsert_email(_email("m35", "Ping", unread=True), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/flags", json={})
+
+    assert res.status_code == 200
+    assert res.json()["unread"] is True
+    assert fake.modified == []
+
+
+def test_flags_404_before_any_provider_call(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+
+    res = client.post("/api/email/999999/flags", json={"unread": True})
+
+    assert res.status_code == 404
+    assert fake.modified == []
+
+
+def test_flags_502_on_gmail_failure_leaves_row_unchanged(client):
+    fake = FakeEmailProvider(raise_on_write=True)
+    providers.configure([fake])
+    row = store.upsert_email(_email("m36", "Ping", unread=True), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/flags", json={"unread": False})
+
+    assert res.status_code == 502
+    assert res.json()["error"]["message"] == "Gmail rejected the action"
+    assert store.get_email(row["id"])["unread"] is True

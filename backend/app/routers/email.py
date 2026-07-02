@@ -13,7 +13,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Response
 
 from .. import email_sync, providers
-from ..schemas import EmailDetail, Inbox
+from ..schemas import EmailDetail, EmailOut, FlagsPatch, Inbox
 from ..store import store
 
 router = APIRouter(prefix="/api/email", tags=["email"])
@@ -83,3 +83,36 @@ def trash_email(email_id: int) -> Response:
         raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
     store.delete_email(email_id)
     return Response(status_code=204)
+
+
+@router.post("/{email_id}/flags", response_model=EmailOut)
+def set_email_flags(email_id: int, patch: FlagsPatch) -> dict:
+    """Read/unread + star. unread=True -> add Gmail's UNREAD label;
+    unread=False -> remove UNREAD. starred=True -> add STARRED;
+    starred=False -> remove STARRED. Both None (an empty patch) is a no-op
+    that skips the Gmail call entirely and returns the row unchanged."""
+    row = store.get_email(email_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    add: list[str] = []
+    remove: list[str] = []
+    if patch.unread is True:
+        add.append("UNREAD")
+    elif patch.unread is False:
+        remove.append("UNREAD")
+    if patch.starred is True:
+        add.append("STARRED")
+    elif patch.starred is False:
+        remove.append("STARRED")
+    if add or remove:
+        impl = providers.get(row["source"])
+        modify_labels = getattr(impl, "modify_labels", None)
+        if modify_labels is None:
+            raise HTTPException(status_code=502, detail="Gmail rejected the action")
+        try:
+            modify_labels(row["source_id"], add=add, remove=remove)
+        except Exception as exc:  # noqa: BLE001 — any provider failure is a 502, never a local change
+            logger.warning("flags update failed for email %s: %s", email_id, exc)
+            raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    updated = store.set_email_flags(email_id, unread=patch.unread, starred=patch.starred)
+    return updated
