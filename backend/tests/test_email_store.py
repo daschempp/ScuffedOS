@@ -44,6 +44,22 @@ def test_upsert_email_creates_row_with_triage():
     assert isinstance(out["when"], str) and out["when"]
 
 
+def test_upsert_email_writes_through_starred_and_label_ids():
+    out = store.upsert_email(
+        _email(starred=True, label_ids=["INBOX", "STARRED"]),
+        category="fyi", summary=["x"],
+    )
+    assert out["starred"] is True
+    assert out["label_ids"] == ["INBOX", "STARRED"]
+    # A later sync pass re-derives from Gmail's authoritative label list.
+    again = store.upsert_email(
+        _email(starred=False, label_ids=["INBOX"]),
+        category="fyi", summary=["x"],
+    )
+    assert again["starred"] is False
+    assert again["label_ids"] == ["INBOX"]
+
+
 def test_upsert_email_is_idempotent_by_source_id():
     store.upsert_email(_email(), category="fyi", summary=["first"])
     again = store.upsert_email(

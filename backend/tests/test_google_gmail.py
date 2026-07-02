@@ -43,6 +43,8 @@ def test_fetch_messages_lists_inbox_then_maps_each_message():
     # Date header -> aware UTC (08:24 -0700 == 15:24 UTC).
     assert e.received_at == datetime(2026, 6, 30, 15, 24, tzinfo=timezone.utc)
     assert "design review" in e.body_excerpt
+    assert e.starred is False
+    assert e.label_ids == ["INBOX", "UNREAD"]
 
 
 def test_fetch_messages_sends_inbox_label_and_backfill_count():
@@ -67,6 +69,16 @@ def test_bare_email_from_header_has_empty_from_name():
     assert e.from_email == "noreply@service.com"
     assert e.from_name == ""
     assert e.unread is False  # no UNREAD label
+
+
+def test_fetch_messages_maps_starred_label():
+    http = FakeGmailHTTP(messages={"m1": gmail_message(
+        "m1", from_hdr="a@x.com", subject="s",
+        date_hdr="Mon, 30 Jun 2026 08:00:00 +0000",
+        label_ids=["INBOX", "STARRED"])})
+    e = _provider(http).fetch_messages(since=None)[0]
+    assert e.starred is True
+    assert e.label_ids == ["INBOX", "STARRED"]
 
 
 def test_body_excerpt_truncated_to_about_2kb():

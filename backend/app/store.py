@@ -98,7 +98,7 @@ _WORKOUT_FIELDS = {
 
 _EMAIL_FIELDS = (
     "thread_id", "from_name", "from_email", "subject", "snippet",
-    "received_at", "unread",
+    "received_at", "unread", "starred", "label_ids",
 )
 
 # The four vitals shown under the rings — fixed layout; values + deltas
@@ -412,6 +412,8 @@ def _email_dict(e: Email) -> dict:
         "snippet": e.snippet,
         "received_at": received,
         "unread": e.unread,
+        "starred": e.starred,
+        "label_ids": e.label_ids or [],
         "category": e.category,
         "summary": e.summary_json or [],
         "triaged_at": aware_utc(e.triaged_at),

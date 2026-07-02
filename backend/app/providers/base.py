@@ -71,6 +71,8 @@ class NormalizedEmail:
     received_at: datetime                # aware UTC, sort key
     unread: bool = False
     body_excerpt: str = ""               # bounded ~2 KB plain-text, triage-only, NOT persisted
+    starred: bool = False                # 'STARRED' in Gmail labelIds
+    label_ids: list = field(default_factory=list)   # Gmail labelIds, sync-authoritative
 
 
 @runtime_checkable

@@ -384,6 +384,8 @@ class GoogleProvider:
             received_at=_parse_date(_header(headers, "Date")),
             unread="UNREAD" in label_ids,
             body_excerpt=_excerpt(_walk_plaintext(payload)),
+            starred="STARRED" in label_ids,
+            label_ids=label_ids,
         )
 
     def get_message(self, source_id: str) -> str:

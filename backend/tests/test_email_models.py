@@ -18,8 +18,9 @@ def test_normalized_email_fields_and_defaults():
     assert field_names == {
         "source", "source_id", "thread_id", "from_name", "from_email",
         "subject", "snippet", "received_at", "unread", "body_excerpt",
+        "starred", "label_ids",
     }
-    # unread / body_excerpt are the only optional fields.
+    # unread / body_excerpt / starred / label_ids are the only optional fields.
     e = NormalizedEmail(
         source="google", source_id="g-1", thread_id="t-1",
         from_name="Priya", from_email="priya@example.com",
@@ -28,6 +29,8 @@ def test_normalized_email_fields_and_defaults():
     )
     assert e.unread is False
     assert e.body_excerpt == ""
+    assert e.starred is False
+    assert e.label_ids == []
     # Provided values round-trip.
     e2 = NormalizedEmail(
         source="google", source_id="g-2", thread_id="t-2",
@@ -35,9 +38,12 @@ def test_normalized_email_fields_and_defaults():
         subject="Lunch", snippet="Thursday?",
         received_at=datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
         unread=True, body_excerpt="Hey, are you free Thursday for lunch?",
+        starred=True, label_ids=["INBOX", "STARRED"],
     )
     assert e2.unread is True
     assert e2.body_excerpt.startswith("Hey")
+    assert e2.starred is True
+    assert e2.label_ids == ["INBOX", "STARRED"]
 
 
 def test_emails_table_and_columns_exist():

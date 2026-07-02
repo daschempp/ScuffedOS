@@ -487,6 +487,8 @@ class EmailOut(BaseModel):
     snippet: str
     received_at: datetime
     unread: bool
+    starred: bool = False
+    label_ids: List[str] = []
     category: EmailCategory | None  # None = untriaged (retry next sync)
     summary: List[str]              # [] when untriaged
     when: str                       # derived display, e.g. "8:24am" / "Yesterday"
