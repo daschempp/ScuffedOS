@@ -30,6 +30,15 @@ export function EmailScreen() {
   const [labels, setLabels] = React.useState(null)   // LabelOut[] | null = not loaded yet
   const [labelMenuOpen, setLabelMenuOpen] = React.useState(false)
   const [actionError, setActionError] = React.useState('')  // transient inline error, cleared on next successful action
+  const [composeTo, setComposeTo] = React.useState('')
+  const [composeSubject, setComposeSubject] = React.useState('')
+  const [composeBody, setComposeBody] = React.useState('')
+  const [composeError, setComposeError] = React.useState('')  // separate from actionError — scoped to the overlay, never clears the box
+  const [aiOpen, setAiOpen] = React.useState(false)
+  const [aiInstructions, setAiInstructions] = React.useState('')
+  const [aiDrafted, setAiDrafted] = React.useState(false)  // false = "Draft", true = "Regenerate"
+  const [aiBusy, setAiBusy] = React.useState(false)
+  const [sending, setSending] = React.useState(false)
 
   const refresh = React.useCallback(() => {
     api.oauthStatus().then((s) => { if (s) setStatus(s) }).catch(() => {})
@@ -124,6 +133,77 @@ export function EmailScreen() {
     })
   }
 
+  // Quote-block divider format is frozen by contract §I: reply/forward prefill
+  // quotes the already-loaded detail.body below this exact divider line.
+  const quoteBlock = (d) => `\n\n--- On ${d.when}, ${d.from_name || d.from_email} wrote: ---\n${d.body || ''}`
+
+  const openCompose = (mode) => {
+    setComposeError('')
+    setAiOpen(false); setAiInstructions(''); setAiDrafted(false)
+    if (mode === 'reply' && detail) {
+      setComposeTo(detail.from_email)
+      setComposeSubject(detail.subject?.toLowerCase().startsWith('re:') ? detail.subject : `Re: ${detail.subject || '(no subject)'}`)
+      setComposeBody(quoteBlock(detail))
+    } else if (mode === 'forward' && detail) {
+      setComposeTo('')
+      setComposeSubject(detail.subject?.toLowerCase().startsWith('fwd:') ? detail.subject : `Fwd: ${detail.subject || '(no subject)'}`)
+      setComposeBody(quoteBlock(detail))
+    } else {
+      setComposeTo(''); setComposeSubject(''); setComposeBody('')
+    }
+    setComposeMode(mode)
+  }
+  const closeCompose = () => {
+    setComposeMode(null); setComposeTo(''); setComposeSubject(''); setComposeBody('')
+    setComposeError(''); setAiOpen(false); setAiInstructions(''); setAiDrafted(false)
+  }
+  const draftWithAi = () => {
+    if (!aiInstructions.trim()) return
+    setAiBusy(true)
+    // notes must be only what the user has actually typed — for reply/forward,
+    // composeBody was seeded with the full quote block (quoteBlock(detail)),
+    // which is redundant with (and differently formatted from) the same
+    // content the backend already fetches live via original.body_excerpt
+    // (contract §G). Strip everything from the quote divider onward before
+    // sending, matching the pre-quote-only framing used when the response
+    // handler below re-appends the quote after drafting.
+    const notes = composeBody.split(/\n\n--- On .+ wrote: ---\n/)[0]
+    api.emailDraft({
+      instructions: aiInstructions,
+      notes,
+      mode: composeMode,
+      email_id: composeMode !== 'new' && detail ? detail.id : null,
+    }).then((r) => {
+      setAiBusy(false)
+      if (!r || typeof r.draft !== 'string') { setComposeError("Couldn't draft — try again."); return }
+      // Pin (contract §I / spec §8): the draft replaces only the pre-quote
+      // section; the quote block (if any) stays appended below it.
+      const quote = (composeMode === 'reply' || composeMode === 'forward') && detail ? quoteBlock(detail) : ''
+      setComposeBody(r.draft + quote)
+      setAiDrafted(true)
+    }).catch(() => { setAiBusy(false); setComposeError("Couldn't draft — try again.") })
+  }
+  const sendCompose = () => {
+    if (!composeTo.trim() && composeMode !== 'reply') { setComposeError('To is required.'); return }
+    if (!composeSubject.trim() && composeMode !== 'reply') { setComposeError('Subject is required.'); return }
+    setSending(true)
+    setComposeError('')
+    let promise
+    if (composeMode === 'reply' && detail) promise = api.emailReply(detail.id, { body: composeBody })
+    else if (composeMode === 'forward' && detail) promise = api.emailForward(detail.id, { to: composeTo, body: composeBody })
+    else promise = api.emailSend({ to: composeTo, subject: composeSubject, body: composeBody })
+    promise.then(() => {
+      setSending(false)
+      closeCompose()
+      refresh()
+    }).catch((err) => {
+      // Failure keeps EVERYTHING intact (contract §Global Constraints) — only
+      // composeError is set; composeTo/composeSubject/composeBody untouched.
+      setSending(false)
+      setComposeError(err?.message || 'Send failed. Your draft is still here — try again.')
+    })
+  }
+
   // —— not connected: single CTA card ——
   if (status && !connected && !needsReauth) {
     return (
@@ -148,9 +228,55 @@ export function EmailScreen() {
     border: 'none', outline: 'none', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)',
     color: 'var(--text-strong)', cursor: 'pointer',
   }
+  const composeInputStyle = {
+    padding: '8px 11px', borderRadius: 'var(--radius-sm)', background: 'var(--surface-sunken)',
+    border: 'none', outline: 'none', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)',
+    color: 'var(--text-strong)', width: '100%',
+  }
+  const composeTextareaStyle = {
+    padding: '10px 12px', borderRadius: 'var(--radius-md)', background: 'var(--surface-sunken)',
+    border: 'none', outline: 'none', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)',
+    color: 'var(--text-strong)', width: '100%', resize: 'vertical', lineHeight: 1.5,
+  }
 
   return (
     <div className="kit-stack" style={{ gap: 'var(--gutter)' }}>
+      {canWrite && composeMode != null && (
+        <Card variant="flat" title={composeMode === 'reply' ? 'Reply' : composeMode === 'forward' ? 'Forward' : 'New message'}
+          action={<IconButton label="Close" size="sm" onClick={closeCompose}><Icon name="x" /></IconButton>}>
+          <div className="kit-stack" style={{ gap: 10 }}>
+            <div className="kit-field">
+              <span className="kit-field__label">To</span>
+              {composeMode === 'reply' ? (
+                <p className="kit-muted" style={{ margin: 0 }}>{composeTo}</p>
+              ) : (
+                <input value={composeTo} onChange={(e) => setComposeTo(e.target.value)} placeholder="name@example.com" style={composeInputStyle} />
+              )}
+            </div>
+            {/* cc omitted from the UI this slice — the API supports it (SendEmail.cc), not exposed here. */}
+            <div className="kit-field">
+              <span className="kit-field__label">Subject</span>
+              <input value={composeSubject} onChange={(e) => setComposeSubject(e.target.value)} placeholder="Subject" style={composeInputStyle} disabled={composeMode === 'reply'} />
+            </div>
+            <div className="kit-inline" style={{ gap: 8 }}>
+              <IconButton label={aiDrafted ? 'Regenerate with AI' : 'Draft with AI'} size="sm" onClick={() => setAiOpen((v) => !v)}><Icon name="sparkles" /></IconButton>
+              {aiOpen && (
+                <>
+                  <input value={aiInstructions} onChange={(e) => setAiInstructions(e.target.value)} placeholder="What should it say?" style={{ ...composeInputStyle, flex: 1 }} />
+                  <Button variant="soft" size="sm" onClick={draftWithAi} disabled={aiBusy || !aiInstructions.trim()}>{aiBusy ? 'Drafting…' : aiDrafted ? 'Regenerate' : 'Draft'}</Button>
+                </>
+              )}
+            </div>
+            <textarea className="kit-desc" value={composeBody} onChange={(e) => setComposeBody(e.target.value)} rows={10} placeholder="Write your message…" style={composeTextareaStyle} />
+            {composeError && <p className="kit-muted" style={{ color: 'var(--clay-600)' }}>{composeError}</p>}
+            <div className="kit-inline" style={{ gap: 8, justifyContent: 'flex-end' }}>
+              <Button variant="ghost" size="sm" onClick={closeCompose}>Cancel</Button>
+              <Button variant="primary" size="sm" iconLeft={<Icon name="send" />} onClick={sendCompose} disabled={sending}>{sending ? 'Sending…' : 'Send'}</Button>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {needsReauth && (
         <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <span className="kit-statline__ico" style={{ background: 'var(--clay-100)', color: 'var(--clay-600)' }}><Icon name="alert-triangle" /></span>
@@ -196,6 +322,7 @@ export function EmailScreen() {
                   <option value="sender">Sender</option>
                   <option value="unread">Unread first</option>
                 </select>
+                {canWrite && <Button variant="soft" size="sm" iconLeft={<Icon name="pen-line" />} onClick={() => openCompose('new')}>Compose</Button>}
                 <Button variant="soft" size="sm" iconLeft={<Icon name="refresh-cw" />} onClick={sync}>Sync</Button>
               </div>
             }>
@@ -229,8 +356,8 @@ export function EmailScreen() {
                 <Card eyebrow={`${detail.from_name || detail.from_email}${detail.from_email && detail.from_name ? ` · ${detail.from_email}` : ''}`} title={detail.subject || '(no subject)'}>
                   {canWrite && (
                     <div className="kit-inline" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 12, position: 'relative' }}>
-                      <Button variant="soft" size="sm" iconLeft={<Icon name="reply" />} onClick={() => setComposeMode('reply')}>Reply</Button>
-                      <Button variant="soft" size="sm" iconLeft={<Icon name="forward" />} onClick={() => setComposeMode('forward')}>Forward</Button>
+                      <Button variant="soft" size="sm" iconLeft={<Icon name="reply" />} onClick={() => openCompose('reply')}>Reply</Button>
+                      <Button variant="soft" size="sm" iconLeft={<Icon name="forward" />} onClick={() => openCompose('forward')}>Forward</Button>
                       <IconButton label={detail.starred ? 'Unstar' : 'Star'} size="sm" onClick={() => toggleStar(detail)}>
                         <Icon name="star" style={detail.starred ? { color: 'var(--honey-600)', fill: 'var(--honey-600)' } : undefined} />
                       </IconButton>
