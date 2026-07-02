@@ -1,11 +1,12 @@
-"""Vendor-neutral fitness seam: normalized dataclasses + Protocol + AuthError.
+"""Vendor-neutral provider seam: normalized dataclasses + Protocols + AuthError.
 
-No provider field names (WHOOP's ``recovery_score`` etc.) leak past the
-provider module — every provider maps its payloads into these dataclasses,
-and the store/sync engine only ever see these. ``AuthError`` is the typed
-auth/refresh failure the sync engine catches to flip a provider to
-``needs_reauth``; the real ``WhoopProvider`` raises a ``WhoopAuthError``
-subclass of it.
+M5 split the single FitnessProvider Protocol into a shared OAuthProvider base
+(the connect/callback/disconnect plumbing the shared router drives) plus two
+domain protocols: FitnessProvider (WHOOP-style pull data) and EmailProvider
+(Gmail-style message reads). No provider field names leak past the provider
+module — every provider maps its payloads into these dataclasses. ``AuthError``
+is the typed auth/refresh failure the sync engines catch to flip a provider to
+``needs_reauth`` (the real providers raise WhoopAuthError / GoogleAuthError).
 """
 from __future__ import annotations
 
@@ -15,9 +16,9 @@ from typing import Literal, Protocol, runtime_checkable
 
 
 class AuthError(Exception):
-    """Auth/refresh failure raised by a provider. ``fitness_sync.tick`` catches
-    ``except AuthError`` and flips the provider to ``status='needs_reauth'``.
-    The real provider's ``WhoopAuthError`` subclasses this."""
+    """Auth/refresh failure raised by a provider. The sync engines catch
+    ``except AuthError`` and flip the provider to ``status='needs_reauth'``.
+    The real providers' WhoopAuthError / GoogleAuthError subclass this."""
 
 
 @dataclass
@@ -58,15 +59,46 @@ class NormalizedWorkout:
     max_hr: int | None = None
 
 
+@dataclass
+class NormalizedEmail:
+    source: str                          # 'google'
+    source_id: str                       # gmail message id
+    thread_id: str
+    from_name: str
+    from_email: str
+    subject: str
+    snippet: str                         # gmail preview
+    received_at: datetime                # aware UTC, sort key
+    unread: bool = False
+    body_excerpt: str = ""               # bounded ~2 KB plain-text, triage-only, NOT persisted
+
+
 @runtime_checkable
-class FitnessProvider(Protocol):
-    name: str                            # 'whoop'
-    kind: Literal["pull", "push"]        # whoop/oura='pull'; apple_health='push'
+class OAuthProvider(Protocol):
+    """The connect/callback/disconnect plumbing the shared oauth router drives.
+    Both FitnessProvider and EmailProvider extend it."""
+    name: str                            # 'whoop' | 'google'
 
     def authorize_url(self, state: str) -> str: ...
     def exchange_code(self, code: str) -> Tokens: ...
     def refresh(self, tokens: Tokens) -> Tokens: ...
+    def revoke(self, tokens: Tokens) -> None: ...
+    def set_tokens(self, tokens: Tokens | None) -> None: ...
+    def success_redirect(self) -> str: ...      # screen to land on after connect
+    def on_connected(self) -> None: ...          # post-connect hook (kick a sync)
+    def on_disconnect(self) -> None: ...         # delete this provider's domain data
+
+
+@runtime_checkable
+class FitnessProvider(OAuthProvider, Protocol):
+    kind: Literal["pull", "push"]        # whoop/oura='pull'; apple_health='push'
+
     def fetch_recovery(self, since: datetime | None) -> list[NormalizedSnapshot]: ...
     def fetch_sleep(self, since: datetime | None) -> list[NormalizedSnapshot]: ...
     def fetch_workouts(self, since: datetime | None) -> list[NormalizedWorkout]: ...
-    def revoke(self, tokens: Tokens) -> None: ...
+
+
+@runtime_checkable
+class EmailProvider(OAuthProvider, Protocol):
+    def fetch_messages(self, since: datetime | None) -> list[NormalizedEmail]: ...
+    def get_message(self, source_id: str) -> str: ...   # full plain-text body, on demand

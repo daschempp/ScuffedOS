@@ -79,5 +79,18 @@ class Settings(BaseSettings):
     fitness_sync_seconds: int = 1800            # 30 min
     whoop_backfill_days: int = 30               # first-connect backfill window
 
+    # Google / Gmail (M5). OAuth credentials come from a Google Cloud "Web
+    # application" OAuth 2.0 client; the redirect URI must be registered there
+    # verbatim. Unlike WHOOP, Google permits http://localhost redirect URIs, so
+    # local validation needs no tunnel. Tokens live in provider_accounts, never here.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+
+    # Background email-sync (mirrors fitness_sync_enabled / fitness_sync_seconds).
+    email_sync_enabled: bool = True
+    email_sync_seconds: int = 900               # 15 min
+    email_backfill_count: int = 50              # first-connect messages.list maxResults
+
 
 settings = Settings()

@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta
 
-from . import fitness_sync, food_db, memory_engine, recurrence
+from . import fitness_sync, food_db, memory_engine, providers, recurrence
 from .seeds import FINANCE_SUMMARY
 from .store import store
 
@@ -90,6 +90,11 @@ def _nutrition_action(title: str, meta: str) -> dict:
 def _fitness_action(title: str, meta: str) -> dict:
     return {"icon": "activity", "title": title, "meta": meta,
             "cta": "View fitness", "screen": "fitness"}
+
+
+def _email_action(title: str, meta: str) -> dict:
+    return {"icon": "mail", "title": title, "meta": meta,
+            "cta": "Open email", "screen": "email"}
 
 
 # ---- executors (each returns (result, action | None)) ----------------------
@@ -425,6 +430,42 @@ def _sync_fitness(args: dict):
     )
 
 
+# ---- email (real from M5, read-only) ----------------------------------------
+
+_EMAIL_BODY_UNAVAILABLE = "Message body is unavailable right now."
+
+
+def _compact_email(e: dict) -> dict:
+    """List item for the model — sender/subject/summary, never a body."""
+    return {"id": e["id"], "from_name": e["from_name"], "from_email": e["from_email"],
+            "subject": e["subject"], "snippet": e["snippet"], "unread": e["unread"],
+            "category": e["category"], "summary": e["summary"], "when": e["when"]}
+
+
+def _get_inbox(args: dict):
+    inbox = store.inbox()
+    return {"needs_reply": [_compact_email(e) for e in inbox["needs_reply"]],
+            "fyi": [_compact_email(e) for e in inbox["fyi"]],
+            "needs_reply_count": inbox["needs_reply_count"]}, None
+
+
+def _get_email(args: dict):
+    row = store.get_email(args["email_id"])
+    if row is None:
+        return {"error": f"No email with id {args['email_id']}."}, None
+    body = _EMAIL_BODY_UNAVAILABLE
+    impl = providers.get(row["source"])
+    get_message = getattr(impl, "get_message", None)
+    if get_message is not None:
+        try:
+            body = get_message(row["source_id"])
+        except Exception:  # noqa: BLE001 — body fetch is best-effort
+            body = _EMAIL_BODY_UNAVAILABLE
+    return {"id": row["id"], "from_name": row["from_name"], "from_email": row["from_email"],
+            "subject": row["subject"], "category": row["category"],
+            "summary": row["summary"], "when": row["when"], "body": body}, None
+
+
 # ---- task reminders (real from M3) -------------------------------------------
 
 def _add_reminder(args: dict):
@@ -660,6 +701,16 @@ TOOLS: list[dict] = [
      "description": "Pull the latest WHOOP data now (recovery, sleep, workouts). Call when the user says their numbers look stale or right after they ask you to act on today's recovery and the data might be old. Returns how many records changed.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
      "run": _sync_fitness},
+    {"name": "get_inbox",
+     "description": "Read the triaged inbox — what needs a reply and FYI items, with AI summaries. Call when the user asks about their email/inbox or what needs a response.",
+     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+     "run": _get_inbox},
+    {"name": "get_email",
+     "description": "Read one email: sender, subject, AI summary and the full body (fetched live). Call after get_inbox to open a specific message by id.",
+     "input_schema": {"type": "object", "properties": {
+         "email_id": {"type": "integer"}},
+         "required": ["email_id"], "additionalProperties": False},
+     "run": _get_email},
 ]
 
 DEFINITIONS = [{k: t[k] for k in ("name", "description", "input_schema")} for t in TOOLS]

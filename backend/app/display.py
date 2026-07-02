@@ -122,3 +122,18 @@ def reminder_label(remind_at: datetime, label: str = "") -> str:
 def meal_time_display(slot: str, logged_at: datetime) -> str:
     """'Breakfast · 8:10am' — the meal row's time line."""
     return f"{slot} · {_local_clock(logged_at)}"
+
+
+def email_when_display(received_at: datetime, now: datetime | None = None) -> str:
+    """The inbox row's compact relative timestamp: today shows the clock
+    time ('8:24am'), yesterday shows 'Yesterday', older shows 'Jun 5'.
+    Derived on read from the stored aware-UTC received_at (never stored)."""
+    now = _aware(now) if now else datetime.now(timezone.utc)
+    received = _aware(received_at)
+    today = now.astimezone().date()
+    day = received.astimezone().date()
+    if day == today:
+        return _local_clock(received)
+    if day == today - timedelta(days=1):
+        return "Yesterday"
+    return received.astimezone().strftime("%b %-d")

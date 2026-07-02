@@ -24,6 +24,7 @@ from .db import make_engine, make_session_factory
 from .display import (
     aware_utc,
     clock,
+    email_when_display,
     event_when_display,
     meal_time_display,
     relative_when,
@@ -34,6 +35,7 @@ from .models import (
     Conversation,
     ConversationMessage,
     DailySnapshot,
+    Email,
     Event,
     Habit,
     HabitCompletion,
@@ -47,7 +49,7 @@ from .models import (
     Workout,
     utcnow,
 )
-from .providers.base import NormalizedSnapshot, NormalizedWorkout, Tokens
+from .providers.base import NormalizedEmail, NormalizedSnapshot, NormalizedWorkout, Tokens
 
 _TASK_FIELDS = {
     "label", "done", "group", "deadline", "prio", "list", "description",
@@ -93,6 +95,11 @@ _WORKOUT_FIELDS = {
     "name", "sport", "started_at", "duration_min", "strain",
     "calories", "avg_hr", "max_hr",
 }
+
+_EMAIL_FIELDS = (
+    "thread_id", "from_name", "from_email", "subject", "snippet",
+    "received_at", "unread",
+)
 
 # The four vitals shown under the rings — fixed layout; values + deltas
 # derive on read from the day's snapshot (None when absent).
@@ -373,6 +380,28 @@ def _workout_dict(w: Workout) -> dict:
         "when": event_when_display(started, end),
         "icon": icon,
         "tint": tint,
+    }
+
+
+def _email_dict(e: Email) -> dict:
+    received = aware_utc(e.received_at)
+    return {
+        "id": e.id,
+        "source": e.source,
+        "source_id": e.source_id,
+        "thread_id": e.thread_id,
+        "from_name": e.from_name,
+        "from_email": e.from_email,
+        "subject": e.subject,
+        "snippet": e.snippet,
+        "received_at": received,
+        "unread": e.unread,
+        "category": e.category,
+        "summary": e.summary_json or [],
+        "triaged_at": aware_utc(e.triaged_at),
+        "when": email_when_display(received),
+        "created_at": aware_utc(e.created_at),
+        "updated_at": aware_utc(e.updated_at),
     }
 
 
@@ -1194,6 +1223,121 @@ class Store:
             ):
                 s.delete(w)
             return existed
+
+    # ---- emails (M5) ----
+    def _email_row(self, s: Session, source: str, source_id: str) -> Email | None:
+        from .config import settings
+
+        return s.scalars(
+            select(Email)
+            .where(Email.owner == settings.owner)
+            .where(Email.source == source)
+            .where(Email.source_id == source_id)
+        ).first()
+
+    def email_exists(self, source: str, source_id: str) -> bool:
+        """Sync skips messages.get + triage for ids already stored (idempotency)."""
+        with self._session() as s:
+            return self._email_row(s, source, source_id) is not None
+
+    def email_triaged(self, source: str, source_id: str) -> bool:
+        """True iff a row exists for (owner, source, source_id) AND it has been
+        triaged (category is not None). The sync skips fully-triaged rows but
+        RE-triages rows that are stored-but-untriaged (category IS NULL)."""
+        with self._session() as s:
+            row = self._email_row(s, source, source_id)
+            return row is not None and row.category is not None
+
+    @_retry_integrity
+    def upsert_email(
+        self,
+        email: NormalizedEmail,
+        category: str | None,
+        summary: list[str] | None,
+    ) -> dict:
+        """Get-or-create by (owner, source, source_id); writes metadata every
+        pass. Triage fields (category/summary_json/triaged_at) are written
+        ONLY when category is not None — a triage failure passes category=None,
+        leaving the row untriaged for retry (and never clobbering prior good
+        triage). Body is never persisted."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._email_row(s, email.source, email.source_id)
+            if row is None:
+                row = Email(
+                    owner=settings.owner,
+                    source=email.source,
+                    source_id=email.source_id,
+                )
+                s.add(row)
+            for field in _EMAIL_FIELDS:
+                value = getattr(email, field)
+                if field == "received_at":
+                    value = _to_utc(value)
+                setattr(row, field, value)
+            if category is not None:
+                row.category = category
+                row.summary_json = summary
+                row.triaged_at = utcnow()
+            s.flush()
+            return _email_dict(row)
+
+    def inbox(self) -> dict:
+        """The two-pane inbox: needs_reply / fyi / untriaged lists (each sorted
+        received_at desc) + the needs_reply count and the unread count.
+        Always served from the emails table — never a live Gmail call."""
+        from .config import settings
+
+        with self._session() as s:
+            rows = s.scalars(
+                select(Email)
+                .where(Email.owner == settings.owner)
+                .order_by(Email.received_at.desc())
+            ).all()
+        needs_reply, fyi, untriaged = [], [], []
+        unread_count = 0
+        for r in rows:
+            if r.unread:
+                unread_count += 1
+            d = _email_dict(r)
+            if r.category == "needs_reply":
+                needs_reply.append(d)
+            elif r.category == "fyi":
+                fyi.append(d)
+            else:
+                untriaged.append(d)
+        return {
+            "needs_reply": needs_reply,
+            "fyi": fyi,
+            "untriaged": untriaged,
+            "needs_reply_count": len(needs_reply),
+            "unread_count": unread_count,
+        }
+
+    def get_email(self, email_id: int) -> dict | None:
+        with self._session() as s:
+            row = s.get(Email, email_id)
+            return _email_dict(row) if row is not None else None
+
+    def delete_email_data(self, source: str) -> bool:
+        """Disconnect hook (GoogleProvider.on_disconnect): delete emails where
+        (owner, source). Returns True iff any row was deleted. Separate from
+        delete_provider_data (which owns the provider_accounts row + fitness
+        tables); the shared router deletes the account, this deletes the domain
+        data."""
+        from .config import settings
+
+        deleted = False
+        with self._session() as s, s.begin():
+            for row in s.scalars(
+                select(Email)
+                .where(Email.owner == settings.owner)
+                .where(Email.source == source)
+            ):
+                s.delete(row)
+                deleted = True
+        return deleted
 
     # ---- snapshots (derive-on-read) ----
     @_retry_integrity

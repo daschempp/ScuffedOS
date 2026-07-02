@@ -166,6 +166,24 @@ class WhoopProvider:
         except Exception as exc:
             log.warning("WHOOP revoke failed (continuing): %s", exc)
 
+    # ---- OAuthProvider hooks (M5: the shared oauth router drives these) ----
+    def success_redirect(self) -> str:
+        """Screen the SPA lands on after a successful WHOOP connect."""
+        return "/?screen=fitness&connected=whoop"
+
+    def on_connected(self) -> None:
+        """Post-connect hook: kick an immediate fitness sync (backfill). The
+        fresh account has no last_sync_at, so tick() backfills on this pass."""
+        from .. import fitness_sync
+        fitness_sync.tick()
+
+    def on_disconnect(self) -> None:
+        """Disconnect hook: delete WHOOP's daily_snapshots/workouts (source=
+        'whoop'); manual workouts are preserved. Idempotent with the shared
+        router's own delete_provider_data call (row already gone → no-op)."""
+        from ..store import store
+        store.delete_provider_data(self.name)
+
     def fetch_profile(self, tokens: Tokens) -> str | None:
         """GET the WHOOP basic profile and return the provider user id.
 

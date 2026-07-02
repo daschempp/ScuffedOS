@@ -159,19 +159,30 @@ export const api = {
   putTargets: (p) => request('/api/nutrition/targets', { method: 'PUT', body: JSON.stringify(p) }),
   searchFoods: (q) => request(`/api/nutrition/foods?q=${encodeURIComponent(q)}`),
 
-  // Fitness (M4) — WHOOP connection + normalized reads/writes. Reads never
-  // touch a live WHOOP call; they come straight from the normalized tables, so
-  // the screen works while sync is mid-flight or WHOOP is down. Tokens never
-  // cross this boundary — status/today/workouts responses omit them.
-  fitnessStatus: () => request('/api/fitness/status'),
+  // Shared OAuth (M5) — connect/status/disconnect are provider-agnostic and
+  // live under /api/oauth/*. The fitness DATA reads/writes below stay on
+  // /api/fitness/*. Tokens never cross this boundary.
+  oauthStatus: () => request('/api/oauth/status'),
+  oauthConnect: (provider) => request(`/api/oauth/connect/${provider}`),
+  oauthDisconnect: (provider) => request(`/api/oauth/disconnect/${provider}`, { method: 'POST' }),
+
+  // Fitness (M4) — normalized reads/writes. Reads never touch a live WHOOP
+  // call; they come straight from the normalized tables, so the screen works
+  // while sync is mid-flight or WHOOP is down.
   fitnessToday: (isoDate) => request(`/api/fitness/today${isoDate ? `?date=${isoDate}` : ''}`),
   fitnessWeek: (isoDate) => request(`/api/fitness/week${isoDate ? `?date=${isoDate}` : ''}`),
   fitnessWorkouts: (limit) => request(`/api/fitness/workouts${limit != null ? `?limit=${limit}` : ''}`),
-  fitnessConnect: (provider) => request(`/api/fitness/connect/${provider}`),
-  fitnessDisconnect: (provider) => request(`/api/fitness/disconnect/${provider}`, { method: 'POST' }),
   logWorkout: (w) => request('/api/fitness/workouts', { method: 'POST', body: JSON.stringify(w) }),
   deleteWorkout: (id) => request(`/api/fitness/workouts/${id}`, { method: 'DELETE' }),
   fitnessSync: () => request('/api/fitness/sync', { method: 'POST' }),
+
+  // Email (M5) — the inbox/detail come straight from the emails table server-
+  // side (list never triggers a live Gmail call). Only emailDetail fetches the
+  // body live, with a graceful fallback string if Gmail is unreachable. Bodies
+  // are never persisted. emailSync kicks a foreground sync pass.
+  emailInbox: () => request('/api/email/inbox'),
+  emailDetail: (id) => request(`/api/email/${id}`),
+  emailSync: () => request('/api/email/sync', { method: 'POST' }),
 
   // Second-brain memories.
   listMemories: () => request('/api/memory'),

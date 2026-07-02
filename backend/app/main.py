@@ -16,10 +16,20 @@ import contextlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import fitness_sync, reminders
+from . import email_sync, fitness_sync, reminders
 from .config import settings
 from .errors import install_error_handlers
-from .routers import assistant, calendar, fitness, habits, memory, nutrition, tasks
+from .routers import (
+    assistant,
+    calendar,
+    email,
+    fitness,
+    habits,
+    memory,
+    nutrition,
+    oauth,
+    tasks,
+)
 
 
 @contextlib.asynccontextmanager
@@ -28,12 +38,15 @@ async def lifespan(_: FastAPI):
     stop them on shutdown."""
     reminder_task: asyncio.Task | None = None
     fitness_task: asyncio.Task | None = None
+    email_task: asyncio.Task | None = None
     if settings.reminders_enabled:
         reminder_task = asyncio.create_task(reminders.run_loop())
     if settings.fitness_sync_enabled:
         fitness_task = asyncio.create_task(fitness_sync.run_loop())
+    if settings.email_sync_enabled:
+        email_task = asyncio.create_task(email_sync.run_loop())
     yield
-    for task in (reminder_task, fitness_task):
+    for task in (reminder_task, fitness_task, email_task):
         if task is not None:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -58,7 +71,9 @@ app.include_router(calendar.router)
 app.include_router(habits.router)
 app.include_router(nutrition.router)
 app.include_router(fitness.router)
-app.include_router(fitness.auth_router)
+app.include_router(oauth.router)
+app.include_router(oauth.auth_router)
+app.include_router(email.router)
 
 
 @app.get("/api/health", tags=["meta"])

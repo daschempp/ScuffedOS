@@ -390,6 +390,14 @@ class FitnessStatus(BaseModel):
     providers: List[ProviderStatus]
 
 
+# M5: generic OAuth status returned by the shared /api/oauth/status endpoint.
+# Structurally identical to FitnessStatus (domain-agnostic) so the moved M4
+# status test passes unchanged. FitnessStatus stays for the assistant tool shape.
+class OAuthStatus(BaseModel):
+    connected: bool  # any provider connected
+    providers: List[ProviderStatus]
+
+
 class ConnectUrl(BaseModel):
     authorize_url: str
 
@@ -458,3 +466,39 @@ class FitnessWeek(BaseModel):
     days: List[FitnessWeekDay]
     avg_strain: float
     peak_day: Day | None
+
+
+# ---- Email schemas (M5) -----------------------------------------------------
+# EmailOut is the inbox list item and carries NO body (privacy: bodies are
+# never persisted and never travel in the list). EmailDetail adds the live,
+# on-demand body fetched from Gmail in the reading pane.
+# (OAuthStatus lives above, added by the Phase-1 spine / Task 4 — not re-added
+# here.)
+EmailCategory = Literal["needs_reply", "fyi"]
+
+
+class EmailOut(BaseModel):
+    id: int
+    source: str
+    from_name: str
+    from_email: str
+    subject: str
+    snippet: str
+    received_at: datetime
+    unread: bool
+    category: EmailCategory | None  # None = untriaged (retry next sync)
+    summary: List[str]              # [] when untriaged
+    when: str                       # derived display, e.g. "8:24am" / "Yesterday"
+
+
+class EmailDetail(EmailOut):
+    thread_id: str
+    body: str  # on-demand Gmail fetch (or a graceful fallback string)
+
+
+class Inbox(BaseModel):
+    needs_reply: List[EmailOut]
+    fyi: List[EmailOut]
+    untriaged: List[EmailOut]
+    needs_reply_count: int
+    unread_count: int
