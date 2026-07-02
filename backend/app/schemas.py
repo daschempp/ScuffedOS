@@ -542,3 +542,10 @@ class Inbox(BaseModel):
     untriaged: List[EmailOut]
     needs_reply_count: int
     unread_count: int
+
+
+class DraftRequest(BaseModel):
+    instructions: str
+    notes: str = ""
+    mode: Literal["new", "reply", "forward"] = "new"
+    email_id: int | None = None

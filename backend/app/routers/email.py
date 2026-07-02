@@ -12,9 +12,10 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Response
 
-from .. import email_sync, providers
+from .. import email_draft, email_sync, providers
 from ..providers.google import _build_rfc822
 from ..schemas import (
+    DraftRequest,
     EmailDetail,
     EmailOut,
     FlagsPatch,
@@ -74,6 +75,51 @@ def send_email(payload: SendEmail) -> dict:
         logger.warning("send failed: %s", exc)
         raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
     return {"id": new_id}
+
+
+# Max characters of the original message's live body handed to the drafting
+# model as context — bounded so a huge thread doesn't blow the prompt; the
+# excerpt transits Gmail -> server -> Anthropic and is never persisted.
+_DRAFT_EXCERPT_CHARS = 2048
+
+
+def _draft_original(email_id: int) -> dict:
+    """Build the `original` context dict for reply/forward drafting: stored
+    metadata + a best-effort live body excerpt (empty string on any fetch
+    failure — drafting still proceeds with metadata only)."""
+    row = store.get_email(email_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    excerpt = ""
+    impl = providers.get(row["source"])
+    get_message = getattr(impl, "get_message", None)
+    if get_message is not None:
+        try:
+            excerpt = get_message(row["source_id"])[:_DRAFT_EXCERPT_CHARS]
+        except Exception as exc:  # noqa: BLE001 — excerpt fetch is best-effort
+            logger.warning("draft excerpt fetch failed for email %s: %s", email_id, exc)
+            excerpt = ""
+    return {
+        "from_name": row["from_name"],
+        "from_email": row["from_email"],
+        "subject": row["subject"],
+        "body_excerpt": excerpt,
+    }
+
+
+@router.post("/draft")
+def draft_email(payload: DraftRequest) -> dict:
+    """User-initiated AI draft (the compose editor's AI-draft button, or the
+    assistant's draft_email tool for the HTTP path). NEVER runs automatically."""
+    original = None
+    if payload.mode in ("reply", "forward"):
+        if payload.email_id is None:
+            raise HTTPException(status_code=404, detail="Email not found")
+        original = _draft_original(payload.email_id)
+    text = email_draft.draft(payload.instructions, payload.notes, payload.mode, original)
+    if text is None:
+        raise HTTPException(status_code=503, detail="Couldn't draft — try again.")
+    return {"draft": text}
 
 
 @router.get("/{email_id}", response_model=EmailDetail)

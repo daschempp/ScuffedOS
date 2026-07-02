@@ -1,7 +1,7 @@
 """M5 email API: GET /inbox grouping, GET /{id} on-demand body + fallback, POST /sync."""
 from datetime import datetime, timedelta, timezone
 
-from app import email_sync, providers
+from app import email_draft, email_sync, providers
 from app.providers.base import NormalizedEmail, Tokens
 from app.store import store
 
@@ -542,3 +542,83 @@ def test_forward_502_on_gmail_failure(client):
 
     assert res.status_code == 502
     assert res.json()["error"]["message"] == "Gmail rejected the action"
+
+
+class _FakeDraft:
+    def __init__(self, text):
+        self.text = text
+        self.calls = []
+
+    def draft(self, instructions, notes, mode, original):
+        self.calls.append((instructions, notes, mode, original))
+        return self.text
+
+
+def test_draft_new_mode_ignores_email_id(client):
+    email_draft.configure(_FakeDraft("Hey team, launch update inside."))
+
+    resp = client.post("/api/email/draft", json={
+        "instructions": "write a launch update", "notes": "on track",
+        "mode": "new", "email_id": 999999,
+    })
+    assert resp.status_code == 200
+    assert resp.json() == {"draft": "Hey team, launch update inside."}
+
+
+def test_draft_reply_mode_builds_original_from_store_and_live_excerpt(client):
+    fake_provider = FakeEmailProvider(body="Full original body, quite long, " * 100)
+    providers.configure([fake_provider])
+    row = store.upsert_email(_email("m9", "The plan"), category="fyi", summary=["A plan"])
+    fake_draft = _FakeDraft("Sounds good, confirming.")
+    email_draft.configure(fake_draft)
+
+    resp = client.post("/api/email/draft", json={
+        "instructions": "confirm it works", "mode": "reply", "email_id": row["id"],
+    })
+    assert resp.status_code == 200
+    assert resp.json() == {"draft": "Sounds good, confirming."}
+    assert len(fake_draft.calls) == 1
+    _, _, mode, original = fake_draft.calls[0]
+    assert mode == "reply"
+    assert original["from_name"] == "Ada Lovelace"
+    assert original["from_email"] == "ada@example.com"
+    assert original["subject"] == "The plan"
+    assert len(original["body_excerpt"]) <= 2048
+
+
+def test_draft_reply_mode_404_when_email_id_absent(client):
+    email_draft.configure(_FakeDraft("text"))
+    resp = client.post("/api/email/draft", json={
+        "instructions": "confirm it works", "mode": "reply", "email_id": 999999,
+    })
+    assert resp.status_code == 404
+
+
+def test_draft_reply_mode_excerpt_falls_back_to_empty_on_fetch_failure(client):
+    providers.configure([FakeEmailProvider(raise_on_get=True)])
+    row = store.upsert_email(_email("m5", "Offline"), category="fyi", summary=[])
+    fake_draft = _FakeDraft("Drafted anyway.")
+    email_draft.configure(fake_draft)
+
+    resp = client.post("/api/email/draft", json={
+        "instructions": "reply anyway", "mode": "reply", "email_id": row["id"],
+    })
+    assert resp.status_code == 200
+    assert resp.json() == {"draft": "Drafted anyway."}
+    _, _, _, original = fake_draft.calls[0]
+    assert original["body_excerpt"] == ""
+
+
+def test_draft_returns_503_when_draft_unavailable(client):
+    email_draft.configure(None)
+    resp = client.post("/api/email/draft", json={"instructions": "write it", "mode": "new"})
+    assert resp.status_code == 503
+    assert resp.json()["error"]["message"] == "Couldn't draft — try again."
+
+
+def test_draft_never_persists_anything(client):
+    email_draft.configure(_FakeDraft("Some draft text."))
+    before = store.inbox()
+    client.post("/api/email/draft", json={"instructions": "write it", "mode": "new"})
+    after = store.inbox()
+    assert before == after
