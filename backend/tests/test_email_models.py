@@ -90,3 +90,18 @@ def test_email_column_defaults():
         assert row.triaged_at is None
         assert row.created_at is not None
         assert row.updated_at is not None
+
+
+def test_email_starred_and_label_ids_columns_default():
+    with store._session() as s:
+        insp = inspect(s.get_bind())
+        cols = {c["name"] for c in insp.get_columns("emails")}
+        assert {"starred", "label_ids"} <= cols
+    with store._session() as s, s.begin():
+        row = Email(owner="me", source="google", source_id="g-4",
+                    subject="Slice2 defaults",
+                    received_at=datetime(2026, 7, 1, 9, 0, tzinfo=UTC))
+        s.add(row)
+        s.flush()
+        assert row.starred is False
+        assert row.label_ids == []
