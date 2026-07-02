@@ -509,6 +509,17 @@ class FlagsPatch(BaseModel):
     starred: bool | None = None
 
 
+class LabelsPatch(BaseModel):
+    add: List[str] = []
+    remove: List[str] = []
+
+
+class LabelOut(BaseModel):
+    id: str
+    name: str
+    type: str
+
+
 class Inbox(BaseModel):
     needs_reply: List[EmailOut]
     fyi: List[EmailOut]

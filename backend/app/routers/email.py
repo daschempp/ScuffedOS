@@ -13,7 +13,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Response
 
 from .. import email_sync, providers
-from ..schemas import EmailDetail, EmailOut, FlagsPatch, Inbox
+from ..schemas import EmailDetail, EmailOut, FlagsPatch, Inbox, LabelOut, LabelsPatch
 from ..store import store
 
 router = APIRouter(prefix="/api/email", tags=["email"])
@@ -30,6 +30,20 @@ def inbox() -> dict:
     """The triaged inbox: needs_reply / fyi / untriaged groups + counts. Served
     from the emails table (never a live provider call)."""
     return store.inbox()
+
+
+@router.get("/labels", response_model=list[LabelOut])
+def list_labels() -> list[dict]:
+    """The label menu's options, straight from Gmail (no local labels table)."""
+    impl = providers.get("google")
+    list_labels_fn = getattr(impl, "list_labels", None)
+    if list_labels_fn is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    try:
+        return list_labels_fn()
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502
+        logger.warning("list_labels failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
 
 
 @router.get("/{email_id}", response_model=EmailDetail)
@@ -115,4 +129,27 @@ def set_email_flags(email_id: int, patch: FlagsPatch) -> dict:
             logger.warning("flags update failed for email %s: %s", email_id, exc)
             raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
     updated = store.set_email_flags(email_id, unread=patch.unread, starred=patch.starred)
+    return updated
+
+
+@router.post("/{email_id}/labels", response_model=EmailOut)
+def set_email_labels(email_id: int, patch: LabelsPatch) -> dict:
+    """New label list = (stored ∪ add) − remove, confirmed against Gmail
+    first via modify_labels, then written locally via store.set_email_labels
+    (which also re-derives unread/starred from the new list)."""
+    row = store.get_email(email_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    impl = providers.get(row["source"])
+    modify_labels = getattr(impl, "modify_labels", None)
+    if modify_labels is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    try:
+        modify_labels(row["source_id"], add=patch.add, remove=patch.remove)
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502, never a local change
+        logger.warning("labels update failed for email %s: %s", email_id, exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    current = set(row.get("label_ids") or [])
+    new_labels = list((current | set(patch.add)) - set(patch.remove))
+    updated = store.set_email_labels(email_id, new_labels)
     return updated

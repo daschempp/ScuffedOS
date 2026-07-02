@@ -275,3 +275,91 @@ def test_flags_502_on_gmail_failure_leaves_row_unchanged(client):
     assert res.status_code == 502
     assert res.json()["error"]["message"] == "Gmail rejected the action"
     assert store.get_email(row["id"])["unread"] is True
+
+
+def test_labels_add_and_remove_computes_union_minus_removed(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+    row = store.upsert_email(_email("m40", "Ping"), category="fyi", summary=[])
+    store.set_email_labels(row["id"], ["INBOX", "IMPORTANT"])
+
+    res = client.post(f"/api/email/{row['id']}/labels",
+                      json={"add": ["STARRED"], "remove": ["IMPORTANT"]})
+
+    assert res.status_code == 200
+    body = res.json()
+    assert sorted(body["label_ids"]) == sorted(["INBOX", "STARRED"])
+    assert fake.modified == [("m40", ["STARRED"], ["IMPORTANT"])]
+
+
+def test_labels_add_only(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+    row = store.upsert_email(_email("m41", "Ping"), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/labels", json={"add": ["Label_1"]})
+
+    assert res.status_code == 200
+    assert res.json()["label_ids"] == ["Label_1"]
+    assert fake.modified == [("m41", ["Label_1"], [])]
+
+
+def test_labels_404_before_any_provider_call(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+
+    res = client.post("/api/email/999999/labels", json={"add": ["Label_1"]})
+
+    assert res.status_code == 404
+    assert fake.modified == []
+
+
+def test_labels_502_on_gmail_failure_leaves_row_unchanged(client):
+    fake = FakeEmailProvider(raise_on_write=True)
+    providers.configure([fake])
+    row = store.upsert_email(_email("m42", "Ping"), category="fyi", summary=[])
+    store.set_email_labels(row["id"], ["INBOX"])
+
+    res = client.post(f"/api/email/{row['id']}/labels", json={"add": ["Label_2"]})
+
+    assert res.status_code == 502
+    assert res.json()["error"]["message"] == "Gmail rejected the action"
+    assert store.get_email(row["id"])["label_ids"] == ["INBOX"]
+
+
+def test_labels_unknown_provider_returns_502(client):
+    # No providers configured at all -> providers.get('google') is None.
+    providers.configure([])
+    row = store.upsert_email(_email("m43", "Ping"), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/labels", json={"add": ["Label_1"]})
+
+    assert res.status_code == 502
+    assert res.json()["error"]["message"] == "Gmail rejected the action"
+
+
+def test_get_labels_lists_from_provider(client):
+    fake = FakeEmailProvider(labels=[
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+        {"id": "Label_1", "name": "Work", "type": "user"},
+    ])
+    providers.configure([fake])
+
+    res = client.get("/api/email/labels")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body == [
+        {"id": "INBOX", "name": "INBOX", "type": "system"},
+        {"id": "Label_1", "name": "Work", "type": "user"},
+    ]
+
+
+def test_get_labels_502_on_gmail_failure(client):
+    fake = FakeEmailProvider(raise_on_write=True)
+    providers.configure([fake])
+
+    res = client.get("/api/email/labels")
+
+    assert res.status_code == 502
+    assert res.json()["error"]["message"] == "Gmail rejected the action"
