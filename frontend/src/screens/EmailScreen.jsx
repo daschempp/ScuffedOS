@@ -8,7 +8,7 @@
    fallback string. Message bodies are never persisted; tokens never reach the
    client. Draft/send is a later slice — no draft UI here. */
 import React from 'react'
-import { Card, Badge, Button } from '../components/ui.jsx'
+import { Card, Badge, Button, IconButton, Checkbox } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 import { api } from '../lib/api.js'
 
@@ -25,6 +25,11 @@ export function EmailScreen() {
   const [inbox, setInbox] = React.useState(null)     // null = not loaded
   const [selId, setSelId] = React.useState(null)
   const [detail, setDetail] = React.useState(null)   // full email incl. body, for selId
+  const [sortKey, setSortKey] = React.useState('newest')  // newest | oldest | sender | unread
+  const [composeMode, setComposeMode] = React.useState(null)  // null | 'new' | 'reply' | 'forward' (Task 17)
+  const [labels, setLabels] = React.useState(null)   // LabelOut[] | null = not loaded yet
+  const [labelMenuOpen, setLabelMenuOpen] = React.useState(false)
+  const [actionError, setActionError] = React.useState('')  // transient inline error, cleared on next successful action
 
   const refresh = React.useCallback(() => {
     api.oauthStatus().then((s) => { if (s) setStatus(s) }).catch(() => {})
@@ -40,9 +45,17 @@ export function EmailScreen() {
   // server derives this boolean from the stored granted scopes (contract §A).
   const canWrite = connected && !needsReauth && !!google?.can_write_email
 
+  const sortItems = React.useCallback((items) => {
+    const arr = [...items]
+    if (sortKey === 'oldest') arr.sort((a, b) => new Date(a.received_at) - new Date(b.received_at))
+    else if (sortKey === 'sender') arr.sort((a, b) => (a.from_name || a.from_email).localeCompare(b.from_name || b.from_email))
+    else if (sortKey === 'unread') arr.sort((a, b) => (b.unread === a.unread ? 0 : b.unread ? 1 : -1))
+    else arr.sort((a, b) => new Date(b.received_at) - new Date(a.received_at))  // 'newest' (default)
+    return arr
+  }, [sortKey])
   const groups = React.useMemo(() => GROUPS.map((g) => ({
-    ...g, items: (inbox?.[g.key] || []),
-  })), [inbox])
+    ...g, items: sortItems(inbox?.[g.key] || []),
+  })), [inbox, sortItems])
   const total = groups.reduce((n, g) => n + g.items.length, 0)
   // Connected, no reauth, nothing has landed yet, and google has never synced →
   // first backfill is still running. This is a pre-first-tick state (matches
@@ -75,6 +88,42 @@ export function EmailScreen() {
   }
   const sync = () => { api.emailSync().then(() => refresh()).catch(() => {}) }
 
+  // Confirm-first writes (contract §F): the Gmail call happens server-side
+  // before any local change; on failure the store is untouched and we only
+  // set actionError — nothing else in the pane changes.
+  const runAction = (promise) => {
+    setActionError('')
+    return promise
+      .then((result) => { refresh(); return result })
+      .catch((err) => { setActionError(err?.message || 'That action failed. Try again.') })
+  }
+  const toggleStar = (e) => {
+    runAction(api.emailFlags(e.id, { starred: !e.starred })).then(() => {
+      if (selId === e.id) api.emailDetail(e.id).then((d) => { if (d) setDetail(d) }).catch(() => {})
+    })
+  }
+  const toggleRead = (e) => {
+    runAction(api.emailFlags(e.id, { unread: !e.unread })).then(() => {
+      if (selId === e.id) api.emailDetail(e.id).then((d) => { if (d) setDetail(d) }).catch(() => {})
+    })
+  }
+  const trashSelected = () => {
+    if (selId == null) return
+    runAction(api.emailTrash(selId)).then(() => { setSelId(null); setDetail(null) })
+  }
+  const openLabelMenu = () => {
+    setLabelMenuOpen((v) => !v)
+    if (labels == null) api.emailLabelList().then((ls) => { if (Array.isArray(ls)) setLabels(ls) }).catch(() => setLabels([]))
+  }
+  const toggleLabel = (labelId) => {
+    if (!detail) return
+    const has = (detail.label_ids || []).includes(labelId)
+    const payload = has ? { add: [], remove: [labelId] } : { add: [labelId], remove: [] }
+    runAction(api.emailLabels(detail.id, payload)).then(() => {
+      api.emailDetail(detail.id).then((d) => { if (d) setDetail(d) }).catch(() => {})
+    })
+  }
+
   // —— not connected: single CTA card ——
   if (status && !connected && !needsReauth) {
     return (
@@ -93,6 +142,12 @@ export function EmailScreen() {
     ? `Synced with Gmail · ${new Date(google.last_sync_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
     : 'Connected with Gmail'
   const needCount = inbox?.needs_reply_count ?? 0
+
+  const sortSelectStyle = {
+    padding: '8px 11px', borderRadius: 'var(--radius-sm)', background: 'var(--surface-sunken)',
+    border: 'none', outline: 'none', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)',
+    color: 'var(--text-strong)', cursor: 'pointer',
+  }
 
   return (
     <div className="kit-stack" style={{ gap: 'var(--gutter)' }}>
@@ -135,6 +190,12 @@ export function EmailScreen() {
             action={
               <div className="kit-inline" style={{ gap: 8, alignItems: 'center' }}>
                 {needCount > 0 && <Badge color="green" dot>{needCount} need you</Badge>}
+                <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} style={sortSelectStyle} aria-label="Sort inbox">
+                  <option value="newest">Newest</option>
+                  <option value="oldest">Oldest</option>
+                  <option value="sender">Sender</option>
+                  <option value="unread">Unread first</option>
+                </select>
                 <Button variant="soft" size="sm" iconLeft={<Icon name="refresh-cw" />} onClick={sync}>Sync</Button>
               </div>
             }>
@@ -148,7 +209,10 @@ export function EmailScreen() {
                     <div className="kit-mail__main">
                       <div className="kit-mail__top">
                         <span className="kit-mail__from">{e.from_name || e.from_email}</span>
-                        <span className="kit-mail__time">{e.when}</span>
+                        <span className="kit-inline" style={{ gap: 6 }}>
+                          {e.starred && <Icon name="star" style={{ width: 13, height: 13, color: 'var(--honey-600)', fill: 'var(--honey-600)' }} />}
+                          <span className="kit-mail__time">{e.when}</span>
+                        </span>
                       </div>
                       <p className="kit-mail__subj">{e.subject || '(no subject)'}</p>
                       <p className="kit-mail__snip">{e.snippet}</p>
@@ -163,6 +227,27 @@ export function EmailScreen() {
             {detail ? (
               <>
                 <Card eyebrow={`${detail.from_name || detail.from_email}${detail.from_email && detail.from_name ? ` · ${detail.from_email}` : ''}`} title={detail.subject || '(no subject)'}>
+                  {canWrite && (
+                    <div className="kit-inline" style={{ gap: 6, flexWrap: 'wrap', marginBottom: 12, position: 'relative' }}>
+                      <Button variant="soft" size="sm" iconLeft={<Icon name="reply" />} onClick={() => setComposeMode('reply')}>Reply</Button>
+                      <Button variant="soft" size="sm" iconLeft={<Icon name="forward" />} onClick={() => setComposeMode('forward')}>Forward</Button>
+                      <IconButton label={detail.starred ? 'Unstar' : 'Star'} size="sm" onClick={() => toggleStar(detail)}>
+                        <Icon name="star" style={detail.starred ? { color: 'var(--honey-600)', fill: 'var(--honey-600)' } : undefined} />
+                      </IconButton>
+                      <IconButton label={detail.unread ? 'Mark read' : 'Mark unread'} size="sm" onClick={() => toggleRead(detail)}><Icon name="check-check" /></IconButton>
+                      <IconButton label="Labels" size="sm" onClick={openLabelMenu}><Icon name="tag" /></IconButton>
+                      <IconButton label="Trash" size="sm" onClick={trashSelected}><Icon name="trash-2" /></IconButton>
+                      {labelMenuOpen && (
+                        <div className="sa-card" style={{ position: 'absolute', top: 40, left: 0, zIndex: 20, padding: 10, minWidth: 180, boxShadow: 'var(--shadow-lg)' }}>
+                          {(labels || []).length === 0 && <p className="kit-muted">No labels.</p>}
+                          {(labels || []).map((l) => (
+                            <Checkbox key={l.id} checked={(detail.label_ids || []).includes(l.id)} onChange={() => toggleLabel(l.id)} label={l.name} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {actionError && <p className="kit-muted" style={{ color: 'var(--clay-600)', marginBottom: 10 }}>{actionError}</p>}
                   {(detail.summary || []).length > 0 && (
                     <>
                       <p className="sa-card__eyebrow" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}><Icon name="sparkles" style={{ width: 13, height: 13 }} />AI summary</p>
