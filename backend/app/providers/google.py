@@ -405,3 +405,46 @@ class GoogleProvider:
             payload["threadId"] = thread_id
         result = self._post(f"{GMAIL_API_BASE}/messages/send", json=payload)
         return str(result["id"])
+
+    def trash_message(self, source_id: str) -> None:
+        """Move a message to Gmail Trash (users.messages.trash) — never a
+        permanent delete (the full-access mail.google.com scope is not
+        requested). Google auto-purges Trash after ~30 days."""
+        self._post(f"{GMAIL_API_BASE}/messages/{source_id}/trash", json={})
+
+    def modify_labels(self, source_id: str, add: list[str] = (), remove: list[str] = ()) -> None:
+        """Add/remove Gmail label ids on one message. Read/unread state and
+        star are both modeled as labels: unread = presence of 'UNREAD',
+        starred = presence of 'STARRED' — the router computes add/remove
+        from the desired flag state before calling this."""
+        self._post(
+            f"{GMAIL_API_BASE}/messages/{source_id}/modify",
+            json={"addLabelIds": list(add), "removeLabelIds": list(remove)},
+        )
+
+    def list_labels(self) -> list[dict]:
+        """All Gmail labels (system + user) for the label-picker menu."""
+        result = self._get(f"{GMAIL_API_BASE}/labels")
+        return list(result.get("labels") or [])
+
+    def get_message_meta(self, source_id: str) -> dict:
+        """Bounded metadata-only fetch (format=metadata, four headers) used
+        to build reply/forward threading headers without pulling the full
+        body. Missing headers come back as '' rather than raising, so a
+        message with an unusual header set still produces a usable (if
+        empty) threading context."""
+        msg = self._get(
+            f"{GMAIL_API_BASE}/messages/{source_id}",
+            params={
+                "format": "metadata",
+                "metadataHeaders": ["Message-ID", "References", "Subject", "From"],
+            },
+        )
+        headers = (msg.get("payload") or {}).get("headers") or []
+        _, from_email = _parse_from(_header(headers, "From"))
+        return {
+            "message_id": _header(headers, "Message-ID"),
+            "references": _header(headers, "References"),
+            "subject": _header(headers, "Subject"),
+            "from_email": from_email,
+        }

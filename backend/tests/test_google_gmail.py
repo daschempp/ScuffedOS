@@ -166,3 +166,93 @@ def test_send_message_auth_failure_raises_google_auth_error():
     http = FakeGmailHTTP(status={"/messages/send": 401})
     with pytest.raises(GoogleAuthError):
         _provider(http).send_message(b"To: a@x.com\r\n\r\nb\r\n")
+
+
+def test_trash_message_posts_to_trash_endpoint():
+    http = FakeGmailHTTP()
+    _provider(http).trash_message("m1")
+    url, payload = http.posts[0]
+    assert url.endswith("/messages/m1/trash")
+    assert payload == {}
+
+
+def test_trash_message_auth_failure_raises():
+    http = FakeGmailHTTP(status={"/trash": 401})
+    with pytest.raises(GoogleAuthError):
+        _provider(http).trash_message("m1")
+
+
+def test_modify_labels_posts_add_and_remove_label_ids():
+    http = FakeGmailHTTP()
+    _provider(http).modify_labels("m1", add=["STARRED"], remove=["UNREAD"])
+    url, payload = http.posts[0]
+    assert url.endswith("/messages/m1/modify")
+    assert payload == {"addLabelIds": ["STARRED"], "removeLabelIds": ["UNREAD"]}
+
+
+def test_modify_labels_defaults_to_empty_lists():
+    http = FakeGmailHTTP()
+    _provider(http).modify_labels("m1")
+    url, payload = http.posts[0]
+    assert payload == {"addLabelIds": [], "removeLabelIds": []}
+
+
+def test_modify_labels_auth_failure_raises():
+    http = FakeGmailHTTP(status={"/modify": 500})
+    with pytest.raises(GoogleAuthError):
+        _provider(http).modify_labels("m1", add=["STARRED"])
+
+
+def test_list_labels_gets_and_returns_label_dicts():
+    http = FakeGmailHTTP(labels=[
+        {"id": "STARRED", "name": "STARRED", "type": "system"},
+        {"id": "Label_1", "name": "Family", "type": "user"},
+    ])
+    labels = _provider(http).list_labels()
+    assert labels == [
+        {"id": "STARRED", "name": "STARRED", "type": "system"},
+        {"id": "Label_1", "name": "Family", "type": "user"},
+    ]
+    url, _ = http.gets[0]
+    assert url.endswith("/labels")
+
+
+def test_list_labels_auth_failure_raises():
+    http = FakeGmailHTTP(status={"/labels": 401})
+    with pytest.raises(GoogleAuthError):
+        _provider(http).list_labels()
+
+
+def test_get_message_meta_returns_headers_and_metadata_params():
+    http = FakeGmailHTTP(messages={"m1": {
+        "id": "m1",
+        "payload": {"headers": [
+            {"name": "Message-ID", "value": "<abc123@mail.gmail.com>"},
+            {"name": "References", "value": "<xyz@mail.gmail.com>"},
+            {"name": "Subject", "value": "Original subject"},
+            {"name": "From", "value": "Priya Rao <priya@lighthouse.io>"},
+        ]},
+    }})
+    meta = _provider(http).get_message_meta("m1")
+    assert meta == {
+        "message_id": "<abc123@mail.gmail.com>",
+        "references": "<xyz@mail.gmail.com>",
+        "subject": "Original subject",
+        "from_email": "priya@lighthouse.io",
+    }
+    url, params = http.gets[0]
+    assert url.endswith("/messages/m1")
+    assert params["format"] == "metadata"
+    assert params["metadataHeaders"] == ["Message-ID", "References", "Subject", "From"]
+
+
+def test_get_message_meta_missing_headers_are_empty_strings():
+    http = FakeGmailHTTP(messages={"m1": {"id": "m1", "payload": {"headers": []}}})
+    meta = _provider(http).get_message_meta("m1")
+    assert meta == {"message_id": "", "references": "", "subject": "", "from_email": ""}
+
+
+def test_get_message_meta_auth_failure_raises():
+    http = FakeGmailHTTP(messages={"m1": {}}, status={"/messages/m1": 500})
+    with pytest.raises(GoogleAuthError):
+        _provider(http).get_message_meta("m1")

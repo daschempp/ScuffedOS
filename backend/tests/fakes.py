@@ -191,10 +191,11 @@ class FakeGmailHTTP:
     """
 
     def __init__(self, messages: dict | None = None, list_ids: list[str] | None = None,
-                 status: dict | None = None):
+                 status: dict | None = None, labels: list[dict] | None = None):
         self.messages = messages or {}          # id -> messages.get JSON
         self.list_ids = list_ids if list_ids is not None else list(self.messages)
         self.status = status or {}               # url-substring -> status_code
+        self.labels = labels or []               # [{"id","name","type"}, ...]
         self.gets: list[tuple[str, dict]] = []
         self.posts: list[tuple[str, dict]] = []
 
@@ -209,6 +210,8 @@ class FakeGmailHTTP:
         code = self._status_for(url)
         if code >= 400:
             return _FakeResponse({}, code)
+        if url.endswith("/labels"):
+            return _FakeResponse({"labels": self.labels})
         # messages.get: '/messages/<id>' (has a segment after '/messages/')
         if "/messages/" in url:
             msg_id = url.rsplit("/messages/", 1)[1]
