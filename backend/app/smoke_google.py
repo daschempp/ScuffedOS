@@ -35,9 +35,12 @@ from __future__ import annotations
 import logging
 import secrets
 import sys
+import time
+from datetime import datetime, timezone
 
 from . import email_sync, providers
 from .config import settings
+from .providers.google import GMAIL_API_BASE, _build_rfc822
 from .store import store
 
 
@@ -147,6 +150,55 @@ def main() -> int:
             for e in triaged[:3]:
                 print(f"        - [{e['category']}] {e['subject']!r} :: "
                       + " | ".join(e["summary"][:3]))
+
+        print("\n6. Write path (send-to-self -> verify -> trash):")
+        account = store.get_provider_account("google")
+        if not account or not account.get("can_write_email"):
+            r.check(True, "SKIPPED -- account lacks gmail.modify/gmail.send scopes",
+                    "re-consent to grant email actions: connect Google again and tick "
+                    "BOTH the Gmail modify and send checkboxes on the consent screen")
+        else:
+            # [confirm-against-live]: GET {GMAIL_API_BASE}/profile -> {"emailAddress": ...}
+            profile = provider._get(f"{GMAIL_API_BASE}/profile")
+            self_addr = profile.get("emailAddress", "")
+            r.check(bool(self_addr), "resolved the connected account's own address",
+                    self_addr or "<empty>")
+
+            subject = f"ScuffedOS smoke {datetime.now(timezone.utc).isoformat()}"
+            raw = _build_rfc822(to=self_addr, subject=subject,
+                                 body="Automated write-leg smoke test -- safe to ignore.")
+            sent_id = provider.send_message(raw)
+            r.check(bool(sent_id), "send_message returned a new message id", sent_id)
+
+            print("        polling for arrival (up to ~30s)...")
+            found_id = None
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline and not found_id:
+                hits = provider._get(
+                    f"{GMAIL_API_BASE}/messages",
+                    # Gmail search phrases use double quotes, not Python repr()'s
+                    # single quotes -- [confirm-against-live] the exact query
+                    # syntax against the real Gmail search API in Task 19/20.
+                    params={"q": f'subject:"{subject}"'},
+                )
+                ids = [m["id"] for m in hits.get("messages", [])]
+                if sent_id in ids:
+                    found_id = sent_id
+                else:
+                    time.sleep(3)
+            r.check(found_id is not None,
+                    "sent message appeared in messages.list by subject", subject)
+
+            provider.trash_message(sent_id)
+            r.check(True, "trash_message call completed", sent_id)
+
+            time.sleep(2)
+            after = provider._get(
+                f"{GMAIL_API_BASE}/messages", params={"q": f'subject:"{subject}"'}
+            )
+            after_ids = [m["id"] for m in after.get("messages", [])]
+            r.check(sent_id not in after_ids,
+                    "trashed message no longer returned by messages.list", subject)
     except Exception as exc:  # a live call blew up -- report, don't traceback-dump
         r.check(False, f"pipeline raised {type(exc).__name__}", str(exc)[:140])
 
