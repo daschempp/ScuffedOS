@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from .. import email_sync, providers
 from ..schemas import EmailDetail, Inbox
@@ -63,3 +63,23 @@ def sync_now() -> dict:
     except RuntimeError:
         names = []
     return {"synced": count, "providers": names}
+
+
+@router.post("/{email_id}/trash", status_code=204)
+def trash_email(email_id: int) -> Response:
+    """Trash in Gmail first; the local row is removed ONLY on success
+    (confirm-first — a Gmail failure leaves the row untouched)."""
+    row = store.get_email(email_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    impl = providers.get(row["source"])
+    trash_message = getattr(impl, "trash_message", None)
+    if trash_message is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    try:
+        trash_message(row["source_id"])
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502, never a local change
+        logger.warning("trash failed for email %s: %s", email_id, exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    store.delete_email(email_id)
+    return Response(status_code=204)

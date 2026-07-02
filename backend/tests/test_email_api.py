@@ -23,14 +23,25 @@ def _email(source_id: str, subject: str, minutes_ago: int = 0, unread: bool = Fa
 
 
 class FakeEmailProvider:
-    """Only the surface the email router calls: name, fetch_messages (marker), get_message."""
+    """Only the surface the email router calls: name, fetch_messages (marker),
+    get_message, plus the M5 slice-2 write methods (trash/modify/labels/send/meta)."""
 
     name = "google"
 
-    def __init__(self, *, body: str = "Full body text.", raise_on_get: bool = False):
+    def __init__(self, *, body: str = "Full body text.", raise_on_get: bool = False,
+                 raise_on_write: bool = False, labels: list[dict] | None = None,
+                 meta: dict | None = None, send_result: dict | None = None):
         self._body = body
         self._raise = raise_on_get
+        self._raise_write = raise_on_write
+        self._labels = labels if labels is not None else []
+        self._meta = meta or {"message_id": "", "references": "", "subject": "", "from_email": ""}
+        self._send_result = send_result or {"id": "sent-1"}
         self.got: list[str] = []
+        self.trashed: list[str] = []
+        self.modified: list[tuple[str, list[str], list[str]]] = []
+        self.sent: list[tuple[bytes, str | None]] = []
+        self.meta_fetched: list[str] = []
 
     def fetch_messages(self, since):  # marks this as an EmailProvider for the sync
         return []
@@ -40,6 +51,33 @@ class FakeEmailProvider:
         if self._raise:
             raise RuntimeError("gmail down")
         return self._body
+
+    def _maybe_raise(self):
+        if self._raise_write:
+            from app.providers.google import GoogleAuthError
+            raise GoogleAuthError("gmail rejected the action")
+
+    def trash_message(self, source_id: str) -> None:
+        self._maybe_raise()
+        self.trashed.append(source_id)
+
+    def modify_labels(self, source_id: str, add=(), remove=()) -> None:
+        self._maybe_raise()
+        self.modified.append((source_id, list(add), list(remove)))
+
+    def list_labels(self) -> list[dict]:
+        self._maybe_raise()
+        return list(self._labels)
+
+    def get_message_meta(self, source_id: str) -> dict:
+        self._maybe_raise()
+        self.meta_fetched.append(source_id)
+        return dict(self._meta)
+
+    def send_message(self, raw_rfc822: bytes, thread_id: str | None = None) -> str:
+        self._maybe_raise()
+        self.sent.append((raw_rfc822, thread_id))
+        return self._send_result["id"]
 
 
 class FakeEmailSync:
@@ -103,3 +141,38 @@ def test_sync_triggers_email_sync_and_lists_email_providers(client):
     body = client.post("/api/email/sync").json()
     assert body == {"synced": 7, "providers": ["google"]}
     assert fake_sync.calls == 1
+
+
+def test_trash_email_calls_gmail_then_deletes_local_row(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+    row = store.upsert_email(_email("m20", "Junk"), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/trash")
+
+    assert res.status_code == 204
+    assert fake.trashed == ["m20"]
+    assert store.get_email(row["id"]) is None
+
+
+def test_trash_email_404_before_any_provider_call(client):
+    fake = FakeEmailProvider()
+    providers.configure([fake])
+
+    res = client.post("/api/email/999999/trash")
+
+    assert res.status_code == 404
+    assert fake.trashed == []
+
+
+def test_trash_email_502_on_gmail_failure_leaves_row_untouched(client):
+    fake = FakeEmailProvider(raise_on_write=True)
+    providers.configure([fake])
+    row = store.upsert_email(_email("m21", "Keep me"), category="fyi", summary=[])
+
+    res = client.post(f"/api/email/{row['id']}/trash")
+
+    assert res.status_code == 502
+    # App-wide error envelope (app/errors.py): {"error": {"code", "message"}}.
+    assert res.json()["error"]["message"] == "Gmail rejected the action"
+    assert store.get_email(row["id"]) is not None
