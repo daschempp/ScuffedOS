@@ -40,7 +40,7 @@ export function TasksScreen({ tasks, onToggle, onUpdate, onAdd, onRefresh }) {
     return (
       <div className={'kit-task' + (t.done ? ' kit-task--done' : '')} key={t.id} onClick={readOnly ? undefined : () => setOpenId(t.id)}>
         <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex' }}>
-          <Checkbox checked={t.done} onChange={readOnly ? undefined : () => onToggle(t.id)} />
+          <Checkbox checked={t.done} disabled={readOnly} onChange={readOnly ? undefined : () => onToggle(t.id)} />
         </span>
         <div className="kit-task__main">
           <p className="kit-task__title">{t.label}</p>

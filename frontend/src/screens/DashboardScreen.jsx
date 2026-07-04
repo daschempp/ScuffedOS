@@ -79,7 +79,7 @@ export function DashboardScreen({ tasks, onToggleTask, voiceNotes, calendar, nut
               const readOnly = t.editable === false || t.source === 'moodle'
               return (
                 <div key={t.id} style={{ padding: '7px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Checkbox checked={t.done} strikeWhenChecked label={t.label} onChange={readOnly ? undefined : () => onToggleTask(t.id)} />
+                  <Checkbox checked={t.done} strikeWhenChecked label={t.label} disabled={readOnly} onChange={readOnly ? undefined : () => onToggleTask(t.id)} />
                   {readOnly && <Badge color="plum">Moodle</Badge>}
                 </div>
               )
