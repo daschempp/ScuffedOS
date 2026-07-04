@@ -129,6 +129,25 @@ def test_announcements_read_returns_store_rows(client):
     assert [a["subject"] for a in body] == ["Welcome"]
 
 
+def test_announcements_read_serializes_null_created_at(client):
+    # Regression: a Moodle discussion may lack a "created" field, and
+    # moodle_announcements.created_at is nullable in the store. AnnouncementOut
+    # types created_at as `datetime | None` for exactly this reason — if it
+    # were ever reverted to a required `datetime`, this row would 500 through
+    # response_model=list[AnnouncementOut] instead of serializing cleanly.
+    providers.configure([FakeMoodleProvider()])
+    announcement = _announcement("a-null", subject="No created date")
+    announcement.created_at = None
+    store.upsert_moodle_announcement(announcement)
+
+    res = client.get("/api/moodle/announcements")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert [a["subject"] for a in body] == ["No created date"]
+    assert body[0]["created_at"] is None
+
+
 def test_notifications_read_returns_store_rows(client):
     providers.configure([FakeMoodleProvider()])
     store.upsert_moodle_notification(_notification("n1", subject="Assignment graded"))
