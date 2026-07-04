@@ -11,6 +11,7 @@ from app.providers.base import (
     NormalizedGrade,
     NormalizedNotification,
 )
+from app.schemas import EventCreate, TaskCreate
 from app.store import store
 
 UTC = timezone.utc
@@ -173,3 +174,158 @@ def test_moodle_deadlines_days_ahead_horizon_filter():
     # 10-day horizon from now -> only the soon one.
     within = store.moodle_deadlines(days_ahead=10)
     assert [d["source_id"] for d in within] == ["soon"]
+
+
+def _seed_course(source_id="72", shortname="CSC116"):
+    store.upsert_moodle_course(NormalizedCourse(
+        source="moodle", source_id=source_id, shortname=shortname,
+        fullname=f"{shortname} Intro to Computing",
+    ))
+
+
+def _seed_deadline(source_id="d1", course_id="72", due_at=None, name="Project 1 is due"):
+    store.upsert_moodle_deadline(NormalizedDeadline(
+        source="moodle", source_id=source_id, course_id=course_id,
+        name=name, module_name="assign", event_type="due",
+        due_at=due_at or datetime(2026, 7, 6, 23, 59, tzinfo=timezone.utc),
+        url="https://moodle.example/event/1",
+    ))
+
+
+def _seed_assignment(source_id="a1", course_id="72", due_at=None,
+                     name="Project 1", submission_status="new"):
+    store.upsert_moodle_assignment(NormalizedAssignment(
+        source="moodle", source_id=source_id, course_id=course_id, cmid="900",
+        name=name,
+        due_at=due_at or datetime(2026, 7, 6, 23, 59, tzinfo=timezone.utc),
+        submission_status=submission_status,
+    ))
+
+
+def test_moodle_deadline_in_window_appears_in_events_between():
+    _seed_course()
+    _seed_deadline()
+    window_start = datetime(2026, 7, 6, 0, 0, tzinfo=timezone.utc)
+    window_end = datetime(2026, 7, 7, 0, 0, tzinfo=timezone.utc)
+    occs = store.events_between(window_start, window_end)
+    moodle = [o for o in occs if o["source"] == "moodle"]
+    assert len(moodle) == 1
+    occ = moodle[0]
+    assert occ["id"] == "moodle:d1"
+    assert occ["source"] == "moodle"
+    assert occ["editable"] is False
+    assert occ["tint"] == "grape"
+    assert occ["title"] == "Project 1 is due · CSC116"
+    assert occ["start"] == datetime(2026, 7, 6, 23, 59, tzinfo=timezone.utc)
+    assert occ["end"] == datetime(2026, 7, 7, 0, 59, tzinfo=timezone.utc)  # +1h
+    # _occurrence_dict-shaped: every calendar output key present.
+    assert set(occ) >= {"id", "title", "start", "end", "tint", "location",
+                        "description", "recurring", "recurrence_label", "at",
+                        "source", "editable"}
+
+
+def test_moodle_deadline_out_of_window_is_excluded_from_events_between():
+    _seed_course()
+    _seed_deadline(due_at=datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc))
+    window_start = datetime(2026, 7, 6, 0, 0, tzinfo=timezone.utc)
+    window_end = datetime(2026, 7, 7, 0, 0, tzinfo=timezone.utc)
+    occs = store.events_between(window_start, window_end)
+    assert [o for o in occs if o["source"] == "moodle"] == []
+
+
+def test_moodle_deadline_flows_into_up_next():
+    _seed_course()
+    # up_next scans [now-1d, now+14d]; anchor the deadline inside that window.
+    now = datetime(2026, 7, 5, 12, 0, tzinfo=timezone.utc)
+    _seed_deadline(due_at=datetime(2026, 7, 6, 23, 59, tzinfo=timezone.utc))
+    items = store.up_next(limit=5, now=now)
+    moodle = [i for i in items if i["id"] == "moodle:d1"]
+    assert len(moodle) == 1
+    assert moodle[0]["tint"] == "grape"
+    assert moodle[0]["title"] == "Project 1 is due · CSC116"
+
+
+def test_moodle_assignment_appears_in_list_tasks_with_done_mirroring_submission():
+    _seed_course()
+    _seed_assignment(submission_status="new")
+    tasks = store.list_tasks()
+    moodle = [t for t in tasks if t["source"] == "moodle"]
+    assert len(moodle) == 1
+    task = moodle[0]
+    assert task["id"] == "moodle:a1"
+    assert task["source"] == "moodle"
+    assert task["editable"] is False
+    assert task["done"] is False           # "new" is not submitted
+    assert task["group"] == "School"
+    assert task["list"] == "School"
+    assert task["prio"] == "med"
+    assert task["label"] == "Project 1 · CSC116"
+    # _task_dict-shaped: every task output key present.
+    assert set(task) >= {"id", "label", "done", "group", "deadline", "prio",
+                        "list", "description", "subtasks", "labels", "reminders",
+                        "files", "recurrence", "recurrence_label", "due", "late",
+                        "created_at", "updated_at", "completed_at",
+                        "source", "editable"}
+
+
+def test_moodle_assignment_done_true_when_submitted():
+    _seed_course()
+    _seed_assignment(source_id="a2", submission_status="submitted")
+    tasks = store.list_tasks()
+    task = next(t for t in tasks if t["id"] == "moodle:a2")
+    assert task["done"] is True
+
+
+def test_moodle_assignment_done_true_when_reopened():
+    _seed_course()
+    _seed_assignment(source_id="a3", submission_status="reopened")
+    tasks = store.list_tasks()
+    task = next(t for t in tasks if t["id"] == "moodle:a3")
+    assert task["done"] is True
+
+
+def test_assignment_without_due_date_is_skipped_from_tasks():
+    _seed_course()
+    store.upsert_moodle_assignment(NormalizedAssignment(
+        source="moodle", source_id="a9", course_id="72", cmid="901",
+        name="No-due assignment", due_at=None, submission_status="new",
+    ))
+    tasks = store.list_tasks()
+    assert [t for t in tasks if t["id"] == "moodle:a9"] == []
+
+
+def test_no_moodle_rows_leaves_events_between_and_up_next_unchanged():
+    # A single real local event; NO moodle rows seeded. Store-level dicts for
+    # local rows never carried "source"/"editable" (those keys are filled in
+    # by the Pydantic response schema's defaults at the HTTP layer, per Task
+    # 10) — so byte-identical here means: no moodle rows leak in, and the
+    # local occurrence dict shape/values are untouched.
+    store.create_event(EventCreate(
+        title="Standup",
+        start=datetime(2026, 7, 6, 9, 0, tzinfo=timezone.utc),
+    ).model_dump())
+    occs = store.events_between(
+        datetime(2026, 7, 6, 0, 0, tzinfo=timezone.utc),
+        datetime(2026, 7, 7, 0, 0, tzinfo=timezone.utc),
+    )
+    assert all("source" not in o for o in occs)
+    assert [o["title"] for o in occs] == ["Standup"]
+
+
+def test_no_moodle_rows_leaves_list_tasks_unchanged():
+    store.create_task(TaskCreate(label="Buy milk").model_dump())
+    tasks = store.list_tasks()
+    assert all("source" not in t for t in tasks)
+    assert [t["label"] for t in tasks] == ["Buy milk"]
+
+
+def test_patch_to_moodle_task_id_returns_422(client):
+    # The tasks PATCH route is typed /api/tasks/{task_id:int}; a "moodle:1"
+    # path can never match, so the read-only projection is uneditable.
+    res = client.patch("/api/tasks/moodle:1", json={"done": True})
+    assert res.status_code == 422
+
+
+def test_delete_to_moodle_calendar_event_id_returns_422(client):
+    res = client.delete("/api/calendar/events/moodle:1")
+    assert res.status_code == 422

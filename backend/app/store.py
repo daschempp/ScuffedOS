@@ -564,7 +564,10 @@ class Store:
             by_task: dict[int, list[TaskReminder]] = {}
             for r in s.scalars(select(TaskReminder).order_by(TaskReminder.remind_at)):
                 by_task.setdefault(r.task_id, []).append(r)
-            return [_task_dict(t, by_task.get(t.id, [])) for t in rows]
+            local = [_task_dict(t, by_task.get(t.id, [])) for t in rows]
+        # Read-time-merge Moodle assignments (contract §H) as read-only School
+        # tasks — appended after local rows, NOT persisted to the tasks table.
+        return local + self.moodle_tasks()
 
     def get_task(self, task_id: int) -> dict | None:
         with self._session() as s:
@@ -918,12 +921,16 @@ class Store:
             return True
 
     def events_between(self, window_start: datetime, window_end: datetime) -> list[dict]:
-        """Concrete occurrences in the window, recurring series expanded."""
+        """Concrete occurrences in the window, recurring series expanded.
+        Read-time-merges in-window Moodle deadlines (contract §H) as read-only
+        'grape' occurrences before the final sort, so Home/Calendar/up_next
+        all show them without any events-table write."""
         with self._session() as s:
             rows = s.scalars(select(Event).order_by(Event.start_at)).all()
         out: list[dict] = []
         for e in rows:
             out.extend(_event_occurrences(e, window_start, window_end))
+        out.extend(self.moodle_calendar_events(window_start, window_end))
         out.sort(key=lambda o: o["start"])
         return out
 
@@ -1629,6 +1636,87 @@ class Store:
                 q = q.where(MoodleAssignment.course_id == course_id)
             rows = s.scalars(q).all()
             return [_moodle_assignment_dict(a) for a in rows]
+
+    def moodle_calendar_events(
+        self, window_start: datetime, window_end: datetime
+    ) -> list[dict]:
+        """Read-time projection (contract §H): Moodle deadlines whose due_at
+        falls in [window_start, window_end) rendered as calendar occurrences
+        (_occurrence_dict shape) tagged source='moodle'/editable=False. These
+        are NOT rows in the events table — events_between appends them at read
+        time so Home/Calendar show them read-only. tint='grape' and a
+        synthetic 'moodle:<source_id>' id keep them visually + structurally
+        distinct from local events (whose ids are ints)."""
+        shortnames = {c["source_id"]: c["shortname"] for c in self.moodle_courses()}
+        out: list[dict] = []
+        for d in self.moodle_deadlines():
+            start = d["due_at"]
+            if start is None or not (window_start <= start < window_end):
+                continue
+            end = start + timedelta(hours=1)
+            short = shortnames.get(d["course_id"], "")
+            title = f"{d['name']} · {short}" if short else d["name"]
+            out.append({
+                "id": f"moodle:{d['source_id']}",
+                "title": title,
+                "start": start,
+                "end": end,
+                "tint": "grape",
+                "location": "",
+                "description": "",
+                "recurring": False,
+                "recurrence_label": None,
+                "at": clock(start),
+                "source": "moodle",
+                "editable": False,
+            })
+        return out
+
+    def moodle_tasks(self) -> list[dict]:
+        """Read-time projection (contract §H): Moodle assignments that carry a
+        due date rendered as tasks (_task_dict shape) tagged
+        source='moodle'/editable=False. done mirrors submission_status
+        (submitted/reopened => done). group/list='School', prio='med'.
+        due/late come from task_due_display so the UI's overdue styling
+        matches local tasks. Appended by list_tasks at read time — NOT rows in
+        the tasks table. The 'moodle:<source_id>' id can never be edited or
+        deleted through the int-typed /api/tasks/{id} routes."""
+        shortnames = {c["source_id"]: c["shortname"] for c in self.moodle_courses()}
+        now = utcnow()
+        out: list[dict] = []
+        for a in self.moodle_assignments():
+            due_at = a["due_at"]
+            if due_at is None:
+                continue
+            deadline = due_at.date()
+            done = a["submission_status"] in {"submitted", "reopened"}
+            due, late = task_due_display(deadline, done, None)
+            short = shortnames.get(a["course_id"], "")
+            label = f"{a['name']} · {short}" if short else a["name"]
+            out.append({
+                "id": f"moodle:{a['source_id']}",
+                "label": label,
+                "done": done,
+                "group": "School",
+                "deadline": deadline,
+                "prio": "med",
+                "list": "School",
+                "description": "",
+                "subtasks": [],
+                "labels": [],
+                "reminders": [],
+                "files": [],
+                "recurrence": None,
+                "recurrence_label": None,
+                "due": due,
+                "late": late,
+                "created_at": now,
+                "updated_at": now,
+                "completed_at": None,
+                "source": "moodle",
+                "editable": False,
+            })
+        return out
 
     def moodle_grades(self, course_id: str | None = None) -> list[dict]:
         from .config import settings
