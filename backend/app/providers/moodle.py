@@ -122,6 +122,25 @@ class MoodleProvider:
             raise MoodleError(f"{errorcode}: {message}")
         return payload
 
+    # ---- connect-time validation / snapshot bootstrap ----
+    def get_site_info(self, token: str) -> dict:
+        """core_webservice_get_site_info — validates a token at connect time and
+        bootstraps a snapshot (userid + the list of enabled function NAMES for
+        feature-detection). `token` is passed as the wstoken override so this
+        works before the token is stored. Raises MoodleAuthError on a bad token."""
+        info = self._call("core_webservice_get_site_info", token=token)
+        functions = [
+            f.get("name", "")
+            for f in (info.get("functions") or [])
+            if isinstance(f, dict) and f.get("name")
+        ]
+        return {
+            "userid": int(info.get("userid") or 0),
+            "sitename": info.get("sitename") or "",
+            "release": info.get("release") or "",
+            "functions": functions,
+        }
+
     # ---- OAuth-ish plumbing (Moodle has no code exchange; connect is token-paste) ----
     def authorize_url(self, state: str) -> str:
         """The Moodle mobile launch URL. Not used by the token-paste connect flow;
@@ -221,3 +240,37 @@ def _strip_html(markup: str) -> str:
     text = re.sub(r"[ \t\r\f\v]+", " ", text)
     text = re.sub(r"\n\s*\n\s*", "\n\n", text)
     return text.strip()
+
+
+_HEX32_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+
+
+def parse_pasted_token(pasted: str, *, passport: str | None = None,
+                       wwwroot: str | None = None) -> str:
+    """Accept either a bare 32-hex wstoken OR a '<scheme>://token=<base64>' launch
+    redirect (base64 = md5(wwwroot+passport) + ':::' + token
+    [+ ':::' + privatetoken]). For the URL form: base64-decode, split on ':::',
+    and — when passport+wwwroot are given — verify the md5 prefix ==
+    md5(wwwroot+passport); return the token segment. A bare 32-hex string is
+    returned as-is. Raises MoodleError('unrecognized token') on neither, and
+    MoodleError('passport mismatch') when the launch signature fails to verify."""
+    value = (pasted or "").strip()
+    if _HEX32_RE.match(value):
+        return value
+    # Launch-redirect form: everything after the last 'token=' is the base64 blob.
+    if "token=" in value:
+        blob = value.split("token=", 1)[1].strip()
+        try:
+            decoded = base64.b64decode(blob).decode("utf-8", "replace")
+        except Exception as exc:  # noqa: BLE001 — malformed paste
+            raise MoodleError("unrecognized token") from exc
+        parts = decoded.split(":::")
+        if len(parts) >= 2:
+            signature, token = parts[0], parts[1]
+            if passport is not None and wwwroot is not None:
+                expected = hashlib.md5((wwwroot + passport).encode()).hexdigest()
+                if signature != expected:
+                    raise MoodleError("passport mismatch")
+            if _HEX32_RE.match(token):
+                return token
+    raise MoodleError("unrecognized token")
