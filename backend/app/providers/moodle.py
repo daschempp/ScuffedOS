@@ -276,6 +276,118 @@ class MoodleProvider:
                     ))
         return out
 
+    def fetch_announcements(
+        self, userid: int, course_ids: list[str]
+    ) -> list[NormalizedAnnouncement]:
+        """Course announcements: list forums for the given courses via
+        mod_forum_get_forums_by_courses, keep only type=='news' (the
+        announcement forum), then pull each news forum's discussions via
+        mod_forum_get_forum_discussions. The raw discussion `message` HTML is
+        kept verbatim in summary_html (stripped only at display, per contract
+        — no bodies persisted beyond this short summary)."""
+        if not course_ids:
+            return []
+        forums = self._call(
+            "mod_forum_get_forums_by_courses", courseids=course_ids
+        ) or []
+        out: list[NormalizedAnnouncement] = []
+        for forum in forums:
+            if (forum.get("type") or "") != "news":
+                continue
+            forum_id = str(forum.get("id") or "")
+            course_id = str(forum.get("course") or "")
+            result = self._call(
+                "mod_forum_get_forum_discussions", forumid=forum_id
+            ) or {}
+            for disc in result.get("discussions") or []:
+                out.append(NormalizedAnnouncement(
+                    source="moodle",
+                    source_id=str(disc.get("discussion") or ""),
+                    course_id=course_id,
+                    forum_id=forum_id,
+                    subject=disc.get("subject") or "",
+                    author=disc.get("userfullname") or "",
+                    created_at=_epoch(disc.get("created")),
+                    summary_html=disc.get("message") or "",
+                    url="",
+                ))
+        return out
+
+    def fetch_notifications(self, userid: int) -> list[NormalizedNotification]:
+        """Popup notifications via message_popup_get_popup_notifications
+        (useridto=userid, newestfirst=1, limit=0 => all, offset=0). NB this WS
+        uses limit/offset, NOT limitnum. fullmessage is kept raw in
+        full_message (stripped at display); timecreated 0 -> None."""
+        result = self._call(
+            "message_popup_get_popup_notifications",
+            useridto=userid, newestfirst=1, limit=0, offset=0,
+        ) or {}
+        out: list[NormalizedNotification] = []
+        for note in result.get("notifications") or []:
+            out.append(NormalizedNotification(
+                source="moodle",
+                source_id=str(note.get("id") or ""),
+                subject=note.get("subject") or "",
+                full_message=note.get("fullmessage") or "",
+                context_url=note.get("contexturl") or "",
+                created_at=_epoch(note.get("timecreated")),
+                read=bool(note.get("read")),
+            ))
+        return out
+
+    def fetch_school_snapshot(self, since: datetime | None) -> MoodleSnapshot:
+        """The bundle the sync tick consumes. Calls get_site_info once for the
+        userid (cached on self._userid) and the site's advertised wsfunction
+        list, feature-detects each OPTIONAL call against that list (a Moodle
+        instance may not expose every WS — a missing function yields an empty
+        list, never an error), then assembles a MoodleSnapshot from the six
+        fetch_* methods. `since` is accepted for signature parity with the
+        pull providers; the deadline window is driven off `now` internally."""
+        info = self.get_site_info(self._tokens.access_token if self._tokens else "")
+        userid = int(info.get("userid") or 0)
+        self._userid = userid
+        available = set(info.get("functions") or [])
+
+        def _has(*names: str) -> bool:
+            return all(n in available for n in names)
+
+        now = datetime.now(timezone.utc)
+        courses = (
+            self.fetch_courses(userid)
+            if _has("core_enrol_get_users_courses") else []
+        )
+        course_ids = [c.source_id for c in courses]
+        deadlines = (
+            self.fetch_deadlines(now)
+            if _has("core_calendar_get_action_events_by_timesort") else []
+        )
+        assignments = (
+            self.fetch_assignments(userid)
+            if _has("mod_assign_get_assignments",
+                    "mod_assign_get_submission_status") else []
+        )
+        grades = (
+            self.fetch_grades(userid, course_ids)
+            if _has("gradereport_user_get_grade_items") else []
+        )
+        announcements = (
+            self.fetch_announcements(userid, course_ids)
+            if _has("mod_forum_get_forums_by_courses",
+                    "mod_forum_get_forum_discussions") else []
+        )
+        notifications = (
+            self.fetch_notifications(userid)
+            if _has("message_popup_get_popup_notifications") else []
+        )
+        return MoodleSnapshot(
+            courses=courses,
+            deadlines=deadlines,
+            assignments=assignments,
+            grades=grades,
+            announcements=announcements,
+            notifications=notifications,
+        )
+
     # ---- OAuth-ish plumbing (Moodle has no code exchange; connect is token-paste) ----
     def authorize_url(self, state: str) -> str:
         """The Moodle mobile launch URL. Not used by the token-paste connect flow;

@@ -332,3 +332,220 @@ def test_fetch_grades_empty_when_no_course_ids():
     http = FakeMoodleHTTP(responses={"gradereport_user_get_grade_items": {}})
     assert _provider(http).fetch_grades(userid=7, course_ids=[]) == []
     assert http.posts == []          # no course ids -> no WS calls at all
+
+
+# ---- fetch_announcements [confirm-against-live: mod_forum_get_forums_by_courses
+#      (courseids[]) -> [{id,type,course,...}] keep type=='news'; then
+#      mod_forum_get_forum_discussions(forumid) ->
+#      {"discussions":[{discussion,subject,message,userfullname,created}]}] ----
+
+def test_fetch_announcements_keeps_only_news_forums_and_maps_discussions():
+    http = FakeMoodleHTTP(responses={
+        "mod_forum_get_forums_by_courses": [
+            {"id": 11, "type": "news", "course": 72},
+            {"id": 12, "type": "general", "course": 72},   # not an announcement forum
+        ],
+        "mod_forum_get_forum_discussions": {"discussions": [
+            {"discussion": 3001, "subject": "Welcome to CSC510",
+             "message": "<p>Read the <b>syllabus</b>.</p>",
+             "userfullname": "Prof. Ada", "created": 1725580800},
+        ]},
+    })
+    anns = _provider(http).fetch_announcements(userid=7, course_ids=["72"])
+
+    assert len(anns) == 1                          # only the news forum's discussion
+    a = anns[0]
+    assert a.source == "moodle"
+    assert a.source_id == "3001"                   # discussion id
+    assert a.course_id == "72"
+    assert a.forum_id == "11"
+    assert a.subject == "Welcome to CSC510"
+    assert a.author == "Prof. Ada"
+    assert a.created_at == datetime(2024, 9, 6, tzinfo=timezone.utc)  # 1725580800
+    # raw HTML is kept in summary_html (stripped only at display, per contract).
+    assert a.summary_html == "<p>Read the <b>syllabus</b>.</p>"
+
+
+def test_fetch_announcements_sends_courseids_and_forumid_params():
+    http = FakeMoodleHTTP(responses={
+        "mod_forum_get_forums_by_courses": [{"id": 11, "type": "news", "course": 72}],
+        "mod_forum_get_forum_discussions": {"discussions": []},
+    })
+    _provider(http).fetch_announcements(userid=7, course_ids=["72", "69"])
+
+    _, forums_body = http.posts[0]
+    assert forums_body["wsfunction"] == "mod_forum_get_forums_by_courses"
+    assert forums_body["courseids[0]"] == "72"       # PHP-array flattened
+    assert forums_body["courseids[1]"] == "69"
+    _, disc_body = http.posts[1]
+    assert disc_body["wsfunction"] == "mod_forum_get_forum_discussions"
+    assert disc_body["forumid"] == "11"
+
+
+def test_fetch_announcements_empty_when_no_news_forums():
+    http = FakeMoodleHTTP(responses={
+        "mod_forum_get_forums_by_courses": [{"id": 12, "type": "general", "course": 72}],
+    })
+    anns = _provider(http).fetch_announcements(userid=7, course_ids=["72"])
+    assert anns == []
+    assert len(http.posts) == 1     # forums listed, but no discussion call made
+
+
+# ---- fetch_notifications [confirm-against-live: message_popup_get_popup_notifications
+#      (useridto,newestfirst,limit,offset) -> {"notifications":[{id,subject,
+#      fullmessage,contexturl,timecreated,read}]}  (NB limit/offset, NOT limitnum)] ----
+
+def test_fetch_notifications_maps_popup_notifications():
+    http = FakeMoodleHTTP(responses={
+        "message_popup_get_popup_notifications": {"notifications": [
+            {"id": 7001, "subject": "Assignment graded",
+             "fullmessage": "Your Design doc was graded.",
+             "contexturl": "https://moodle.example/mod/assign/view.php?id=1",
+             "timecreated": 1725580800, "read": False},
+            {"id": 7002, "subject": "Reminder",
+             "fullmessage": "Quiz closes tomorrow.", "contexturl": "",
+             "timecreated": 0, "read": True},
+        ]},
+    })
+    notes = _provider(http).fetch_notifications(userid=7)
+
+    assert len(notes) == 2
+    n0, n1 = notes
+    assert n0.source == "moodle"
+    assert n0.source_id == "7001"
+    assert n0.subject == "Assignment graded"
+    assert n0.full_message == "Your Design doc was graded."
+    assert n0.context_url == "https://moodle.example/mod/assign/view.php?id=1"
+    assert n0.created_at == datetime(2024, 9, 6, tzinfo=timezone.utc)  # 1725580800
+    assert n0.read is False
+    assert n1.source_id == "7002"
+    assert n1.created_at is None            # timecreated 0 -> None
+    assert n1.read is True
+
+
+def test_fetch_notifications_sends_limit_offset_not_limitnum():
+    http = FakeMoodleHTTP(responses={
+        "message_popup_get_popup_notifications": {"notifications": []},
+    })
+    _provider(http).fetch_notifications(userid=7)
+
+    _, body = http.posts[0]
+    assert body["wsfunction"] == "message_popup_get_popup_notifications"
+    assert body["useridto"] == "7"
+    assert body["newestfirst"] == "1"
+    assert body["limit"] == "0"
+    assert body["offset"] == "0"
+    assert "limitnum" not in body           # this WS uses limit/offset
+
+
+# ---- fetch_school_snapshot: get_site_info for userid+functions, feature-detect
+#      each optional wsfunction, assemble MoodleSnapshot from the six fetch_* ----
+
+_ALL_FUNCTIONS = [
+    "core_enrol_get_users_courses",
+    "core_calendar_get_action_events_by_timesort",
+    "mod_assign_get_assignments",
+    "mod_assign_get_submission_status",
+    "gradereport_user_get_grade_items",
+    "mod_forum_get_forums_by_courses",
+    "mod_forum_get_forum_discussions",
+    "message_popup_get_popup_notifications",
+]
+
+
+def _snapshot_responses(functions):
+    return {
+        "core_webservice_get_site_info": {
+            "userid": 7, "fullname": "Sam Student", "sitename": "WolfWare",
+            "release": "5.2", "functions": [{"name": n} for n in functions],
+        },
+        "core_enrol_get_users_courses": [
+            {"id": 72, "shortname": "CSC510", "fullname": "Software Engineering",
+             "progress": 42.5, "startdate": 0, "enddate": 0,
+             "lastaccess": 0, "hidden": 0},
+        ],
+        "core_calendar_get_action_events_by_timesort": {"events": [
+            {"id": 9001, "name": "Assignment is due", "modulename": "assign",
+             "eventtype": "due", "timesort": 1725580800, "overdue": False,
+             "viewurl": "https://moodle.example/a", "course": {"id": 72}},
+        ]},
+        "mod_assign_get_assignments": {"courses": [
+            {"id": 72, "assignments": [
+                {"id": 501, "cmid": 8801, "name": "Design doc",
+                 "duedate": 1725580800, "cutoffdate": 0, "grade": 100},
+            ]},
+        ]},
+        "mod_assign_get_submission_status": {
+            "lastattempt": {"submission": {"status": "submitted"}},
+            "gradingstatus": "graded", "graded": True,
+        },
+        "gradereport_user_get_grade_items": {"usergrades": [
+            {"gradeitems": [
+                {"id": 9001, "itemname": "Design doc", "itemtype": "mod",
+                 "graderaw": 88.0, "gradeformatted": "88.00",
+                 "grademin": 0.0, "grademax": 100.0, "gradedategraded": 0},
+            ]},
+        ]},
+        "mod_forum_get_forums_by_courses": [{"id": 11, "type": "news", "course": 72}],
+        "mod_forum_get_forum_discussions": {"discussions": [
+            {"discussion": 3001, "subject": "Welcome", "message": "<p>Hi</p>",
+             "userfullname": "Prof. Ada", "created": 1725580800},
+        ]},
+        "message_popup_get_popup_notifications": {"notifications": [
+            {"id": 7001, "subject": "Graded", "fullmessage": "Nice work.",
+             "contexturl": "", "timecreated": 1725580800, "read": False},
+        ]},
+    }
+
+
+def test_fetch_school_snapshot_bundles_all_six_lists():
+    http = FakeMoodleHTTP(responses=_snapshot_responses(_ALL_FUNCTIONS))
+    snap = _provider(http).fetch_school_snapshot(since=None)
+
+    assert len(snap.courses) == 1
+    assert len(snap.deadlines) == 1
+    assert len(snap.assignments) == 1
+    assert len(snap.grades) == 1
+    assert len(snap.announcements) == 1
+    assert len(snap.notifications) == 1
+    # spot-check bundling wired the right normalized objects through:
+    assert snap.courses[0].shortname == "CSC510"
+    assert snap.deadlines[0].source_id == "9001"
+    assert snap.assignments[0].submission_status == "submitted"
+    assert snap.grades[0].grade_formatted == "88.00"
+    assert snap.announcements[0].subject == "Welcome"
+    assert snap.notifications[0].subject == "Graded"
+
+
+def test_fetch_school_snapshot_caches_userid_from_site_info():
+    http = FakeMoodleHTTP(responses=_snapshot_responses(_ALL_FUNCTIONS))
+    p = _provider(http)
+    p.fetch_school_snapshot(since=None)
+    assert p._userid == 7
+
+
+def test_fetch_school_snapshot_skips_missing_notification_function():
+    # functions[] lacks message_popup_get_popup_notifications -> notifications
+    # == [] and NO error (feature-detect, never raise).
+    funcs = [f for f in _ALL_FUNCTIONS
+             if f != "message_popup_get_popup_notifications"]
+    http = FakeMoodleHTTP(responses=_snapshot_responses(funcs))
+    snap = _provider(http).fetch_school_snapshot(since=None)
+
+    assert snap.notifications == []
+    # the missing function was never called...
+    called = [body["wsfunction"] for _, body in http.posts]
+    assert "message_popup_get_popup_notifications" not in called
+    # ...but the rest of the snapshot still populated normally.
+    assert len(snap.courses) == 1
+    assert len(snap.deadlines) == 1
+
+
+def test_fetch_school_snapshot_skips_missing_grades_function():
+    funcs = [f for f in _ALL_FUNCTIONS
+             if f != "gradereport_user_get_grade_items"]
+    http = FakeMoodleHTTP(responses=_snapshot_responses(funcs))
+    snap = _provider(http).fetch_school_snapshot(since=None)
+
+    assert snap.grades == []
+    assert len(snap.courses) == 1     # unaffected
