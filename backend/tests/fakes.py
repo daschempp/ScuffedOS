@@ -246,6 +246,69 @@ def gmail_message(msg_id: str, *, thread_id: str = "t1", from_hdr: str,
     }
 
 
+# ---- moodle provider seam (M6) --------------------------------------------
+class _Seq:
+    """Wrap successive per-call responses for ONE wsfunction. Needed because a
+    plain list is a LITERAL array payload (some Moodle WS functions —
+    core_enrol_get_users_courses, mod_forum_get_forums_by_courses — return a
+    top-level JSON array), so a list cannot also mean 'call sequence'. Use
+    seq(...) ONLY for a wsfunction the provider calls more than once in one
+    fetch (calendar pagination, per-course grades, per-assignment status,
+    per-forum discussions). Exhausting a sequence keeps returning its last item."""
+
+    def __init__(self, items):
+        self.items = list(items)
+        self.i = 0
+
+    def next(self):
+        item = self.items[min(self.i, len(self.items) - 1)]
+        self.i += 1
+        return item
+
+
+def seq(*items):
+    """seq(resp1, resp2, ...) — successive responses for a repeatedly-called wsfunction."""
+    return _Seq(items)
+
+
+class FakeMoodleHTTP:
+    """Scriptable transport for MoodleProvider.configure(fake_http=...).
+
+    Constructed with responses= (alias: payloads=), a dict wsfunction -> value:
+      - a dict OR list value is returned LITERALLY every call (a list is a real
+        top-level array payload, e.g. core_enrol_get_users_courses returns a
+        JSON array of courses);
+      - a seq(...) value pops the next scripted response per successive call.
+    exceptions= maps wsfunction -> an exception dict {"exception","errorcode",
+    "message"} (Moodle returns errors as HTTP 200 with an "exception" key — see
+    contract §C). .post(url, data=...) routes on data["wsfunction"] and records
+    every post as (url, flattened-form-dict) so tests can assert the params
+    reached server.php.
+    """
+
+    def __init__(self, responses: dict | None = None, exceptions: dict | None = None,
+                 payloads: dict | None = None):
+        # payloads= is a back-compat alias for responses=.
+        self.responses = dict(responses if responses is not None else (payloads or {}))
+        self.exceptions = exceptions or {}
+        self.posts: list[tuple[str, dict]] = []  # (url, form-data dict)
+
+    def post(self, url, data=None, headers=None):
+        data = dict(data or {})
+        self.posts.append((url, data))
+        fn = data.get("wsfunction", "")
+        if fn in self.exceptions:
+            # Moodle web-service error: HTTP 200 with an exception body.
+            return _FakeResponse(dict(self.exceptions[fn]))
+        value = self.responses.get(fn, {})
+        if isinstance(value, _Seq):
+            return _FakeResponse(value.next())
+        return _FakeResponse(value)     # literal dict OR top-level array
+
+    def get(self, url, headers=None, params=None):  # unused by MoodleProvider
+        return _FakeResponse({})
+
+
 class FakeEmailProvider:
     """Scriptable EmailProvider stand-in (name='google') — no network.
 

@@ -38,6 +38,11 @@ def _build_real() -> list[OAuthProvider]:
             built.append(GoogleProvider())
         except ImportError:
             pass  # GoogleProvider not present yet (mid-plan) — skip it.
+        try:
+            from .moodle import MoodleProvider
+            built.append(MoodleProvider())
+        except ImportError:
+            pass  # MoodleProvider not present yet (mid-plan) — skip it.
         _real = built
     return _real
 
