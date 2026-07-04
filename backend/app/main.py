@@ -26,6 +26,7 @@ from .routers import (
     fitness,
     habits,
     memory,
+    moodle,
     nutrition,
     oauth,
     tasks,
@@ -77,6 +78,7 @@ app.include_router(fitness.router)
 app.include_router(oauth.router)
 app.include_router(oauth.auth_router)
 app.include_router(email.router)
+app.include_router(moodle.router)
 
 
 @app.get("/api/health", tags=["meta"])
