@@ -362,8 +362,30 @@ def test_fetch_announcements_keeps_only_news_forums_and_maps_discussions():
     assert a.subject == "Welcome to CSC510"
     assert a.author == "Prof. Ada"
     assert a.created_at == datetime(2024, 9, 6, tzinfo=timezone.utc)  # 1725580800
-    # raw HTML is kept in summary_html (stripped only at display, per contract).
-    assert a.summary_html == "<p>Read the <b>syllabus</b>.</p>"
+    # HTML is stripped at the provider boundary so stored/served values are
+    # already display-ready (contract: "stripped for display").
+    assert "<" not in a.summary_html and ">" not in a.summary_html
+    assert "Read the" in a.summary_html and "syllabus" in a.summary_html
+
+
+def test_fetch_announcements_strips_html_from_message_into_summary_html():
+    http = FakeMoodleHTTP(responses={
+        "mod_forum_get_forums_by_courses": [
+            {"id": 11, "type": "news", "course": 72},
+        ],
+        "mod_forum_get_forum_discussions": {"discussions": [
+            {"discussion": 3002, "subject": "Reminder",
+             "message": "<p>Hello <b>world</b></p>",
+             "userfullname": "Prof. Ada", "created": 1725580800},
+        ]},
+    })
+    anns = _provider(http).fetch_announcements(userid=7, course_ids=["72"])
+
+    assert len(anns) == 1
+    summary = anns[0].summary_html
+    assert "<" not in summary and ">" not in summary
+    assert "Hello world" in summary
+    assert "<p>" not in summary
 
 
 def test_fetch_announcements_sends_courseids_and_forumid_params():
@@ -421,6 +443,23 @@ def test_fetch_notifications_maps_popup_notifications():
     assert n1.source_id == "7002"
     assert n1.created_at is None            # timecreated 0 -> None
     assert n1.read is True
+
+
+def test_fetch_notifications_strips_html_from_fullmessage_into_full_message():
+    http = FakeMoodleHTTP(responses={
+        "message_popup_get_popup_notifications": {"notifications": [
+            {"id": 7003, "subject": "Graded",
+             "fullmessage": "<p>Hello <b>world</b></p>",
+             "contexturl": "", "timecreated": 1725580800, "read": False},
+        ]},
+    })
+    notes = _provider(http).fetch_notifications(userid=7)
+
+    assert len(notes) == 1
+    full_message = notes[0].full_message
+    assert "<" not in full_message and ">" not in full_message
+    assert "Hello world" in full_message
+    assert "<p>" not in full_message
 
 
 def test_fetch_notifications_sends_limit_offset_not_limitnum():

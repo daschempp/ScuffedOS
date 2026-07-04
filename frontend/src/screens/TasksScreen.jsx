@@ -23,7 +23,7 @@ export function TasksScreen({ tasks, onToggle, onUpdate, onAdd, onRefresh }) {
     { name: 'Work', color: 'sky' }, { name: 'Health', color: 'green' },
     { name: 'Finance', color: 'honey' }, { name: 'Personal', color: 'plum' },
   ]
-  const groups = ['Today', 'Upcoming', 'Someday']
+  const groups = ['Today', 'Upcoming', 'Someday', 'School']
   const openCount = tasks.filter((t) => !t.done).length
   const doneToday = tasks.filter((t) => t.done).length
   const openTask = tasks.find((t) => t.id === openId)

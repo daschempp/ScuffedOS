@@ -282,8 +282,9 @@ class MoodleProvider:
         """Course announcements: list forums for the given courses via
         mod_forum_get_forums_by_courses, keep only type=='news' (the
         announcement forum), then pull each news forum's discussions via
-        mod_forum_get_forum_discussions. The raw discussion `message` HTML is
-        kept verbatim in summary_html (stripped only at display, per contract
+        mod_forum_get_forum_discussions. The discussion `message` HTML is
+        stripped via _strip_html at this provider boundary before it lands in
+        summary_html, so the stored value is already display-ready (contract
         — no bodies persisted beyond this short summary)."""
         if not course_ids:
             return []
@@ -308,7 +309,7 @@ class MoodleProvider:
                     subject=disc.get("subject") or "",
                     author=disc.get("userfullname") or "",
                     created_at=_epoch(disc.get("created")),
-                    summary_html=disc.get("message") or "",
+                    summary_html=_strip_html(disc.get("message") or ""),
                     url="",
                 ))
         return out
@@ -316,8 +317,9 @@ class MoodleProvider:
     def fetch_notifications(self, userid: int) -> list[NormalizedNotification]:
         """Popup notifications via message_popup_get_popup_notifications
         (useridto=userid, newestfirst=1, limit=0 => all, offset=0). NB this WS
-        uses limit/offset, NOT limitnum. fullmessage is kept raw in
-        full_message (stripped at display); timecreated 0 -> None."""
+        uses limit/offset, NOT limitnum. fullmessage is stripped via
+        _strip_html at this provider boundary before it lands in
+        full_message; timecreated 0 -> None."""
         result = self._call(
             "message_popup_get_popup_notifications",
             useridto=userid, newestfirst=1, limit=0, offset=0,
@@ -328,7 +330,7 @@ class MoodleProvider:
                 source="moodle",
                 source_id=str(note.get("id") or ""),
                 subject=note.get("subject") or "",
-                full_message=note.get("fullmessage") or "",
+                full_message=_strip_html(note.get("fullmessage") or ""),
                 context_url=note.get("contexturl") or "",
                 created_at=_epoch(note.get("timecreated")),
                 read=bool(note.get("read")),

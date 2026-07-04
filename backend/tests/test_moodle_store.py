@@ -294,6 +294,32 @@ def test_assignment_without_due_date_is_skipped_from_tasks():
     assert [t for t in tasks if t["id"] == "moodle:a9"] == []
 
 
+def test_moodle_calendar_event_degrades_gracefully_when_course_join_misses():
+    # NO _seed_course() here: the deadline's course_id ("72") has no matching
+    # moodle_courses row, so the shortnames lookup misses. The projector must
+    # not crash, and the title must fall back to the bare name (no dangling
+    # "· " separator) rather than joining an empty shortname.
+    _seed_deadline(source_id="d-orphan", course_id="72")
+    window_start = datetime(2026, 7, 6, 0, 0, tzinfo=timezone.utc)
+    window_end = datetime(2026, 7, 7, 0, 0, tzinfo=timezone.utc)
+    occs = store.events_between(window_start, window_end)
+    moodle = [o for o in occs if o["id"] == "moodle:d-orphan"]
+    assert len(moodle) == 1
+    assert moodle[0]["title"] == "Project 1 is due"
+    assert "·" not in moodle[0]["title"]
+
+
+def test_moodle_task_degrades_gracefully_when_course_join_misses():
+    # Same scenario for the task projector: an assignment whose course_id has
+    # no matching moodle_courses row must still produce a task, with the
+    # label falling back to the bare name (no dangling "· " separator).
+    _seed_assignment(source_id="a-orphan", course_id="72")
+    tasks = store.list_tasks()
+    task = next(t for t in tasks if t["id"] == "moodle:a-orphan")
+    assert task["label"] == "Project 1"
+    assert "·" not in task["label"]
+
+
 def test_no_moodle_rows_leaves_events_between_and_up_next_unchanged():
     # A single real local event; NO moodle rows seeded. Store-level dicts for
     # local rows never carried "source"/"editable" (those keys are filled in
