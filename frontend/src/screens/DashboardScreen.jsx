@@ -10,6 +10,7 @@ export function DashboardScreen({ tasks, onToggleTask, voiceNotes, calendar, nut
     title: u.title,
     meta: (u.when || '').split(' · ').slice(1).join(' · '),
     icon: u.tint === 'sky' ? 'video' : undefined,
+    moodle: u.source === 'moodle',
     active: i === 0,
   }))
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).replace(',', ' ·')
@@ -32,7 +33,7 @@ export function DashboardScreen({ tasks, onToggleTask, voiceNotes, calendar, nut
               <div key={i} className={`kit-agenda__item ${a.active ? '' : 'kit-agenda__item--muted'}`}>
                 <div className="kit-agenda__time">{a.time}</div>
                 <div className="kit-agenda__body">
-                  <p className="kit-agenda__title">{a.title}</p>
+                  <p className="kit-agenda__title">{a.title}{a.moodle && <Badge color="plum" style={{ marginLeft: 8 }}>Moodle</Badge>}</p>
                   <p className="kit-agenda__meta">{a.icon && <Icon name={a.icon} />}{a.meta}</p>
                 </div>
               </div>
@@ -74,11 +75,15 @@ export function DashboardScreen({ tasks, onToggleTask, voiceNotes, calendar, nut
 
         <Card title="Tasks" action={<span className="kit-muted">{tasks.filter((t) => !t.done).length} left</span>}>
           <div className="kit-stack" style={{ gap: 4 }}>
-            {tasks.map((t) => (
-              <div key={t.id} style={{ padding: '7px 0' }}>
-                <Checkbox checked={t.done} strikeWhenChecked label={t.label} onChange={() => onToggleTask(t.id)} />
-              </div>
-            ))}
+            {tasks.map((t) => {
+              const readOnly = t.editable === false || t.source === 'moodle'
+              return (
+                <div key={t.id} style={{ padding: '7px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Checkbox checked={t.done} strikeWhenChecked label={t.label} onChange={readOnly ? undefined : () => onToggleTask(t.id)} />
+                  {readOnly && <Badge color="plum">Moodle</Badge>}
+                </div>
+              )
+            })}
           </div>
         </Card>
 

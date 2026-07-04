@@ -2,7 +2,7 @@
    (passed down from App.jsx as the `calendar` prop). Renders an empty grid
    when the backend is down — never crashes on missing data. */
 import React from 'react'
-import { Card, IconButton, Button } from '../components/ui.jsx'
+import { Card, IconButton, Button, Badge } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 
 const DEFAULT_START = 8, DEFAULT_END = 18, ROW = 52 // the prototype's 8:00 → 18:00
@@ -74,7 +74,8 @@ export function CalendarScreen({ calendar }) {
                 {eventsByCol[i].map((ev) => (
                   <div key={ev.id + '-' + ev.start} className={'kit-event kit-ev--' + (ev.tint || 'green')}
                     style={{ top: (ev.s - START) * ROW + 1, height: (ev.e - ev.s) * ROW - 3 }}>
-                    <b>{ev.title}</b><span>{ev.at}</span>
+                    <b>{ev.title}</b>
+                    <span>{ev.at}{ev.source === 'moodle' ? ' · Moodle' : ''}</span>
                   </div>
                 ))}
               </div>
@@ -107,6 +108,7 @@ export function CalendarScreen({ calendar }) {
                   <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>{u.title}</p>
                   <p className="kit-row__sub" style={{ fontSize: 12 }}>{u.when}</p>
                 </div>
+                {u.source === 'moodle' && <Badge color="plum">Moodle</Badge>}
               </div>
             ))}
           </div>

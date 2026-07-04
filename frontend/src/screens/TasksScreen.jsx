@@ -32,10 +32,15 @@ export function TasksScreen({ tasks, onToggle, onUpdate, onAdd, onRefresh }) {
     const t = withColor(raw)
     const subs = t.subtasks || []
     const subsDone = subs.filter((s) => s.done).length
+    // Moodle deadlines are merged in read-only (contract §M): editable===false
+    // and a string id "moodle:<n>" that already 422s any mutation endpoint
+    // server-side. Suppress the detail-opener, toggle and chevron; show a
+    // "Moodle" chip instead.
+    const readOnly = t.editable === false || t.source === 'moodle'
     return (
-      <div className={'kit-task' + (t.done ? ' kit-task--done' : '')} key={t.id} onClick={() => setOpenId(t.id)}>
+      <div className={'kit-task' + (t.done ? ' kit-task--done' : '')} key={t.id} onClick={readOnly ? undefined : () => setOpenId(t.id)}>
         <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex' }}>
-          <Checkbox checked={t.done} onChange={() => onToggle(t.id)} />
+          <Checkbox checked={t.done} onChange={readOnly ? undefined : () => onToggle(t.id)} />
         </span>
         <div className="kit-task__main">
           <p className="kit-task__title">{t.label}</p>
@@ -47,7 +52,9 @@ export function TasksScreen({ tasks, onToggle, onUpdate, onAdd, onRefresh }) {
             {(t.files || []).length > 0 && <span className="kit-task__due"><Icon name="paperclip" />{t.files.length}</span>}
           </div>
         </div>
-        <span className="kit-task__chev"><Icon name="chevron-right" /></span>
+        {readOnly
+          ? <Badge color="plum">Moodle</Badge>
+          : <span className="kit-task__chev"><Icon name="chevron-right" /></span>}
       </div>
     )
   }
