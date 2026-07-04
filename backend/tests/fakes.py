@@ -166,7 +166,7 @@ class FakeProvider:
 
 
 # ---- email provider seam (M5) ---------------------------------------------
-from app.providers.base import NormalizedEmail
+from app.providers.base import MoodleSnapshot, NormalizedEmail
 
 
 class _FakeResponse:
@@ -390,3 +390,90 @@ class FakeEmailProvider:
     def get_message(self, source_id: str) -> str:
         self.fetched_bodies.append(source_id)
         return self.body
+
+
+class FakeMoodleProvider:
+    """Scriptable MoodleProvider stand-in (name='moodle') — no network.
+
+    Installed via ``providers.configure([FakeMoodleProvider(...)])``. Satisfies the
+    MoodleProvider protocol (contract §B/§C) so the shared oauth router and
+    moodle_sync accept it. Its distinguishing method is fetch_school_snapshot —
+    moodle_sync selects providers by hasattr on it, exactly as email_sync selects
+    by hasattr(p, 'fetch_messages'). Records every OAuth call so router tests can
+    assert exchange/refresh/revoke ran; raise_auth drives the needs_reauth path.
+    """
+
+    name = "moodle"
+
+    def __init__(
+        self,
+        *,
+        tokens: Tokens | None = None,
+        snapshot: MoodleSnapshot | None = None,
+        site_info: dict | None = None,
+        raise_auth: bool = False,
+    ) -> None:
+        self.tokens = tokens or Tokens(
+            access_token="m-wstoken", refresh_token=None, expires_at=None,
+            scopes="", provider_user_id="42",
+        )
+        self.snapshot = snapshot or MoodleSnapshot()
+        self.site_info = site_info or {
+            "userid": 42, "sitename": "WolfWare", "release": "5.2",
+            "functions": [],
+        }
+        self.raise_auth = raise_auth
+        self.exchanged: list[str] = []
+        self.refreshed: list[Tokens] = []
+        self.revoked: list[Tokens] = []
+        self.injected: list[Tokens | None] = []
+        self.fetched_since: list = []
+        self.site_info_calls: list[str] = []
+
+    # ---- OAuthProvider ----
+    def set_tokens(self, tokens):
+        self.injected.append(tokens)
+
+    def authorize_url(self, state: str) -> str:
+        return (
+            "https://moodle-courses2527.wolfware.ncsu.edu/admin/tool/mobile/launch.php"
+            f"?service=moodle_mobile_app&state={state}"
+        )
+
+    def exchange_code(self, code: str) -> Tokens:
+        self.exchanged.append(code)
+        return self.tokens
+
+    def refresh(self, tokens: Tokens) -> Tokens:
+        # Moodle has no refresh endpoint — passthrough (contract §C).
+        self.refreshed.append(tokens)
+        return tokens
+
+    def revoke(self, tokens: Tokens) -> None:
+        self.revoked.append(tokens)
+
+    def success_redirect(self) -> str:
+        return "/?screen=school&connected=moodle"
+
+    def on_connected(self) -> None:
+        from app import moodle_sync
+
+        moodle_sync.tick()
+
+    def on_disconnect(self) -> None:
+        from app.store import store
+
+        store.delete_moodle_data(self.name)
+
+    # ---- MoodleProvider ----
+    def get_site_info(self, token: str) -> dict:
+        self.site_info_calls.append(token)
+        return self.site_info
+
+    def fetch_school_snapshot(self, since):
+        from app.providers.moodle import MoodleAuthError
+
+        if self.raise_auth:
+            raise MoodleAuthError("moodle invalidtoken")
+        self.fetched_since.append(since)
+        return self.snapshot

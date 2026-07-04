@@ -16,7 +16,7 @@ import contextlib
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import email_sync, fitness_sync, reminders
+from . import email_sync, fitness_sync, moodle_sync, reminders
 from .config import settings
 from .errors import install_error_handlers
 from .routers import (
@@ -34,19 +34,22 @@ from .routers import (
 
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
-    """Start the reminder tick and the fitness-sync loop alongside the server;
-    stop them on shutdown."""
+    """Start the reminder tick and the fitness/email/moodle-sync loops alongside
+    the server; stop them on shutdown."""
     reminder_task: asyncio.Task | None = None
     fitness_task: asyncio.Task | None = None
     email_task: asyncio.Task | None = None
+    moodle_task: asyncio.Task | None = None
     if settings.reminders_enabled:
         reminder_task = asyncio.create_task(reminders.run_loop())
     if settings.fitness_sync_enabled:
         fitness_task = asyncio.create_task(fitness_sync.run_loop())
     if settings.email_sync_enabled:
         email_task = asyncio.create_task(email_sync.run_loop())
+    if settings.moodle_sync_enabled:
+        moodle_task = asyncio.create_task(moodle_sync.run_loop())
     yield
-    for task in (reminder_task, fitness_task, email_task):
+    for task in (reminder_task, fitness_task, email_task, moodle_task):
         if task is not None:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
