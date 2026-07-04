@@ -3,29 +3,59 @@ are served from the store (no live Moodle call); /sync delegates to a
 FakeMoodleSync seam and lists providers by the fetch_school_snapshot
 duck-type. This file defines its own slim FakeMoodleProvider + FakeMoodleSync
 (only the router surface), matching test_email_api.py's local-fakes split."""
+import base64
+import hashlib
 from datetime import datetime, timezone
 
 from app import moodle_sync, providers
+from app.config import settings
 from app.providers.base import (
     NormalizedAnnouncement,
     NormalizedCourse,
     NormalizedDeadline,
     NormalizedGrade,
     NormalizedNotification,
+    Tokens,
 )
+from app.providers.moodle import MoodleAuthError
 from app.store import store
 
 NOW = datetime(2026, 7, 3, 15, 0, tzinfo=timezone.utc)
 
 
 class FakeMoodleProvider:
-    """Only the surface the moodle router + /sync provider-list touches:
-    name and the fetch_school_snapshot duck-type marker."""
+    """Slim MoodleProvider stand-in for the router tests. Scripts
+    get_site_info (the connect-time validation) and mirrors the real
+    on_disconnect -> store.delete_moodle_data hook so the shared
+    /api/oauth/disconnect/moodle path deletes Moodle rows for real."""
 
     name = "moodle"
 
+    def __init__(self, *, site_info=None, raise_auth=False):
+        self._site_info = site_info or {
+            "userid": 501, "sitename": "WolfWare", "release": "5.2",
+            "functions": ["core_enrol_get_users_courses"],
+        }
+        self._raise_auth = raise_auth
+        self.injected = []
+
     def fetch_school_snapshot(self, since):  # marks this as a Moodle provider
         return None
+
+    def get_site_info(self, token: str) -> dict:
+        if self._raise_auth:
+            raise MoodleAuthError("invalidtoken")
+        return dict(self._site_info)
+
+    # ---- OAuth plumbing the shared oauth router calls on disconnect ----
+    def set_tokens(self, tokens):
+        self.injected.append(tokens)
+
+    def revoke(self, tokens) -> None:
+        pass
+
+    def on_disconnect(self) -> None:
+        store.delete_moodle_data(self.name)
 
 
 class FakeMoodleSync:
@@ -166,3 +196,97 @@ def test_sync_triggers_moodle_sync_and_lists_moodle_providers(client):
 
     assert body == {"synced": 5, "providers": ["moodle"]}
     assert fake_sync.calls == 1
+
+
+def test_connect_validates_token_persists_account_and_kicks_sync(client):
+    fake_sync = FakeMoodleSync(count=3)
+    moodle_sync.configure(fake_sync)
+    providers.configure([FakeMoodleProvider(site_info={
+        "userid": 501, "sitename": "WolfWare", "release": "5.2",
+        "functions": ["core_enrol_get_users_courses", "gradereport_user_get_grade_items"],
+    })])
+
+    res = client.post("/api/moodle/connect",
+                      json={"token": "a" * 32})
+
+    assert res.status_code == 200
+    body = res.json()
+    # Shared OAuth status shape: connected=True with a moodle provider row.
+    assert body["connected"] is True
+    moodle = next(p for p in body["providers"] if p["provider"] == "moodle")
+    assert moodle["status"] == "connected"
+    assert moodle["provider_user_id"] == "501"
+    # Connect kicked exactly one sync.
+    assert fake_sync.calls == 1
+
+
+def test_connect_status_never_serializes_tokens_or_scopes(client):
+    moodle_sync.configure(FakeMoodleSync())
+    providers.configure([FakeMoodleProvider()])
+
+    body = client.post("/api/moodle/connect", json={"token": "a" * 32}).json()
+    moodle = next(p for p in body["providers"] if p["provider"] == "moodle")
+
+    # The wstoken lives only in provider_accounts.access_token, server-side.
+    assert "access_token" not in moodle
+    assert "wstoken" not in moodle
+    assert "scopes" not in moodle
+    assert "meta" not in moodle
+    # And it is genuinely connected per the shared status endpoint too.
+    status = client.get("/api/oauth/status").json()
+    assert any(p["provider"] == "moodle" and p["status"] == "connected"
+               for p in status["providers"])
+
+
+def test_connect_invalid_token_returns_502_and_persists_nothing(client):
+    moodle_sync.configure(FakeMoodleSync())
+    providers.configure([FakeMoodleProvider(raise_auth=True)])
+
+    res = client.post("/api/moodle/connect", json={"token": "bad-token"})
+
+    assert res.status_code == 502
+    assert res.json()["error"]["message"] == "Moodle rejected the token"
+    # No account row was written.
+    assert all(p["provider"] != "moodle"
+               for p in store.list_provider_accounts())
+
+
+def test_connect_launch_url_with_mismatched_passport_is_rejected(client):
+    # Security carry-forward (Task 4): connect MUST pass both passport and
+    # wwwroot=settings.moodle_base_url to parse_pasted_token, or the md5
+    # passport check silently becomes a no-op for the launch-URL token shape.
+    # Build a launch-redirect blob signed with the WRONG passport (i.e. what
+    # an attacker who intercepted a different session's launch URL would
+    # replay) and confirm the mismatch is actually verified -> rejected.
+    moodle_sync.configure(FakeMoodleSync())
+    providers.configure([FakeMoodleProvider()])
+    wwwroot = settings.moodle_base_url
+    wrong_signature = hashlib.md5((wwwroot + "wrong-passport").encode()).hexdigest()
+    blob = base64.b64encode(f"{wrong_signature}:::{'a' * 32}".encode()).decode()
+    launch_url = f"{wwwroot}/admin/tool/mobile/launch.php?token={blob}"
+
+    res = client.post("/api/moodle/connect",
+                      json={"token": launch_url, "passport": "correct-passport"})
+
+    assert res.status_code == 502
+    assert res.json()["error"]["message"] == "Moodle rejected the token"
+    assert all(p["provider"] != "moodle"
+               for p in store.list_provider_accounts())
+
+
+def test_disconnect_moodle_deletes_synced_data_via_shared_router(client):
+    moodle_sync.configure(FakeMoodleSync())
+    providers.configure([FakeMoodleProvider()])
+    # Connect, then seed a synced row.
+    client.post("/api/moodle/connect", json={"token": "a" * 32})
+    store.upsert_moodle_course(_course("72", shortname="CSC116"))
+    assert store.moodle_courses()  # non-empty before disconnect
+
+    res = client.post("/api/oauth/disconnect/moodle")
+
+    assert res.status_code == 200
+    # on_disconnect -> delete_moodle_data cleared the synced rows.
+    assert store.moodle_courses() == []
+    # And the moodle account is gone from status.
+    assert all(p["provider"] != "moodle"
+               for p in res.json()["providers"])
