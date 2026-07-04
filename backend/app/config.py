@@ -92,5 +92,15 @@ class Settings(BaseSettings):
     email_sync_seconds: int = 900               # 15 min
     email_backfill_count: int = 50              # first-connect messages.list maxResults
 
+    # ---- M6 School (Moodle) ----
+    # Moodle web-services live at {moodle_base_url}/webservice/rest/server.php.
+    # Auth is a static per-user wstoken (NOT OAuth) stored in provider_accounts,
+    # never here. WolfWare is Shibboleth SSO (typeoflogin=3); the token is
+    # obtained via the mobile launch flow / Security-keys page and pasted in.
+    moodle_base_url: str = "https://moodle-courses2527.wolfware.ncsu.edu"   # no trailing slash
+    moodle_sync_enabled: bool = True
+    moodle_sync_seconds: int = 900              # 15 min; gentle (mobile-app cadence)
+    moodle_backfill_days_ahead: int = 60        # deadline-timeline horizon
+
 
 settings = Settings()
