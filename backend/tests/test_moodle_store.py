@@ -44,11 +44,16 @@ def _grade(sid="500", course_id="72"):
     )
 
 
-def _announcement(sid="30", course_id="72"):
+_UNSET = object()
+
+
+def _announcement(sid="30", course_id="72", created_at=_UNSET):
+    if created_at is _UNSET:
+        created_at = datetime(2026, 6, 30, 12, tzinfo=UTC)
     return NormalizedAnnouncement(
         source="moodle", source_id=sid, course_id=course_id, forum_id="11",
         subject="Welcome", author="Prof X",
-        created_at=datetime(2026, 6, 30, 12, tzinfo=UTC),
+        created_at=created_at,
     )
 
 
@@ -76,6 +81,15 @@ def test_upsert_moodle_deadline_is_idempotent_and_serializes_when():
     assert again["name"] == "Renamed"
     assert isinstance(again["when"], str) and again["when"]   # derived display
     assert len(store.moodle_deadlines()) == 1
+
+
+def test_upsert_moodle_announcement_allows_null_created_at():
+    # Regression: NormalizedAnnouncement.created_at is nullable (the provider's
+    # _epoch(disc.get("created")) returns None when a discussion lacks a
+    # "created" field). The upsert must not crash on that, matching the guard
+    # already used by the sibling upsert_moodle_notification.
+    row = store.upsert_moodle_announcement(_announcement(sid="31", created_at=None))
+    assert row["created_at"] is None
 
 
 def test_upsert_moodle_assignment_grade_announcement_notification_idempotent():

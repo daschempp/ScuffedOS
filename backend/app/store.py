@@ -1561,7 +1561,7 @@ class Store:
             row.forum_id = a.forum_id
             row.subject = a.subject
             row.author = a.author
-            row.created_at = _to_utc(a.created_at)
+            row.created_at = _to_utc(a.created_at) if a.created_at else None
             row.summary_html = a.summary_html
             row.url = a.url
             s.flush()
