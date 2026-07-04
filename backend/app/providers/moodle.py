@@ -216,6 +216,66 @@ class MoodleProvider:
             after = int(events[-1].get("id") or 0)
         return out
 
+    def fetch_assignments(self, userid: int) -> list[NormalizedAssignment]:
+        """Assignments via mod_assign_get_assignments (grouped under courses[]),
+        then per-assignment mod_assign_get_submission_status(assignid,userid)
+        for the student's submission_status / grading_status / graded flags.
+        duedate/cutoffdate 0 -> None via _epoch; submission status falls back
+        to 'none' when the student has no lastattempt.submission yet."""
+        result = self._call("mod_assign_get_assignments")
+        out: list[NormalizedAssignment] = []
+        for course in (result or {}).get("courses") or []:
+            course_id = str(course.get("id") or "")
+            for asn in course.get("assignments") or []:
+                assign_id = str(asn.get("id") or "")
+                status = self._call(
+                    "mod_assign_get_submission_status",
+                    assignid=assign_id, userid=userid,
+                ) or {}
+                submission = (status.get("lastattempt") or {}).get("submission") or {}
+                out.append(NormalizedAssignment(
+                    source="moodle",
+                    source_id=assign_id,
+                    course_id=course_id,
+                    cmid=str(asn.get("cmid") or ""),
+                    name=asn.get("name") or "",
+                    due_at=_epoch(asn.get("duedate")),
+                    cutoff_at=_epoch(asn.get("cutoffdate")),
+                    grade_max=asn.get("grade"),
+                    submission_status=submission.get("status") or "none",
+                    grading_status=status.get("gradingstatus") or "",
+                    graded=bool(status.get("graded")),
+                ))
+        return out
+
+    def fetch_grades(self, userid: int, course_ids: list[str]) -> list[NormalizedGrade]:
+        """Grade items per course via gradereport_user_get_grade_items
+        (courseid,userid). The report groups items under usergrades[]; each
+        gradeitem's `graderaw` is a float or None ("-" display => graderaw
+        None). course_id is taken from the loop arg (authoritative), not the
+        row. gradedategraded 0 -> None via _epoch."""
+        out: list[NormalizedGrade] = []
+        for course_id in course_ids:
+            result = self._call(
+                "gradereport_user_get_grade_items",
+                courseid=course_id, userid=userid,
+            ) or {}
+            for usergrade in result.get("usergrades") or []:
+                for item in usergrade.get("gradeitems") or []:
+                    out.append(NormalizedGrade(
+                        source="moodle",
+                        source_id=str(item.get("id") or ""),
+                        course_id=course_id,
+                        item_name=item.get("itemname") or "",
+                        item_type=item.get("itemtype") or "",
+                        grade_formatted=item.get("gradeformatted") or "-",
+                        grade_raw=item.get("graderaw"),
+                        grade_min=item.get("grademin"),
+                        grade_max=item.get("grademax"),
+                        graded_at=_epoch(item.get("gradedategraded")),
+                    ))
+        return out
+
     # ---- OAuth-ish plumbing (Moodle has no code exchange; connect is token-paste) ----
     def authorize_url(self, state: str) -> str:
         """The Moodle mobile launch URL. Not used by the token-paste connect flow;

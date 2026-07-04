@@ -167,3 +167,168 @@ def test_fetch_deadlines_single_short_page_makes_one_call():
     })
     _provider(http).fetch_deadlines(now=datetime(2024, 9, 1, tzinfo=timezone.utc))
     assert len(http.posts) == 1
+
+
+# ---- fetch_assignments [confirm-against-live: mod_assign_get_assignments ->
+#      {"courses":[{id, assignments:[{id,cmid,name,duedate,cutoffdate,grade}]}]};
+#      then mod_assign_get_submission_status(assignid,userid) ->
+#      lastattempt.submission.status / gradingstatus / graded] ----
+
+def _sub_status(status="submitted", gradingstatus="graded", graded=True):
+    return {
+        "lastattempt": {"submission": {"status": status}},
+        "gradingstatus": gradingstatus,
+        "graded": graded,
+    }
+
+
+def test_fetch_assignments_maps_and_merges_submission_status_per_assignment():
+    http = FakeMoodleHTTP(responses={
+        "mod_assign_get_assignments": {"courses": [
+            {"id": 72, "assignments": [
+                {"id": 501, "cmid": 8801, "name": "Design doc",
+                 "duedate": 1725580800, "cutoffdate": 1725667200, "grade": 100},
+                {"id": 502, "cmid": 8802, "name": "Reflection",
+                 "duedate": 0, "cutoffdate": 0, "grade": 20},
+            ]},
+        ]},
+        # scripted per-call sequence: first call -> assign 501, second -> 502
+        "mod_assign_get_submission_status": seq(
+            _sub_status(status="submitted", gradingstatus="graded", graded=True),
+            _sub_status(status="draft", gradingstatus="notgraded", graded=False),
+        ),
+    })
+    assignments = _provider(http).fetch_assignments(userid=7)
+
+    assert len(assignments) == 2
+    a0, a1 = assignments
+    assert a0.source == "moodle"
+    assert a0.source_id == "501"
+    assert a0.course_id == "72"
+    assert a0.cmid == "8801"
+    assert a0.name == "Design doc"
+    assert a0.due_at == datetime(2024, 9, 6, tzinfo=timezone.utc)      # 1725580800
+    assert a0.cutoff_at == datetime(2024, 9, 7, tzinfo=timezone.utc)   # 1725667200
+    assert a0.grade_max == 100
+    assert a0.submission_status == "submitted"     # merged onto 501
+    assert a0.grading_status == "graded"
+    assert a0.graded is True
+
+    assert a1.source_id == "502"
+    assert a1.due_at is None                        # duedate 0 -> None
+    assert a1.cutoff_at is None
+    assert a1.submission_status == "draft"          # merged onto 502, not 501
+    assert a1.grading_status == "notgraded"
+    assert a1.graded is False
+
+
+def test_fetch_assignments_passes_assignid_and_userid_to_status_call():
+    http = FakeMoodleHTTP(responses={
+        "mod_assign_get_assignments": {"courses": [
+            {"id": 72, "assignments": [
+                {"id": 501, "cmid": 8801, "name": "Design doc",
+                 "duedate": 1725580800, "cutoffdate": 0, "grade": 100},
+            ]},
+        ]},
+        "mod_assign_get_submission_status": _sub_status(),
+    })
+    _provider(http).fetch_assignments(userid=7)
+
+    # posts[0] = mod_assign_get_assignments; posts[1] = the status call.
+    _, status_body = http.posts[1]
+    assert status_body["wsfunction"] == "mod_assign_get_submission_status"
+    assert status_body["assignid"] == "501"
+    assert status_body["userid"] == "7"
+
+
+def test_fetch_assignments_status_defaults_when_lastattempt_missing():
+    http = FakeMoodleHTTP(responses={
+        "mod_assign_get_assignments": {"courses": [
+            {"id": 72, "assignments": [
+                {"id": 501, "cmid": 8801, "name": "Design doc",
+                 "duedate": 0, "cutoffdate": 0, "grade": 100},
+            ]},
+        ]},
+        "mod_assign_get_submission_status": {"gradingstatus": "", "graded": False},
+    })
+    a = _provider(http).fetch_assignments(userid=7)[0]
+    assert a.submission_status == "none"     # no lastattempt.submission -> "none"
+    assert a.grading_status == ""
+    assert a.graded is False
+
+
+def test_fetch_assignments_empty_when_no_courses():
+    http = FakeMoodleHTTP(responses={"mod_assign_get_assignments": {"courses": []}})
+    assert _provider(http).fetch_assignments(userid=7) == []
+
+
+# ---- fetch_grades [confirm-against-live: gradereport_user_get_grade_items
+#      (courseid,userid) -> usergrades[].gradeitems[]: id,itemname,itemtype,
+#      graderaw,gradeformatted,grademin,grademax,gradedategraded] ----
+
+def test_fetch_grades_maps_rows_per_course():
+    http = FakeMoodleHTTP(responses={
+        "gradereport_user_get_grade_items": {"usergrades": [
+            {"gradeitems": [
+                {"id": 9001, "itemname": "Design doc", "itemtype": "mod",
+                 "graderaw": 88.0, "gradeformatted": "88.00",
+                 "grademin": 0.0, "grademax": 100.0,
+                 "gradedategraded": 1725580800},
+                {"id": 9002, "itemname": "Course total", "itemtype": "course",
+                 "graderaw": None, "gradeformatted": "-",
+                 "grademin": 0.0, "grademax": 100.0,
+                 "gradedategraded": 0},
+            ]},
+        ]},
+    })
+    grades = _provider(http).fetch_grades(userid=7, course_ids=["72"])
+
+    assert len(grades) == 2
+    g0, g1 = grades
+    assert g0.source == "moodle"
+    assert g0.source_id == "9001"
+    assert g0.course_id == "72"                  # from the course_ids arg, not the row
+    assert g0.item_name == "Design doc"
+    assert g0.item_type == "mod"
+    assert g0.grade_formatted == "88.00"
+    assert g0.grade_raw == 88.0
+    assert g0.grade_min == 0.0
+    assert g0.grade_max == 100.0
+    assert g0.graded_at == datetime(2024, 9, 6, tzinfo=timezone.utc)  # 1725580800
+
+    # "-" / None raw -> grade_raw None; formatted string preserved as-is.
+    assert g1.item_name == "Course total"
+    assert g1.grade_formatted == "-"
+    assert g1.grade_raw is None
+    assert g1.graded_at is None                  # gradedategraded 0 -> None
+
+
+def test_fetch_grades_iterates_every_course_id():
+    http = FakeMoodleHTTP(responses={
+        # one call per course_id -> seq() scripts the two successive responses.
+        "gradereport_user_get_grade_items": seq(
+            {"usergrades": [{"gradeitems": [
+                {"id": 1, "itemname": "A", "itemtype": "mod",
+                 "graderaw": 1.0, "gradeformatted": "1", "grademin": 0.0,
+                 "grademax": 1.0, "gradedategraded": 0}]}]},
+            {"usergrades": [{"gradeitems": [
+                {"id": 2, "itemname": "B", "itemtype": "mod",
+                 "graderaw": 2.0, "gradeformatted": "2", "grademin": 0.0,
+                 "grademax": 2.0, "gradedategraded": 0}]}]},
+        ),
+    })
+    grades = _provider(http).fetch_grades(userid=7, course_ids=["72", "69"])
+
+    assert [g.course_id for g in grades] == ["72", "69"]   # tagged per course
+    assert len(http.posts) == 2                            # one call per course
+    _, body0 = http.posts[0]
+    _, body1 = http.posts[1]
+    assert body0["courseid"] == "72"
+    assert body0["userid"] == "7"
+    assert body1["courseid"] == "69"
+
+
+def test_fetch_grades_empty_when_no_course_ids():
+    http = FakeMoodleHTTP(responses={"gradereport_user_get_grade_items": {}})
+    assert _provider(http).fetch_grades(userid=7, course_ids=[]) == []
+    assert http.posts == []          # no course ids -> no WS calls at all
