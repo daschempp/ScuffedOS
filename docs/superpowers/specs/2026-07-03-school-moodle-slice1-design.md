@@ -19,7 +19,7 @@ program whose end state replaces day-to-day use of the Moodle web UI, including 
 
 | Slice | Name | Scope |
 |---|---|---|
-| **1 (this spec)** | Glance at school | Connect flow + token storage (SSO-compatible, §4); sync courses, deadline timeline, assignments (metadata + submission status), grades, announcements, notifications; School screen (course list + deadlines + grades + announcements panes); **feeds Calendar + Tasks**; read assistant tools; privacy wave 1; migration `0007_moodle` |
+| **1 (this spec)** | Glance at school | Connect flow + token storage (SSO-compatible, §4); sync courses, deadline timeline, assignments (metadata + submission status), grades, announcements, notifications; School screen (course list + deadlines + grades + announcements panes); **feeds Calendar + Tasks**; read assistant tools; privacy wave 1; migration `0006_moodle` |
 | 2 | Course content | Live (unsynced) course-content browsing: sections → modules → files (token-appended file links); assignment **detail** view (intro HTML, due/cutoff dates, submission status, attempt info); open-in-Moodle deep links |
 | 3 | Submit assignments | Upload file(s) → Moodle draft file area → `mod_assign_save_submission` → `mod_assign_submit_for_grading`; confirm-first; submit UI on the assignment detail view; `can_submit` capability gate; privacy wave 2 (write actions) |
 
@@ -50,7 +50,7 @@ Module layout (all new unless noted):
 - `backend/app/moodle_sync.py` — clone of `email_sync.py`: `configure()` seam, `tick()` (never crashes;
   `except AuthError` → `set_provider_status("moodle","needs_reauth")`; DATABASE_URL `RuntimeError` → no-op),
   `trigger()`, `run_loop()` gated by `settings.moodle_sync_enabled`.
-- `backend/app/models.py` (modify) + `backend/alembic/versions/0007_moodle.py` — new tables (§6).
+- `backend/app/models.py` (modify) + `backend/alembic/versions/0006_moodle.py` — new tables (§6).
 - `backend/app/store.py` (modify) — `# ---- moodle ----` section (§6).
 - `backend/app/routers/moodle.py` — `APIRouter(prefix="/api/moodle")`, reads from store only (§7).
 - `backend/app/schemas.py` (modify) — Moodle response models.
@@ -117,7 +117,7 @@ moodle_backfill_days_ahead: int = 60    # deadline timeline horizon
 
 No client secret (token-based). `moodle_base_url` documented in `.env.example` under an M6 section.
 
-## 6. Data model + store (migration `0007_moodle`)
+## 6. Data model + store (migration `0006_moodle`)
 
 All tables carry `owner` (default `settings.owner`), aware-UTC `DateTime(timezone=True)` with Python-side
 `default=utcnow`, `JSONField = JSON().with_variant(JSONB(), "postgresql")`, and a unique constraint on
@@ -138,7 +138,7 @@ Store: `# ---- moodle ----` section — `_moodle_<x>_row` finders, `_<x>_dict` s
 `upsert_moodle_*`, read methods (`school_snapshot()`, `deadlines(window)`, `grades()`, `announcements()`,
 `notifications()`), the two **read-time projectors** for §8 (`moodle_calendar_events(window)`,
 `moodle_tasks()`), and `delete_moodle_data(source)` for disconnect. Client-safe `_provider_account_dict`
-gains no Moodle-specific fields beyond the standard derived booleans. Migration `0007_moodle` **only creates
+gains no Moodle-specific fields beyond the standard derived booleans. Migration `0006_moodle` **only creates
 the six new tables — it does not alter `tasks`/`events`** (§8 merges at read time). Add all six table names
 to `tests/test_migrations.py` `ALL_TABLES`.
 
