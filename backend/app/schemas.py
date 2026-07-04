@@ -19,10 +19,10 @@ from pydantic import BaseModel, Field
 
 Weekday = Annotated[int, Field(ge=0, le=6)]  # Mon=0 … Sun=6
 
-TaskGroup = Literal["Today", "Upcoming", "Someday"]
+TaskGroup = Literal["Today", "Upcoming", "Someday", "School"]  # "School" = read-time Moodle-assignment projection (M6)
 TaskPriority = Literal["low", "med", "high"]
 # The design palette — event colors, habit tints, meal chips all draw from it.
-Tint = Literal["green", "sky", "plum", "honey", "clay"]
+Tint = Literal["green", "sky", "plum", "honey", "clay", "grape"]  # "grape" = read-time Moodle-deadline projection (M6)
 MealSlot = Literal["Breakfast", "Lunch", "Snack", "Dinner"]
 HabitLink = Literal["water", "workout"]
 
@@ -103,7 +103,7 @@ class TaskReminderCreate(BaseModel):
 
 
 class Task(BaseModel):
-    id: int
+    id: int | str  # int for local rows; "moodle:<source_id>" for read-time Moodle projections (M6)
     label: str
     done: bool
     group: TaskGroup
@@ -123,6 +123,11 @@ class Task(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    # Read-time origin markers (M6). Real rows default to local/editable so
+    # existing serializers that omit these keys validate unchanged; Moodle
+    # projections set source="moodle"/editable=False (read-only in the UI).
+    source: str = "local"
+    editable: bool = True
 
 
 class TaskCreate(BaseModel):
@@ -189,7 +194,7 @@ class EventOccurrence(BaseModel):
     series, `id` is the series row and `start`/`end` are this instance's
     times; single-occurrence deletes key on `start`."""
 
-    id: int
+    id: int | str  # int for local rows; "moodle:<source_id>" for read-time Moodle projections (M6)
     title: str
     start: datetime
     end: datetime
@@ -199,6 +204,11 @@ class EventOccurrence(BaseModel):
     recurring: bool
     recurrence_label: str | None
     at: str  # derived display clock, e.g. "9:00am"
+    # Read-time origin markers (M6). Real rows default to local/editable so
+    # existing serializers that omit these keys validate unchanged; Moodle
+    # projections set source="moodle"/editable=False (read-only in the UI).
+    source: str = "local"
+    editable: bool = True
 
 
 class EventCreate(BaseModel):

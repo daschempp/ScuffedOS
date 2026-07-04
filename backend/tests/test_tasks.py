@@ -6,6 +6,9 @@ RICH_SHAPE = {
     "id", "label", "done", "group", "deadline", "prio", "list", "description",
     "subtasks", "labels", "reminders", "files", "recurrence", "recurrence_label",
     "due", "late", "created_at", "updated_at", "completed_at",
+    # Read-time origin markers (M6 School slice-1, contract §H) — additive,
+    # default to local/editable for real rows created via this API.
+    "source", "editable",
 }
 
 
@@ -24,6 +27,7 @@ def test_create_task_applies_rich_defaults(client):
     assert task["reminders"] == [] and task["files"] == []
     assert task["due"] is None and task["late"] is False
     assert task["created_at"] and task["completed_at"] is None
+    assert task["source"] == "local" and task["editable"] is True
 
 
 def test_create_task_with_full_payload(client):
