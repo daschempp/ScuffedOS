@@ -35,7 +35,17 @@ import re
 from datetime import datetime, timezone
 
 from ..config import settings
-from .base import AuthError, Tokens
+from .base import (
+    AuthError,
+    NormalizedAnnouncement,
+    NormalizedAssignment,
+    NormalizedCourse,
+    NormalizedDeadline,
+    NormalizedGrade,
+    NormalizedNotification,
+    MoodleSnapshot,
+    Tokens,
+)
 
 log = logging.getLogger("scuffed_os.moodle")
 
@@ -140,6 +150,71 @@ class MoodleProvider:
             "release": info.get("release") or "",
             "functions": functions,
         }
+
+    # ---- domain fetch methods (map raw WS JSON -> base.py dataclasses) ----
+    # [confirm-against-live] wsfunction / param / field names verified against
+    # the live WolfWare Moodle in Task 21; the method signatures are frozen.
+
+    def fetch_courses(self, userid: int) -> list[NormalizedCourse]:
+        """Enrolled courses for `userid` via core_enrol_get_users_courses.
+        Epoch timestamps (startdate/enddate/lastaccess) map to aware UTC via
+        _epoch (0/absent -> None); `hidden` is a 0/1 int -> bool; progress is
+        a 0..100 float or None."""
+        rows = self._call("core_enrol_get_users_courses", userid=userid)
+        out: list[NormalizedCourse] = []
+        for row in rows or []:
+            out.append(NormalizedCourse(
+                source="moodle",
+                source_id=str(row.get("id") or ""),
+                shortname=row.get("shortname") or "",
+                fullname=row.get("fullname") or "",
+                progress=row.get("progress"),
+                start_at=_epoch(row.get("startdate")),
+                end_at=_epoch(row.get("enddate")),
+                last_access_at=_epoch(row.get("lastaccess")),
+                hidden=bool(row.get("hidden")),
+            ))
+        return out
+
+    def fetch_deadlines(self, now: datetime) -> list[NormalizedDeadline]:
+        """The deadline timeline via core_calendar_get_action_events_by_timesort.
+        Window = [now, now + settings.moodle_backfill_days_ahead days] as epoch
+        seconds; pages of limitnum=50, paginated on aftereventid (the last
+        event id of the previous page) while a page comes back full (==50).
+        due_at comes from `timesort` (epoch -> aware UTC)."""
+        timesortfrom = int(now.timestamp())
+        timesortto = timesortfrom + settings.moodle_backfill_days_ahead * 86400
+        out: list[NormalizedDeadline] = []
+        after: int | None = None
+        while True:
+            params: dict = {
+                "timesortfrom": timesortfrom,
+                "timesortto": timesortto,
+                "limitnum": 50,
+            }
+            if after is not None:
+                params["aftereventid"] = after
+            result = self._call(
+                "core_calendar_get_action_events_by_timesort", **params
+            )
+            events = (result or {}).get("events") or []
+            for ev in events:
+                course = ev.get("course") or {}
+                out.append(NormalizedDeadline(
+                    source="moodle",
+                    source_id=str(ev.get("id") or ""),
+                    course_id=str(course.get("id") or ""),
+                    name=ev.get("name") or "",
+                    module_name=ev.get("modulename") or "",
+                    event_type=ev.get("eventtype") or "",
+                    due_at=_epoch(ev.get("timesort")),
+                    overdue=bool(ev.get("overdue")),
+                    url=ev.get("viewurl") or "",
+                ))
+            if len(events) < 50:
+                break
+            after = int(events[-1].get("id") or 0)
+        return out
 
     # ---- OAuth-ish plumbing (Moodle has no code exchange; connect is token-paste) ----
     def authorize_url(self, state: str) -> str:
