@@ -105,10 +105,15 @@ export function SchoolScreen() {
   }
 
   const eyebrow = moodle?.last_sync_at
-    ? `Synced with Moodle · ${new Date(moodle.last_sync_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
-    : 'Connected with Moodle'
-  const overdueCount = (deadlines || []).filter((d) => d.overdue).length
+    ? `Synced · ${new Date(moodle.last_sync_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+    : 'Connected'
+  // Course drill-down: the selected course drives the whole detail column.
+  const sel = (courses || []).find((c) => c.source_id === selCourse) || null
+  const courseDeadlines = (deadlines || []).filter((d) => d.course_id === selCourse)
   const selGrades = (grades || []).filter((g) => g.course_id === selCourse)
+  const courseTotal = selGrades.find((g) => g.item_type === 'course') || null
+  const courseItems = selGrades.filter((g) => g.item_type !== 'course' && g.item_name && g.item_name.trim())
+  const courseAnns = (announcements || []).filter((a) => a.course_id === selCourse)
 
   return (
     <div className="kit-stack" style={{ gap: 'var(--gutter)' }}>
@@ -152,85 +157,138 @@ export function SchoolScreen() {
       )}
 
       {!syncing && !needsReauth && (
-        <div className="kit-grid" style={{ gridTemplateColumns: '1fr 1.4fr' }}>
-          <Card title="Courses" eyebrow={eyebrow}
-            action={<Button variant="soft" size="sm" iconLeft={<Icon name="refresh-cw" />} onClick={sync}>Sync</Button>}>
-            {(courses || []).length === 0 && <p className="kit-muted" style={{ marginTop: 6 }}>No courses yet — sync to pull your enrollment.</p>}
-            {(courses || []).map((c) => (
-              <div key={c.id} className={'kit-mail' + (c.source_id === selCourse ? ' is-active' : '')} onClick={() => setSelCourse(c.source_id)}>
-                <div className="kit-mail__main">
-                  <div className="kit-mail__top">
-                    <span className="kit-mail__from">{c.shortname || c.fullname}</span>
-                    {c.progress != null && <span className="kit-mail__time">{Math.round(c.progress)}%</span>}
-                  </div>
-                  <p className="kit-mail__snip">{c.fullname}</p>
-                </div>
-              </div>
-            ))}
-          </Card>
+        <div className="kit-stack" style={{ gap: 14 }}>
+          {/* course tabs + sync */}
+          <div className="kit-inline" style={{ flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            {(courses || []).map((c) => {
+              const active = c.source_id === selCourse
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSelCourse(c.source_id)}
+                  style={{
+                    cursor: 'pointer',
+                    borderRadius: 999,
+                    padding: '6px 14px',
+                    fontFamily: 'inherit',
+                    fontSize: 'var(--text-sm)',
+                    background: active ? 'var(--accent-soft)' : 'transparent',
+                    color: active ? 'var(--accent-text)' : 'var(--text-strong)',
+                    border: active ? '1px solid transparent' : '1px solid var(--paper-300)',
+                  }}
+                >
+                  {c.shortname || c.fullname}
+                </button>
+              )
+            })}
+            <span className="kit-inline" style={{ marginLeft: 'auto', gap: 8, alignItems: 'center' }}>
+              <span className="kit-muted" style={{ fontSize: 12 }}>{eyebrow}</span>
+              <Button variant="soft" size="sm" iconLeft={<Icon name="refresh-cw" />} onClick={sync}>Sync</Button>
+            </span>
+          </div>
 
-          <div className="kit-col">
-            <Card title="Deadlines"
-              action={overdueCount > 0 ? <Badge color="clay" dot>{overdueCount} overdue</Badge> : null}>
-              {(deadlines || []).length === 0 && <p className="kit-muted" style={{ marginTop: 6 }}>Nothing due in the next 60 days.</p>}
-              <div className="kit-stack" style={{ gap: 0 }}>
-                {(deadlines || []).map((d) => (
-                  <div className="kit-listrow" key={d.id} style={d.overdue ? { background: 'var(--clay-100)', borderRadius: 'var(--radius-md)' } : undefined}>
-                    <span className="kit-listrow__dot" style={{ background: d.overdue ? 'var(--clay-600)' : 'var(--plum-600)' }} />
-                    <div className="kit-row__main">
-                      <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>{d.name}</p>
-                      <p className="kit-row__sub" style={{ fontSize: 12 }}>{courseName(d.course_id)} · {d.when}</p>
-                    </div>
-                    {d.overdue && <Badge color="clay">Overdue</Badge>}
-                  </div>
-                ))}
-              </div>
-            </Card>
+          {(courses || []).length === 0 && (
+            <Card><p className="kit-muted">No courses yet — press Sync to pull your enrollment.</p></Card>
+          )}
 
-            <Card title="Grades" eyebrow={selCourse ? courseName(selCourse) : undefined}>
-              {selGrades.length === 0 && <p className="kit-muted" style={{ marginTop: 6 }}>No grades posted for this course yet.</p>}
-              <div className="kit-stack" style={{ gap: 0 }}>
-                {selGrades.map((g) => (
-                  <div className="kit-listrow" key={g.id}>
-                    <div className="kit-row__main">
-                      <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>{g.item_name}</p>
-                      {g.item_type && <p className="kit-row__sub" style={{ fontSize: 12 }}>{g.item_type}</p>}
-                    </div>
-                    <span className="kit-row__amt">{g.grade_formatted}</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-
-            <Card title="Announcements" variant="sunken">
-              {(announcements || []).length === 0 && <p className="kit-muted" style={{ marginTop: 6 }}>No announcements.</p>}
-              <div className="kit-stack" style={{ gap: 10 }}>
-                {(announcements || []).map((a) => (
-                  <div key={a.id}>
-                    <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>{a.subject}</p>
-                    <p className="kit-row__sub" style={{ fontSize: 12 }}>{courseName(a.course_id)}{a.author ? ` · ${a.author}` : ''}</p>
-                    {a.summary_html && <p className="kit-muted" style={{ fontSize: 12, marginTop: 2 }}>{a.summary_html}</p>}
-                  </div>
-                ))}
-              </div>
-            </Card>
-
-            {(notifications || []).length > 0 && (
-              <Card title="Notifications" variant="sunken">
-                <div className="kit-stack" style={{ gap: 6 }}>
-                  {(notifications || []).map((n) => (
-                    <div className="kit-listrow" key={n.id}>
-                      <span className={'kit-mail__dot' + (n.read ? ' read' : '')} />
+          {sel && (
+            <div className="kit-grid" style={{ gridTemplateColumns: '1.7fr 1fr' }}>
+              {/* selected-course detail */}
+              <Card
+                title={sel.shortname || sel.fullname}
+                eyebrow={`${sel.fullname}${sel.progress != null ? ` · ${Math.round(sel.progress)}% complete` : ''}`}
+              >
+                <p className="sa-card__eyebrow" style={{ margin: '14px 0 6px' }}>Due in this course</p>
+                {courseDeadlines.length === 0 && <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>Nothing due in the next 60 days.</p>}
+                <div className="kit-stack" style={{ gap: 0 }}>
+                  {courseDeadlines.map((d) => (
+                    <div className="kit-listrow" key={d.id} style={d.overdue ? { background: 'var(--clay-100)', borderRadius: 'var(--radius-md)' } : undefined}>
+                      <span className="kit-listrow__dot" style={{ background: d.overdue ? 'var(--clay-600)' : 'var(--plum-600)' }} />
                       <div className="kit-row__main">
-                        <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>{n.subject}</p>
-                        {n.full_message && <p className="kit-row__sub" style={{ fontSize: 12 }}>{n.full_message}</p>}
+                        <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>{d.name}</p>
+                        <p className="kit-row__sub" style={{ fontSize: 12 }}>{d.when}</p>
                       </div>
+                      {d.overdue && <Badge color="clay">Overdue</Badge>}
+                    </div>
+                  ))}
+                </div>
+
+                <p className="sa-card__eyebrow" style={{ margin: '16px 0 6px' }}>Grade</p>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', background: 'var(--accent-soft)', color: 'var(--accent-text)', borderRadius: 'var(--radius-md)', padding: '12px 14px' }}>
+                  <span style={{ fontSize: 'var(--text-sm)' }}>Course total</span>
+                  <span style={{ fontSize: 'var(--text-xl)', fontWeight: 500 }}>
+                    {courseTotal && courseTotal.grade_formatted && courseTotal.grade_formatted !== '-' ? courseTotal.grade_formatted : 'Not yet graded'}
+                  </span>
+                </div>
+                {courseItems.length > 0 && (
+                  <div className="kit-stack" style={{ gap: 0, marginTop: 8 }}>
+                    {courseItems.map((g) => (
+                      <div className="kit-listrow" key={g.id}>
+                        <div className="kit-row__main">
+                          <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>{g.item_name}</p>
+                        </div>
+                        <span className="kit-row__amt">{g.grade_formatted}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <p className="sa-card__eyebrow" style={{ margin: '16px 0 6px' }}>Announcements</p>
+                {courseAnns.length === 0 && <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>No announcements.</p>}
+                <div className="kit-stack" style={{ gap: 10 }}>
+                  {courseAnns.map((a) => (
+                    <div key={a.id}>
+                      <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>{a.subject}</p>
+                      {a.author && <p className="kit-row__sub" style={{ fontSize: 12 }}>{a.author}</p>}
+                      {a.summary_html && <p className="kit-muted" style={{ fontSize: 12, marginTop: 2 }}>{a.summary_html}</p>}
                     </div>
                   ))}
                 </div>
               </Card>
-            )}
-          </div>
+
+              {/* persistent cross-course rail */}
+              <div className="kit-col">
+                <Card title="Upcoming · all courses">
+                  {(deadlines || []).length === 0 && <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>Nothing due in the next 60 days.</p>}
+                  <div className="kit-stack" style={{ gap: 6 }}>
+                    {(deadlines || []).map((d) => {
+                      const mine = d.course_id === selCourse
+                      return (
+                        <div
+                          className="kit-listrow"
+                          key={d.id}
+                          style={{ borderRadius: 'var(--radius-md)', background: d.overdue ? 'var(--clay-100)' : mine ? 'var(--accent-soft)' : undefined }}
+                        >
+                          <span className="kit-listrow__dot" style={{ background: d.overdue ? 'var(--clay-600)' : 'var(--plum-600)' }} />
+                          <div className="kit-row__main">
+                            <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>{d.name}</p>
+                            <p className="kit-row__sub" style={{ fontSize: 11 }}>{courseName(d.course_id)} · {d.when}</p>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </Card>
+
+                {(notifications || []).length > 0 && (
+                  <Card title="Notifications" variant="sunken">
+                    <div className="kit-stack" style={{ gap: 6 }}>
+                      {(notifications || []).map((n) => (
+                        <div className="kit-listrow" key={n.id}>
+                          <span className={'kit-mail__dot' + (n.read ? ' read' : '')} />
+                          <div className="kit-row__main">
+                            <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>{n.subject}</p>
+                            {n.full_message && <p className="kit-row__sub" style={{ fontSize: 12 }}>{n.full_message}</p>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
