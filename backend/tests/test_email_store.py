@@ -44,6 +44,22 @@ def test_upsert_email_creates_row_with_triage():
     assert isinstance(out["when"], str) and out["when"]
 
 
+def test_upsert_email_writes_through_starred_and_label_ids():
+    out = store.upsert_email(
+        _email(starred=True, label_ids=["INBOX", "STARRED"]),
+        category="fyi", summary=["x"],
+    )
+    assert out["starred"] is True
+    assert out["label_ids"] == ["INBOX", "STARRED"]
+    # A later sync pass re-derives from Gmail's authoritative label list.
+    again = store.upsert_email(
+        _email(starred=False, label_ids=["INBOX"]),
+        category="fyi", summary=["x"],
+    )
+    assert again["starred"] is False
+    assert again["label_ids"] == ["INBOX"]
+
+
 def test_upsert_email_is_idempotent_by_source_id():
     store.upsert_email(_email(), category="fyi", summary=["first"])
     again = store.upsert_email(
@@ -179,3 +195,107 @@ def test_delete_email_data_is_source_scoped():
     assert store.delete_email_data("google") is True
     assert store.email_exists("google", "g-1") is False
     assert store.email_exists("outlook", "o-1") is True   # untouched
+
+
+def test_set_email_flags_updates_only_given_fields():
+    created = store.upsert_email(_email(source_id="fl-1", unread=True), category="fyi", summary=["x"])
+    out = store.set_email_flags(created["id"], starred=True)
+    assert out["starred"] is True
+    assert out["unread"] is True   # unread untouched (None = unchanged)
+    out2 = store.set_email_flags(created["id"], unread=False)
+    assert out2["unread"] is False
+    assert out2["starred"] is True   # starred untouched by the second call
+    out3 = store.set_email_flags(created["id"], unread=True, starred=False)
+    assert out3["unread"] is True
+    assert out3["starred"] is False
+
+
+def test_set_email_flags_returns_none_for_absent_id():
+    assert store.set_email_flags(999999, starred=True) is None
+
+
+def test_set_email_flags_is_owner_scoped():
+    from app.models import Email
+
+    mine = store.upsert_email(_email(source_id="fl-mine"), category="fyi", summary=["x"])
+    with store._session() as s, s.begin():
+        foreign = Email(
+            owner="someone_else", source="google", source_id="fl-theirs",
+            subject="Theirs", received_at=datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
+        )
+        s.add(foreign)
+        s.flush()
+        foreign_id = foreign.id
+
+    assert store.set_email_flags(foreign_id, starred=True) is None
+    with store._session() as s:
+        untouched = s.get(Email, foreign_id)
+        assert untouched.starred is False
+
+
+def test_set_email_labels_replaces_list_and_rederives_unread_starred():
+    created = store.upsert_email(
+        _email(source_id="lb-1", unread=True, starred=False, label_ids=["INBOX", "UNREAD"]),
+        category="fyi", summary=["x"],
+    )
+    out = store.set_email_labels(created["id"], ["INBOX", "STARRED"])
+    assert out["label_ids"] == ["INBOX", "STARRED"]
+    assert out["starred"] is True     # re-derived from STARRED membership
+    assert out["unread"] is False     # re-derived: UNREAD no longer present
+
+    out2 = store.set_email_labels(created["id"], ["INBOX", "UNREAD", "STARRED"])
+    assert out2["label_ids"] == ["INBOX", "UNREAD", "STARRED"]
+    assert out2["unread"] is True
+    assert out2["starred"] is True
+
+
+def test_set_email_labels_returns_none_for_absent_id():
+    assert store.set_email_labels(999999, ["INBOX"]) is None
+
+
+def test_set_email_labels_is_owner_scoped():
+    from app.models import Email
+
+    with store._session() as s, s.begin():
+        foreign = Email(
+            owner="someone_else", source="google", source_id="lb-theirs",
+            subject="Theirs", received_at=datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
+            label_ids=["INBOX"],
+        )
+        s.add(foreign)
+        s.flush()
+        foreign_id = foreign.id
+
+    assert store.set_email_labels(foreign_id, ["INBOX", "STARRED"]) is None
+    with store._session() as s:
+        untouched = s.get(Email, foreign_id)
+        assert untouched.label_ids == ["INBOX"]
+
+
+def test_delete_email_removes_single_row():
+    created = store.upsert_email(_email(source_id="del-1"), category="fyi", summary=["x"])
+    other = store.upsert_email(_email(source_id="del-2"), category="fyi", summary=["y"])
+    assert store.delete_email(created["id"]) is True
+    assert store.get_email(created["id"]) is None
+    assert store.get_email(other["id"]) is not None   # sibling row untouched
+
+
+def test_delete_email_returns_false_for_absent_id():
+    assert store.delete_email(999999) is False
+
+
+def test_delete_email_is_owner_scoped():
+    from app.models import Email
+
+    with store._session() as s, s.begin():
+        foreign = Email(
+            owner="someone_else", source="google", source_id="del-theirs",
+            subject="Theirs", received_at=datetime(2026, 6, 30, 12, 0, tzinfo=UTC),
+        )
+        s.add(foreign)
+        s.flush()
+        foreign_id = foreign.id
+
+    assert store.delete_email(foreign_id) is False
+    with store._session() as s:
+        assert s.get(Email, foreign_id) is not None   # a cross-owner delete must not succeed

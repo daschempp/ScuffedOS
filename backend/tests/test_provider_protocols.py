@@ -32,6 +32,7 @@ def test_normalized_email_fields_and_defaults():
     assert names == {
         "source", "source_id", "thread_id", "from_name", "from_email",
         "subject", "snippet", "received_at", "unread", "body_excerpt",
+        "starred", "label_ids",
     }
     e = base.NormalizedEmail(
         source="google", source_id="m1", thread_id="t1",
@@ -40,3 +41,5 @@ def test_normalized_email_fields_and_defaults():
     )
     assert e.unread is False
     assert e.body_excerpt == ""
+    assert e.starred is False
+    assert e.label_ids == []

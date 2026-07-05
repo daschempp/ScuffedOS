@@ -115,7 +115,7 @@ _WORKOUT_FIELDS = {
 
 _EMAIL_FIELDS = (
     "thread_id", "from_name", "from_email", "subject", "snippet",
-    "received_at", "unread",
+    "received_at", "unread", "starred", "label_ids",
 )
 
 # The four vitals shown under the rings — fixed layout; values + deltas
@@ -343,15 +343,31 @@ def _message_dict(m: ConversationMessage) -> dict:
     }
 
 
+_EMAIL_WRITE_SCOPES = (
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send",
+)
+
+
+def _can_write_email(scopes: str) -> bool:
+    """True iff the stored scope string grants BOTH gmail.modify and
+    gmail.send (write capability for trash/flags/labels AND send/reply/
+    forward). A readonly-only or partially-upgraded token is False."""
+    return all(scope in scopes for scope in _EMAIL_WRITE_SCOPES)
+
+
 def _provider_account_dict(p: ProviderAccount) -> dict:
     """Client-safe view of a provider account — NEVER includes tokens,
-    scopes, or meta (those are server-side only; see /status)."""
+    scopes, or meta (those are server-side only; see /status). Exposes ONE
+    derived boolean (can_write_email) computed from raw scopes so the
+    frontend gate never sees the scope string itself."""
     return {
         "provider": p.provider,
         "status": p.status,
         "connected_at": aware_utc(p.connected_at),
         "last_sync_at": aware_utc(p.last_sync_at),
         "provider_user_id": p.provider_user_id,
+        "can_write_email": _can_write_email(p.scopes or ""),
     }
 
 
@@ -413,6 +429,8 @@ def _email_dict(e: Email) -> dict:
         "snippet": e.snippet,
         "received_at": received,
         "unread": e.unread,
+        "starred": e.starred,
+        "label_ids": e.label_ids or [],
         "category": e.category,
         "summary": e.summary_json or [],
         "triaged_at": aware_utc(e.triaged_at),
@@ -1438,6 +1456,57 @@ class Store:
                 .where(Email.owner == settings.owner)
             ).first()
             return _email_dict(row) if row is not None else None
+
+    def _owned_email_row(self, s: Session, email_id: int) -> Email | None:
+        from .config import settings
+
+        return s.scalars(
+            select(Email)
+            .where(Email.id == email_id)
+            .where(Email.owner == settings.owner)
+        ).first()
+
+    def set_email_flags(
+        self, email_id: int, unread: bool | None = None, starred: bool | None = None
+    ) -> dict | None:
+        """Owner-scoped read-state/star patch. A None field is left unchanged;
+        called by the router AFTER GoogleProvider.modify_labels has already
+        succeeded (confirm-first — this method does no Gmail I/O itself)."""
+        with self._session() as s, s.begin():
+            row = self._owned_email_row(s, email_id)
+            if row is None:
+                return None
+            if unread is not None:
+                row.unread = unread
+            if starred is not None:
+                row.starred = starred
+            s.flush()
+            return _email_dict(row)
+
+    def set_email_labels(self, email_id: int, label_ids: list[str]) -> dict | None:
+        """Owner-scoped label replace. The router computes the full post-add/
+        remove list from Gmail's response; unread/starred are re-derived here
+        from UNREAD/STARRED membership in the new list so the two stay
+        consistent with whatever labels now apply."""
+        with self._session() as s, s.begin():
+            row = self._owned_email_row(s, email_id)
+            if row is None:
+                return None
+            row.label_ids = list(label_ids)
+            row.unread = "UNREAD" in label_ids
+            row.starred = "STARRED" in label_ids
+            s.flush()
+            return _email_dict(row)
+
+    def delete_email(self, email_id: int) -> bool:
+        """Owner-scoped single-row delete, called by the router AFTER
+        GoogleProvider.trash_message has already succeeded (confirm-first)."""
+        with self._session() as s, s.begin():
+            row = self._owned_email_row(s, email_id)
+            if row is None:
+                return False
+            s.delete(row)
+            return True
 
     def delete_email_data(self, source: str) -> bool:
         """Disconnect hook (GoogleProvider.on_disconnect): delete emails where

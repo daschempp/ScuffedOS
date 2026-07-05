@@ -1,4 +1,5 @@
 """GoogleProvider Gmail fetch (M5) — real provider, fake httpx transport."""
+import base64
 from datetime import datetime, timezone
 
 import pytest
@@ -42,6 +43,8 @@ def test_fetch_messages_lists_inbox_then_maps_each_message():
     # Date header -> aware UTC (08:24 -0700 == 15:24 UTC).
     assert e.received_at == datetime(2026, 6, 30, 15, 24, tzinfo=timezone.utc)
     assert "design review" in e.body_excerpt
+    assert e.starred is False
+    assert e.label_ids == ["INBOX", "UNREAD"]
 
 
 def test_fetch_messages_sends_inbox_label_and_backfill_count():
@@ -66,6 +69,16 @@ def test_bare_email_from_header_has_empty_from_name():
     assert e.from_email == "noreply@service.com"
     assert e.from_name == ""
     assert e.unread is False  # no UNREAD label
+
+
+def test_fetch_messages_maps_starred_label():
+    http = FakeGmailHTTP(messages={"m1": gmail_message(
+        "m1", from_hdr="a@x.com", subject="s",
+        date_hdr="Mon, 30 Jun 2026 08:00:00 +0000",
+        label_ids=["INBOX", "STARRED"])})
+    e = _provider(http).fetch_messages(since=None)[0]
+    assert e.starred is True
+    assert e.label_ids == ["INBOX", "STARRED"]
 
 
 def test_body_excerpt_truncated_to_about_2kb():
@@ -139,3 +152,119 @@ def test_html_only_body_is_stripped_to_plain_text_for_triage():
     assert "Hello" in body
     assert "review" in body
     assert "<" not in body
+
+
+def test_send_message_posts_base64url_raw_and_returns_new_id():
+    http = FakeGmailHTTP()
+    raw = b"To: a@x.com\r\nSubject: s\r\n\r\nbody text\r\n"
+    new_id = _provider(http).send_message(raw)
+    assert new_id == "sent-1"
+    url, payload = http.posts[0]
+    assert url.endswith("/messages/send")
+    decoded = base64.urlsafe_b64decode(payload["raw"] + "=" * (-len(payload["raw"]) % 4))
+    assert decoded == raw
+    assert "threadId" not in payload
+
+
+def test_send_message_passes_thread_id_when_given():
+    http = FakeGmailHTTP()
+    new_id = _provider(http).send_message(b"To: a@x.com\r\n\r\nb\r\n", thread_id="th1")
+    assert new_id == "sent-1"
+    url, payload = http.posts[0]
+    assert payload["threadId"] == "th1"
+
+
+def test_send_message_auth_failure_raises_google_auth_error():
+    http = FakeGmailHTTP(status={"/messages/send": 401})
+    with pytest.raises(GoogleAuthError):
+        _provider(http).send_message(b"To: a@x.com\r\n\r\nb\r\n")
+
+
+def test_trash_message_posts_to_trash_endpoint():
+    http = FakeGmailHTTP()
+    _provider(http).trash_message("m1")
+    url, payload = http.posts[0]
+    assert url.endswith("/messages/m1/trash")
+    assert payload == {}
+
+
+def test_trash_message_auth_failure_raises():
+    http = FakeGmailHTTP(status={"/trash": 401})
+    with pytest.raises(GoogleAuthError):
+        _provider(http).trash_message("m1")
+
+
+def test_modify_labels_posts_add_and_remove_label_ids():
+    http = FakeGmailHTTP()
+    _provider(http).modify_labels("m1", add=["STARRED"], remove=["UNREAD"])
+    url, payload = http.posts[0]
+    assert url.endswith("/messages/m1/modify")
+    assert payload == {"addLabelIds": ["STARRED"], "removeLabelIds": ["UNREAD"]}
+
+
+def test_modify_labels_defaults_to_empty_lists():
+    http = FakeGmailHTTP()
+    _provider(http).modify_labels("m1")
+    url, payload = http.posts[0]
+    assert payload == {"addLabelIds": [], "removeLabelIds": []}
+
+
+def test_modify_labels_auth_failure_raises():
+    http = FakeGmailHTTP(status={"/modify": 500})
+    with pytest.raises(GoogleAuthError):
+        _provider(http).modify_labels("m1", add=["STARRED"])
+
+
+def test_list_labels_gets_and_returns_label_dicts():
+    http = FakeGmailHTTP(labels=[
+        {"id": "STARRED", "name": "STARRED", "type": "system"},
+        {"id": "Label_1", "name": "Family", "type": "user"},
+    ])
+    labels = _provider(http).list_labels()
+    assert labels == [
+        {"id": "STARRED", "name": "STARRED", "type": "system"},
+        {"id": "Label_1", "name": "Family", "type": "user"},
+    ]
+    url, _ = http.gets[0]
+    assert url.endswith("/labels")
+
+
+def test_list_labels_auth_failure_raises():
+    http = FakeGmailHTTP(status={"/labels": 401})
+    with pytest.raises(GoogleAuthError):
+        _provider(http).list_labels()
+
+
+def test_get_message_meta_returns_headers_and_metadata_params():
+    http = FakeGmailHTTP(messages={"m1": {
+        "id": "m1",
+        "payload": {"headers": [
+            {"name": "Message-ID", "value": "<abc123@mail.gmail.com>"},
+            {"name": "References", "value": "<xyz@mail.gmail.com>"},
+            {"name": "Subject", "value": "Original subject"},
+            {"name": "From", "value": "Priya Rao <priya@lighthouse.io>"},
+        ]},
+    }})
+    meta = _provider(http).get_message_meta("m1")
+    assert meta == {
+        "message_id": "<abc123@mail.gmail.com>",
+        "references": "<xyz@mail.gmail.com>",
+        "subject": "Original subject",
+        "from_email": "priya@lighthouse.io",
+    }
+    url, params = http.gets[0]
+    assert url.endswith("/messages/m1")
+    assert params["format"] == "metadata"
+    assert params["metadataHeaders"] == ["Message-ID", "References", "Subject", "From"]
+
+
+def test_get_message_meta_missing_headers_are_empty_strings():
+    http = FakeGmailHTTP(messages={"m1": {"id": "m1", "payload": {"headers": []}}})
+    meta = _provider(http).get_message_meta("m1")
+    assert meta == {"message_id": "", "references": "", "subject": "", "from_email": ""}
+
+
+def test_get_message_meta_auth_failure_raises():
+    http = FakeGmailHTTP(messages={"m1": {}}, status={"/messages/m1": 500})
+    with pytest.raises(GoogleAuthError):
+        _provider(http).get_message_meta("m1")

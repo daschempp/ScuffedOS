@@ -71,6 +71,8 @@ class NormalizedEmail:
     received_at: datetime                # aware UTC, sort key
     unread: bool = False
     body_excerpt: str = ""               # bounded ~2 KB plain-text, triage-only, NOT persisted
+    starred: bool = False                # 'STARRED' in Gmail labelIds
+    label_ids: list = field(default_factory=list)   # Gmail labelIds, sync-authoritative
 
 
 @dataclass
@@ -191,6 +193,11 @@ class FitnessProvider(OAuthProvider, Protocol):
 class EmailProvider(OAuthProvider, Protocol):
     def fetch_messages(self, since: datetime | None) -> list[NormalizedEmail]: ...
     def get_message(self, source_id: str) -> str: ...   # full plain-text body, on demand
+    def send_message(self, raw_rfc822: bytes, thread_id: str | None = None) -> str: ...
+    def trash_message(self, source_id: str) -> None: ...
+    def modify_labels(self, source_id: str, add: list[str] = (), remove: list[str] = ()) -> None: ...
+    def list_labels(self) -> list[dict]: ...
+    def get_message_meta(self, source_id: str) -> dict: ...
 
 
 @runtime_checkable

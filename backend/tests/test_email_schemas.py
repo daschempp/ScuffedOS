@@ -44,6 +44,18 @@ def test_email_out_rejects_out_of_vocab_category():
         EmailOut.model_validate(_row(category="spam"))
 
 
+def test_email_out_defaults_starred_false_and_label_ids_empty():
+    out = EmailOut.model_validate(_row())
+    assert out.starred is False
+    assert out.label_ids == []
+
+
+def test_email_out_accepts_starred_and_label_ids():
+    out = EmailOut.model_validate(_row(starred=True, label_ids=["INBOX", "STARRED"]))
+    assert out.starred is True
+    assert out.label_ids == ["INBOX", "STARRED"]
+
+
 def test_email_detail_adds_thread_id_and_body():
     detail = EmailDetail.model_validate(_row(thread_id="t-1", body="Full plain text body."))
     assert detail.thread_id == "t-1"

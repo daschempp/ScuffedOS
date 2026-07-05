@@ -10,10 +10,22 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
-from .. import email_sync, providers
-from ..schemas import EmailDetail, Inbox
+from .. import email_draft, email_sync, providers
+from ..providers.google import _build_rfc822
+from ..schemas import (
+    DraftRequest,
+    EmailDetail,
+    EmailOut,
+    FlagsPatch,
+    ForwardEmail,
+    Inbox,
+    LabelOut,
+    LabelsPatch,
+    ReplyEmail,
+    SendEmail,
+)
 from ..store import store
 
 router = APIRouter(prefix="/api/email", tags=["email"])
@@ -30,6 +42,84 @@ def inbox() -> dict:
     """The triaged inbox: needs_reply / fyi / untriaged groups + counts. Served
     from the emails table (never a live provider call)."""
     return store.inbox()
+
+
+@router.get("/labels", response_model=list[LabelOut])
+def list_labels() -> list[dict]:
+    """The label menu's options, straight from Gmail (no local labels table)."""
+    impl = providers.get("google")
+    list_labels_fn = getattr(impl, "list_labels", None)
+    if list_labels_fn is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    try:
+        return list_labels_fn()
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502
+        logger.warning("list_labels failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+
+
+@router.post("/send")
+def send_email(payload: SendEmail) -> dict:
+    """Compose-new send. No local row is touched — sends are confirmed
+    straight through to Gmail; the Sent-folder truth lives in Gmail itself."""
+    impl = providers.get("google")
+    send_message = getattr(impl, "send_message", None)
+    if send_message is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    raw = _build_rfc822(
+        to=payload.to, cc=payload.cc, subject=payload.subject, body=payload.body,
+    )
+    try:
+        new_id = send_message(raw)
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502
+        logger.warning("send failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    return {"id": new_id}
+
+
+# Max characters of the original message's live body handed to the drafting
+# model as context — bounded so a huge thread doesn't blow the prompt; the
+# excerpt transits Gmail -> server -> Anthropic and is never persisted.
+_DRAFT_EXCERPT_CHARS = 2048
+
+
+def _draft_original(email_id: int) -> dict:
+    """Build the `original` context dict for reply/forward drafting: stored
+    metadata + a best-effort live body excerpt (empty string on any fetch
+    failure — drafting still proceeds with metadata only)."""
+    row = store.get_email(email_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    excerpt = ""
+    impl = providers.get(row["source"])
+    get_message = getattr(impl, "get_message", None)
+    if get_message is not None:
+        try:
+            excerpt = get_message(row["source_id"])[:_DRAFT_EXCERPT_CHARS]
+        except Exception as exc:  # noqa: BLE001 — excerpt fetch is best-effort
+            logger.warning("draft excerpt fetch failed for email %s: %s", email_id, exc)
+            excerpt = ""
+    return {
+        "from_name": row["from_name"],
+        "from_email": row["from_email"],
+        "subject": row["subject"],
+        "body_excerpt": excerpt,
+    }
+
+
+@router.post("/draft")
+def draft_email(payload: DraftRequest) -> dict:
+    """User-initiated AI draft (the compose editor's AI-draft button, or the
+    assistant's draft_email tool for the HTTP path). NEVER runs automatically."""
+    original = None
+    if payload.mode in ("reply", "forward"):
+        if payload.email_id is None:
+            raise HTTPException(status_code=404, detail="Email not found")
+        original = _draft_original(payload.email_id)
+    text = email_draft.draft(payload.instructions, payload.notes, payload.mode, original)
+    if text is None:
+        raise HTTPException(status_code=503, detail="Couldn't draft — try again.")
+    return {"draft": text}
 
 
 @router.get("/{email_id}", response_model=EmailDetail)
@@ -63,3 +153,144 @@ def sync_now() -> dict:
     except RuntimeError:
         names = []
     return {"synced": count, "providers": names}
+
+
+@router.post("/{email_id}/trash", status_code=204)
+def trash_email(email_id: int) -> Response:
+    """Trash in Gmail first; the local row is removed ONLY on success
+    (confirm-first — a Gmail failure leaves the row untouched)."""
+    row = store.get_email(email_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    impl = providers.get(row["source"])
+    trash_message = getattr(impl, "trash_message", None)
+    if trash_message is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    try:
+        trash_message(row["source_id"])
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502, never a local change
+        logger.warning("trash failed for email %s: %s", email_id, exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    store.delete_email(email_id)
+    return Response(status_code=204)
+
+
+@router.post("/{email_id}/flags", response_model=EmailOut)
+def set_email_flags(email_id: int, patch: FlagsPatch) -> dict:
+    """Read/unread + star. unread=True -> add Gmail's UNREAD label;
+    unread=False -> remove UNREAD. starred=True -> add STARRED;
+    starred=False -> remove STARRED. Both None (an empty patch) is a no-op
+    that skips the Gmail call entirely and returns the row unchanged."""
+    row = store.get_email(email_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    add: list[str] = []
+    remove: list[str] = []
+    if patch.unread is True:
+        add.append("UNREAD")
+    elif patch.unread is False:
+        remove.append("UNREAD")
+    if patch.starred is True:
+        add.append("STARRED")
+    elif patch.starred is False:
+        remove.append("STARRED")
+    if add or remove:
+        impl = providers.get(row["source"])
+        modify_labels = getattr(impl, "modify_labels", None)
+        if modify_labels is None:
+            raise HTTPException(status_code=502, detail="Gmail rejected the action")
+        try:
+            modify_labels(row["source_id"], add=add, remove=remove)
+        except Exception as exc:  # noqa: BLE001 — any provider failure is a 502, never a local change
+            logger.warning("flags update failed for email %s: %s", email_id, exc)
+            raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    updated = store.set_email_flags(email_id, unread=patch.unread, starred=patch.starred)
+    return updated
+
+
+@router.post("/{email_id}/labels", response_model=EmailOut)
+def set_email_labels(email_id: int, patch: LabelsPatch) -> dict:
+    """New label list = (stored ∪ add) − remove, confirmed against Gmail
+    first via modify_labels, then written locally via store.set_email_labels
+    (which also re-derives unread/starred from the new list)."""
+    row = store.get_email(email_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    impl = providers.get(row["source"])
+    modify_labels = getattr(impl, "modify_labels", None)
+    if modify_labels is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    try:
+        modify_labels(row["source_id"], add=patch.add, remove=patch.remove)
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502, never a local change
+        logger.warning("labels update failed for email %s: %s", email_id, exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    current = set(row.get("label_ids") or [])
+    new_labels = list((current | set(patch.add)) - set(patch.remove))
+    updated = store.set_email_labels(email_id, new_labels)
+    return updated
+
+
+def _prefixed(subject: str, prefix: str) -> str:
+    """Add `prefix` (e.g. 'Re: ') unless subject already starts with it,
+    case-insensitively (contract: no double-Re/double-Fwd)."""
+    if subject.lower().startswith(prefix.lower()):
+        return subject
+    return f"{prefix}{subject}"
+
+
+@router.post("/{email_id}/reply")
+def reply_email(email_id: int, payload: ReplyEmail) -> dict:
+    """Reply threads on the original: In-Reply-To/References from Gmail's
+    live message-meta, thread_id from the stored row, subject 'Re: <orig>'
+    (no double-Re), to = the original sender. No local row changes — Gmail's
+    Sent folder is the source of truth for outbound mail."""
+    original = store.get_email(email_id)
+    if original is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    impl = providers.get(original["source"])
+    send_message = getattr(impl, "send_message", None)
+    get_message_meta = getattr(impl, "get_message_meta", None)
+    if send_message is None or get_message_meta is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    try:
+        meta = get_message_meta(original["source_id"])
+        subject = _prefixed(meta["subject"] or original["subject"], "Re: ")
+        references = f"{meta['references']} {meta['message_id']}".strip()
+        raw = _build_rfc822(
+            to=meta["from_email"], subject=subject, body=payload.body,
+            in_reply_to=meta["message_id"], references=references,
+        )
+        new_id = send_message(raw, thread_id=original["thread_id"])
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502
+        logger.warning("reply failed for email %s: %s", email_id, exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    return {"id": new_id}
+
+
+@router.post("/{email_id}/forward")
+def forward_email(email_id: int, payload: ForwardEmail) -> dict:
+    """Forward carries no threading headers (a fresh conversation for the new
+    recipient) and always prefixes 'Fwd: ' (no double-Fwd). To comes from the
+    payload, not the original sender."""
+    original = store.get_email(email_id)
+    if original is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    impl = providers.get(original["source"])
+    send_message = getattr(impl, "send_message", None)
+    get_message_meta = getattr(impl, "get_message_meta", None)
+    if send_message is None or get_message_meta is None:
+        raise HTTPException(status_code=502, detail="Gmail rejected the action")
+    try:
+        meta = get_message_meta(original["source_id"])
+        subject = _prefixed(meta["subject"] or original["subject"], "Fwd: ")
+        raw = _build_rfc822(to=payload.to, subject=subject, body=payload.body)
+        new_id = send_message(raw)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — any provider failure is a 502
+        logger.warning("forward failed for email %s: %s", email_id, exc)
+        raise HTTPException(status_code=502, detail="Gmail rejected the action") from exc
+    return {"id": new_id}

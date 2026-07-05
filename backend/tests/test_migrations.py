@@ -51,7 +51,7 @@ def test_upgrade_head_builds_full_schema(alembic_cfg, tmp_path):
     email_cols = {c["name"] for c in inspect(engine).get_columns("emails")}
     assert {"owner", "source", "source_id", "thread_id", "from_name",
             "from_email", "subject", "snippet", "received_at", "unread",
-            "category", "summary_json", "triaged_at"} <= email_cols
+            "category", "summary_json", "triaged_at", "starred", "label_ids"} <= email_cols
     assert "body" not in email_cols  # privacy: bodies never persisted
 
     deadline_cols = {c["name"] for c in inspect(engine).get_columns("moodle_deadlines")}

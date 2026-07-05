@@ -1,8 +1,9 @@
-"""M5 assistant email tools (read-only): get_inbox compact shape, get_email body + errors."""
+"""M5 assistant email tools: get_inbox compact shape, get_email body + errors,
+draft_email (slice-2, the only write-adjacent tool this slice)."""
 import json
 from datetime import datetime, timedelta, timezone
 
-from app import providers, tools
+from app import email_draft, providers, tools
 from app.providers.base import NormalizedEmail
 from app.store import store
 
@@ -41,11 +42,12 @@ class FakeEmailProvider:
         return self._body
 
 
-def test_email_tools_are_registered_read_only():
+def test_email_tools_are_registered():
     names = {t["name"] for t in tools.TOOLS}
-    assert {"get_inbox", "get_email"} <= names
-    # No write/send/draft/archive tools this slice.
-    assert not any(n in names for n in ("send_email", "draft_email", "archive_email"))
+    assert {"get_inbox", "get_email", "draft_email"} <= names
+    # draft_email is the ONLY write-adjacent email tool this slice — it never
+    # sends/trashes/labels; those remain assistant-inaccessible.
+    assert not any(n in names for n in ("send_email", "trash_email", "label_email"))
 
 
 def test_get_inbox_returns_compact_groups_and_count(client):
@@ -90,3 +92,67 @@ def test_get_email_body_falls_back_when_gmail_unreachable(client):
 def test_get_email_errors_for_missing_id(client):
     result = json.loads(tools.execute("get_email", {"email_id": 987654})[0])
     assert "error" in result
+
+
+class _FakeDraft:
+    def __init__(self, text):
+        self.text = text
+        self.calls = []
+
+    def draft(self, instructions, notes, mode, original):
+        self.calls.append((instructions, notes, mode, original))
+        return self.text
+
+
+def test_draft_email_happy_path_with_reply_to(client):
+    fake = FakeEmailProvider(body="Full live body text, not the snippet.")
+    providers.configure([fake])
+    row = store.upsert_email(_email("m9", "The plan"), category="fyi", summary=["A plan"])
+    fake_draft = _FakeDraft("Sounds good, confirming.")
+    email_draft.configure(fake_draft)
+
+    result_json, action = tools.execute(
+        "draft_email", {"instructions": "confirm it works", "email_id": row["id"]}
+    )
+    result = json.loads(result_json)
+    assert result["draft"] == "Sounds good, confirming."
+    assert result["reply_to"]["id"] == row["id"]
+    assert result["reply_to"]["subject"] == "The plan"
+    assert "body" not in result["reply_to"]
+    assert action == {"icon": "mail", "title": "Draft ready",
+                      "meta": "Open compose to review & send", "cta": "Open email", "screen": "email"}
+    # contract §G: body_excerpt is fetched live via provider.get_message,
+    # never the DB-cached snippet (row["snippet"] == "preview" per _email()).
+    assert fake.got == ["m9"]
+    _, _, _, original = fake_draft.calls[0]
+    assert original["body_excerpt"] == "Full live body text, not the snippet."
+
+
+def test_draft_email_without_email_id_has_no_reply_to():
+    email_draft.configure(_FakeDraft("A fresh note."))
+
+    result_json, action = tools.execute("draft_email", {"instructions": "write a note"})
+    result = json.loads(result_json)
+    assert result["draft"] == "A fresh note."
+    assert result["reply_to"] is None
+    assert action is not None
+
+
+def test_draft_email_errors_when_draft_unavailable():
+    email_draft.configure(None)
+
+    result_json, action = tools.execute("draft_email", {"instructions": "write it"})
+    result = json.loads(result_json)
+    assert "error" in result
+    assert action is None
+
+
+def test_draft_email_errors_for_missing_email_id():
+    email_draft.configure(_FakeDraft("text"))
+
+    result_json, action = tools.execute(
+        "draft_email", {"instructions": "reply", "email_id": 987654}
+    )
+    result = json.loads(result_json)
+    assert "error" in result
+    assert action is None

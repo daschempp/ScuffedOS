@@ -184,6 +184,19 @@ export const api = {
   emailDetail: (id) => request(`/api/email/${id}`),
   emailSync: () => request('/api/email/sync', { method: 'POST' }),
 
+  // Email writes (M5 slice-2) — confirm-first server-side (Gmail call happens
+  // before any local change); gated client-side on can_write_email (see
+  // EmailScreen's canWrite banner). emailDraft never persists and only runs on
+  // explicit user request (the ✨ button).
+  emailSend: (payload) => request('/api/email/send', { method: 'POST', body: JSON.stringify(payload) }),
+  emailReply: (id, payload) => request(`/api/email/${id}/reply`, { method: 'POST', body: JSON.stringify(payload) }),
+  emailForward: (id, payload) => request(`/api/email/${id}/forward`, { method: 'POST', body: JSON.stringify(payload) }),
+  emailTrash: (id) => request(`/api/email/${id}/trash`, { method: 'POST' }),
+  emailFlags: (id, payload) => request(`/api/email/${id}/flags`, { method: 'POST', body: JSON.stringify(payload) }),
+  emailLabels: (id, payload) => request(`/api/email/${id}/labels`, { method: 'POST', body: JSON.stringify(payload) }),
+  emailLabelList: () => request('/api/email/labels'),
+  emailDraft: (payload) => request('/api/email/draft', { method: 'POST', body: JSON.stringify(payload) }),
+
   // School / Moodle (M6) — every read comes straight from the moodle_* tables
   // server-side (a list call never triggers a live Moodle request), so the
   // screen works while a sync is mid-flight or Moodle is down. Only

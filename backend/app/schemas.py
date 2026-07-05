@@ -393,6 +393,7 @@ class ProviderStatus(BaseModel):
     connected_at: datetime
     last_sync_at: datetime | None
     provider_user_id: str | None = None
+    can_write_email: bool = False
 
 
 class FitnessStatus(BaseModel):
@@ -496,6 +497,8 @@ class EmailOut(BaseModel):
     snippet: str
     received_at: datetime
     unread: bool
+    starred: bool = False
+    label_ids: List[str] = []
     category: EmailCategory | None  # None = untriaged (retry next sync)
     summary: List[str]              # [] when untriaged
     when: str                       # derived display, e.g. "8:24am" / "Yesterday"
@@ -506,12 +509,56 @@ class EmailDetail(EmailOut):
     body: str  # on-demand Gmail fetch (or a graceful fallback string)
 
 
+class FlagsPatch(BaseModel):
+    """None field = unchanged. unread=True adds Gmail's UNREAD label (marks
+    unread); unread=False removes it (marks read). starred=True adds
+    STARRED; starred=False removes it. See routers/email.py's add/remove
+    computation."""
+
+    unread: bool | None = None
+    starred: bool | None = None
+
+
+class LabelsPatch(BaseModel):
+    add: List[str] = []
+    remove: List[str] = []
+
+
+class LabelOut(BaseModel):
+    id: str
+    name: str
+    type: str
+
+
+class SendEmail(BaseModel):
+    to: str
+    cc: str | None = None
+    subject: str
+    body: str
+
+
+class ReplyEmail(BaseModel):
+    body: str
+
+
+class ForwardEmail(BaseModel):
+    to: str
+    body: str
+
+
 class Inbox(BaseModel):
     needs_reply: List[EmailOut]
     fyi: List[EmailOut]
     untriaged: List[EmailOut]
     needs_reply_count: int
     unread_count: int
+
+
+class DraftRequest(BaseModel):
+    instructions: str
+    notes: str = ""
+    mode: Literal["new", "reply", "forward"] = "new"
+    email_id: int | None = None
 
 
 # ---- Moodle schemas (M6 School) ----------------------------------------------

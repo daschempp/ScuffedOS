@@ -347,6 +347,8 @@ class Email(Base):
     snippet: Mapped[str] = mapped_column(Text, default="")
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     unread: Mapped[bool] = mapped_column(default=False)
+    starred: Mapped[bool] = mapped_column(default=False)
+    label_ids: Mapped[list] = mapped_column(JSONField, default=list)     # Gmail label ids, sync-authoritative
     category: Mapped[str | None] = mapped_column(String(16))            # 'needs_reply' | 'fyi' | None
     summary_json: Mapped[list | None] = mapped_column(JSONField)        # list[str] bullets, or None
     triaged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

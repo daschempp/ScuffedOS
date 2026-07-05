@@ -24,6 +24,7 @@ import html
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from email.utils import parseaddr, parsedate_to_datetime
 from urllib.parse import urlencode
 
@@ -38,7 +39,10 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-GOOGLE_SCOPES = "openid email profile https://www.googleapis.com/auth/gmail.readonly"
+GOOGLE_SCOPES = ("openid email profile "
+                 "https://www.googleapis.com/auth/gmail.readonly "
+                 "https://www.googleapis.com/auth/gmail.modify "
+                 "https://www.googleapis.com/auth/gmail.send")   # [confirm-against-live]
 
 # Refresh when the access token is within this many seconds of expiring.
 _REFRESH_SKEW = timedelta(seconds=60)
@@ -130,6 +134,27 @@ def _parse_date(value: str) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _build_rfc822(*, to: str, subject: str, body: str, cc: str | None = None,
+                   in_reply_to: str | None = None, references: str | None = None) -> bytes:
+    """Assemble a plain-text RFC-822 message for Gmail's messages.send (base64url
+    of these bytes becomes the 'raw' field — see send_message). From is
+    omitted: Gmail always sets it to the authenticated account regardless of
+    what's supplied, so setting it here would be misleading. Uses stdlib
+    email.message.EmailMessage so multi-byte body text (emoji, accents) is
+    MIME-encoded correctly without a third-party dependency."""
+    msg = EmailMessage()
+    msg["To"] = to
+    if cc:
+        msg["Cc"] = cc
+    msg["Subject"] = subject
+    if in_reply_to:
+        msg["In-Reply-To"] = in_reply_to
+    if references:
+        msg["References"] = references
+    msg.set_content(body, subtype="plain", charset="utf-8")
+    return msg.as_bytes()
 
 
 class GoogleAuthError(AuthError):
@@ -314,6 +339,12 @@ class GoogleProvider:
             raise GoogleAuthError(f"Gmail GET {url} returned {res.status_code}")
         return res.json() or {}
 
+    def _post(self, url: str, json: dict) -> dict:
+        res = self._transport().post(url, headers=self._headers(), json=json)
+        if getattr(res, "status_code", 200) >= 400:
+            raise GoogleAuthError(f"Gmail POST {url} returned {res.status_code}")
+        return res.json() or {}
+
     def fetch_messages(self, since: datetime | None) -> list[NormalizedEmail]:
         """List the INBOX (maxResults=email_backfill_count) then map each message
         (headers + snippet + a bounded plain-text body excerpt) to a
@@ -353,6 +384,8 @@ class GoogleProvider:
             received_at=_parse_date(_header(headers, "Date")),
             unread="UNREAD" in label_ids,
             body_excerpt=_excerpt(_walk_plaintext(payload)),
+            starred="STARRED" in label_ids,
+            label_ids=label_ids,
         )
 
     def get_message(self, source_id: str) -> str:
@@ -363,3 +396,57 @@ class GoogleProvider:
             f"{GMAIL_API_BASE}/messages/{source_id}", params={"format": "full"}
         )
         return _walk_plaintext(msg.get("payload") or {})
+
+    def send_message(self, raw_rfc822: bytes, thread_id: str | None = None) -> str:
+        """POST messages.send with the RFC-822 bytes (from _build_rfc822)
+        base64url-encoded into 'raw'. thread_id (when given, e.g. a reply)
+        tells Gmail to thread the new message onto the existing conversation
+        instead of starting a new one. Returns the new Gmail message id."""
+        payload: dict = {"raw": base64.urlsafe_b64encode(raw_rfc822).decode("ascii").rstrip("=")}
+        if thread_id:
+            payload["threadId"] = thread_id
+        result = self._post(f"{GMAIL_API_BASE}/messages/send", json=payload)
+        return str(result["id"])
+
+    def trash_message(self, source_id: str) -> None:
+        """Move a message to Gmail Trash (users.messages.trash) — never a
+        permanent delete (the full-access mail.google.com scope is not
+        requested). Google auto-purges Trash after ~30 days."""
+        self._post(f"{GMAIL_API_BASE}/messages/{source_id}/trash", json={})
+
+    def modify_labels(self, source_id: str, add: list[str] = (), remove: list[str] = ()) -> None:
+        """Add/remove Gmail label ids on one message. Read/unread state and
+        star are both modeled as labels: unread = presence of 'UNREAD',
+        starred = presence of 'STARRED' — the router computes add/remove
+        from the desired flag state before calling this."""
+        self._post(
+            f"{GMAIL_API_BASE}/messages/{source_id}/modify",
+            json={"addLabelIds": list(add), "removeLabelIds": list(remove)},
+        )
+
+    def list_labels(self) -> list[dict]:
+        """All Gmail labels (system + user) for the label-picker menu."""
+        result = self._get(f"{GMAIL_API_BASE}/labels")
+        return list(result.get("labels") or [])
+
+    def get_message_meta(self, source_id: str) -> dict:
+        """Bounded metadata-only fetch (format=metadata, four headers) used
+        to build reply/forward threading headers without pulling the full
+        body. Missing headers come back as '' rather than raising, so a
+        message with an unusual header set still produces a usable (if
+        empty) threading context."""
+        msg = self._get(
+            f"{GMAIL_API_BASE}/messages/{source_id}",
+            params={
+                "format": "metadata",
+                "metadataHeaders": ["Message-ID", "References", "Subject", "From"],
+            },
+        )
+        headers = (msg.get("payload") or {}).get("headers") or []
+        _, from_email = _parse_from(_header(headers, "From"))
+        return {
+            "message_id": _header(headers, "Message-ID"),
+            "references": _header(headers, "References"),
+            "subject": _header(headers, "Subject"),
+            "from_email": from_email,
+        }
