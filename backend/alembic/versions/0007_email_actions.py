@@ -6,8 +6,8 @@
   truth; sync + the label-write endpoints keep Gmail authoritative.
   NO body column — still never persisted (unchanged from 0005).
 
-Revision ID: 0006
-Revises: 0005
+Revision ID: 0007
+Revises: 0006
 Create Date: 2026-07-01
 """
 from __future__ import annotations
@@ -16,8 +16,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0006"
-down_revision = "0005"
+revision = "0007"
+down_revision = "0006"
 branch_labels = None
 depends_on = None
 

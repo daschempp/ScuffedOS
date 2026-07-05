@@ -1,0 +1,292 @@
+"""API-layer tests for /api/moodle/* (M6 School slice-1, contract §J). Reads
+are served from the store (no live Moodle call); /sync delegates to a
+FakeMoodleSync seam and lists providers by the fetch_school_snapshot
+duck-type. This file defines its own slim FakeMoodleProvider + FakeMoodleSync
+(only the router surface), matching test_email_api.py's local-fakes split."""
+import base64
+import hashlib
+from datetime import datetime, timezone
+
+from app import moodle_sync, providers
+from app.config import settings
+from app.providers.base import (
+    NormalizedAnnouncement,
+    NormalizedCourse,
+    NormalizedDeadline,
+    NormalizedGrade,
+    NormalizedNotification,
+    Tokens,
+)
+from app.providers.moodle import MoodleAuthError
+from app.store import store
+
+NOW = datetime(2026, 7, 3, 15, 0, tzinfo=timezone.utc)
+
+
+class FakeMoodleProvider:
+    """Slim MoodleProvider stand-in for the router tests. Scripts
+    get_site_info (the connect-time validation) and mirrors the real
+    on_disconnect -> store.delete_moodle_data hook so the shared
+    /api/oauth/disconnect/moodle path deletes Moodle rows for real."""
+
+    name = "moodle"
+
+    def __init__(self, *, site_info=None, raise_auth=False):
+        self._site_info = site_info or {
+            "userid": 501, "sitename": "WolfWare", "release": "5.2",
+            "functions": ["core_enrol_get_users_courses"],
+        }
+        self._raise_auth = raise_auth
+        self.injected = []
+
+    def fetch_school_snapshot(self, since):  # marks this as a Moodle provider
+        return None
+
+    def get_site_info(self, token: str) -> dict:
+        if self._raise_auth:
+            raise MoodleAuthError("invalidtoken")
+        return dict(self._site_info)
+
+    # ---- OAuth plumbing the shared oauth router calls on disconnect ----
+    def set_tokens(self, tokens):
+        self.injected.append(tokens)
+
+    def revoke(self, tokens) -> None:
+        pass
+
+    def on_disconnect(self) -> None:
+        store.delete_moodle_data(self.name)
+
+
+class FakeMoodleSync:
+    """Stand-in for moodle_sync installed via moodle_sync.configure(...).
+    tick() returns a scripted count and records call count."""
+
+    def __init__(self, count=0):
+        self.count = count
+        self.calls = 0
+
+    def tick(self, now=None):
+        self.calls += 1
+        return self.count
+
+
+def _course(source_id, *, shortname="CSC116", fullname="Intro to Computing"):
+    return NormalizedCourse(
+        source="moodle", source_id=source_id, shortname=shortname,
+        fullname=fullname, progress=42.0,
+    )
+
+
+def _deadline(source_id, *, course_id="72", name="Project 1 is due", due_at=NOW):
+    return NormalizedDeadline(
+        source="moodle", source_id=source_id, course_id=course_id, name=name,
+        module_name="assign", event_type="due", due_at=due_at,
+        url="https://moodle/mod/assign/view.php?id=1",
+    )
+
+
+def _grade(source_id, *, course_id="72", item_name="Project 1"):
+    return NormalizedGrade(
+        source="moodle", source_id=source_id, course_id=course_id,
+        item_name=item_name, item_type="mod", grade_formatted="92.0",
+        grade_raw=92.0, grade_min=0.0, grade_max=100.0,
+    )
+
+
+def _announcement(source_id, *, course_id="72", subject="Welcome"):
+    return NormalizedAnnouncement(
+        source="moodle", source_id=source_id, course_id=course_id, forum_id="9",
+        subject=subject, author="Prof. Ada", created_at=NOW,
+        summary_html="See the syllabus.", url="https://moodle/mod/forum/discuss.php?d=1",
+    )
+
+
+def _notification(source_id, *, subject="Assignment graded"):
+    return NormalizedNotification(
+        source="moodle", source_id=source_id, subject=subject,
+        full_message="Your Project 1 grade is posted.", created_at=NOW, read=False,
+    )
+
+
+def test_courses_read_returns_store_rows(client):
+    providers.configure([FakeMoodleProvider()])
+    store.upsert_moodle_course(_course("72", shortname="CSC116"))
+    store.upsert_moodle_course(_course("69", shortname="MA242"))
+
+    body = client.get("/api/moodle/courses").json()
+
+    assert {c["shortname"] for c in body} == {"CSC116", "MA242"}
+    # No token/scope leakage in a read shape.
+    assert all("access_token" not in c and "scopes" not in c for c in body)
+
+
+def test_deadlines_read_returns_store_rows_with_when_display(client):
+    providers.configure([FakeMoodleProvider()])
+    store.upsert_moodle_deadline(_deadline("d1", name="Project 1 is due"))
+
+    body = client.get("/api/moodle/deadlines").json()
+
+    assert [d["name"] for d in body] == ["Project 1 is due"]
+    assert "when" in body[0]  # derived display present
+
+
+def test_deadlines_read_passes_days_param_to_store(client):
+    providers.configure([FakeMoodleProvider()])
+    store.upsert_moodle_deadline(_deadline("d1"))
+
+    res = client.get("/api/moodle/deadlines?days=30")
+
+    assert res.status_code == 200
+
+
+def test_grades_read_filters_by_course_id(client):
+    providers.configure([FakeMoodleProvider()])
+    store.upsert_moodle_grade(_grade("g1", course_id="72", item_name="Project 1"))
+    store.upsert_moodle_grade(_grade("g2", course_id="69", item_name="Exam 1"))
+
+    body = client.get("/api/moodle/grades?course_id=72").json()
+
+    assert [g["item_name"] for g in body] == ["Project 1"]
+
+
+def test_announcements_read_returns_store_rows(client):
+    providers.configure([FakeMoodleProvider()])
+    store.upsert_moodle_announcement(_announcement("a1", subject="Welcome"))
+
+    body = client.get("/api/moodle/announcements").json()
+
+    assert [a["subject"] for a in body] == ["Welcome"]
+
+
+def test_announcements_read_serializes_null_created_at(client):
+    # Regression: a Moodle discussion may lack a "created" field, and
+    # moodle_announcements.created_at is nullable in the store. AnnouncementOut
+    # types created_at as `datetime | None` for exactly this reason — if it
+    # were ever reverted to a required `datetime`, this row would 500 through
+    # response_model=list[AnnouncementOut] instead of serializing cleanly.
+    providers.configure([FakeMoodleProvider()])
+    announcement = _announcement("a-null", subject="No created date")
+    announcement.created_at = None
+    store.upsert_moodle_announcement(announcement)
+
+    res = client.get("/api/moodle/announcements")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert [a["subject"] for a in body] == ["No created date"]
+    assert body[0]["created_at"] is None
+
+
+def test_notifications_read_returns_store_rows(client):
+    providers.configure([FakeMoodleProvider()])
+    store.upsert_moodle_notification(_notification("n1", subject="Assignment graded"))
+
+    body = client.get("/api/moodle/notifications").json()
+
+    assert [n["subject"] for n in body] == ["Assignment graded"]
+
+
+def test_sync_triggers_moodle_sync_and_lists_moodle_providers(client):
+    fake_sync = FakeMoodleSync(count=5)
+    moodle_sync.configure(fake_sync)
+    providers.configure([FakeMoodleProvider()])
+
+    body = client.post("/api/moodle/sync").json()
+
+    assert body == {"synced": 5, "providers": ["moodle"]}
+    assert fake_sync.calls == 1
+
+
+def test_connect_validates_token_persists_account_and_kicks_sync(client):
+    fake_sync = FakeMoodleSync(count=3)
+    moodle_sync.configure(fake_sync)
+    providers.configure([FakeMoodleProvider(site_info={
+        "userid": 501, "sitename": "WolfWare", "release": "5.2",
+        "functions": ["core_enrol_get_users_courses", "gradereport_user_get_grade_items"],
+    })])
+
+    res = client.post("/api/moodle/connect",
+                      json={"token": "a" * 32})
+
+    assert res.status_code == 200
+    body = res.json()
+    # Shared OAuth status shape: connected=True with a moodle provider row.
+    assert body["connected"] is True
+    moodle = next(p for p in body["providers"] if p["provider"] == "moodle")
+    assert moodle["status"] == "connected"
+    assert moodle["provider_user_id"] == "501"
+    # Connect kicked exactly one sync.
+    assert fake_sync.calls == 1
+
+
+def test_connect_status_never_serializes_tokens_or_scopes(client):
+    moodle_sync.configure(FakeMoodleSync())
+    providers.configure([FakeMoodleProvider()])
+
+    body = client.post("/api/moodle/connect", json={"token": "a" * 32}).json()
+    moodle = next(p for p in body["providers"] if p["provider"] == "moodle")
+
+    # The wstoken lives only in provider_accounts.access_token, server-side.
+    assert "access_token" not in moodle
+    assert "wstoken" not in moodle
+    assert "scopes" not in moodle
+    assert "meta" not in moodle
+    # And it is genuinely connected per the shared status endpoint too.
+    status = client.get("/api/oauth/status").json()
+    assert any(p["provider"] == "moodle" and p["status"] == "connected"
+               for p in status["providers"])
+
+
+def test_connect_invalid_token_returns_502_and_persists_nothing(client):
+    moodle_sync.configure(FakeMoodleSync())
+    providers.configure([FakeMoodleProvider(raise_auth=True)])
+
+    res = client.post("/api/moodle/connect", json={"token": "bad-token"})
+
+    assert res.status_code == 502
+    assert res.json()["error"]["message"] == "Moodle rejected the token"
+    # No account row was written.
+    assert all(p["provider"] != "moodle"
+               for p in store.list_provider_accounts())
+
+
+def test_connect_launch_url_with_mismatched_passport_is_rejected(client):
+    # Security carry-forward (Task 4): connect MUST pass both passport and
+    # wwwroot=settings.moodle_base_url to parse_pasted_token, or the md5
+    # passport check silently becomes a no-op for the launch-URL token shape.
+    # Build a launch-redirect blob signed with the WRONG passport (i.e. what
+    # an attacker who intercepted a different session's launch URL would
+    # replay) and confirm the mismatch is actually verified -> rejected.
+    moodle_sync.configure(FakeMoodleSync())
+    providers.configure([FakeMoodleProvider()])
+    wwwroot = settings.moodle_base_url
+    wrong_signature = hashlib.md5((wwwroot + "wrong-passport").encode()).hexdigest()
+    blob = base64.b64encode(f"{wrong_signature}:::{'a' * 32}".encode()).decode()
+    launch_url = f"{wwwroot}/admin/tool/mobile/launch.php?token={blob}"
+
+    res = client.post("/api/moodle/connect",
+                      json={"token": launch_url, "passport": "correct-passport"})
+
+    assert res.status_code == 502
+    assert res.json()["error"]["message"] == "Moodle rejected the token"
+    assert all(p["provider"] != "moodle"
+               for p in store.list_provider_accounts())
+
+
+def test_disconnect_moodle_deletes_synced_data_via_shared_router(client):
+    moodle_sync.configure(FakeMoodleSync())
+    providers.configure([FakeMoodleProvider()])
+    # Connect, then seed a synced row.
+    client.post("/api/moodle/connect", json={"token": "a" * 32})
+    store.upsert_moodle_course(_course("72", shortname="CSC116"))
+    assert store.moodle_courses()  # non-empty before disconnect
+
+    res = client.post("/api/oauth/disconnect/moodle")
+
+    assert res.status_code == 200
+    # on_disconnect -> delete_moodle_data cleared the synced rows.
+    assert store.moodle_courses() == []
+    # And the moodle account is gone from status.
+    assert all(p["provider"] != "moodle"
+               for p in res.json()["providers"])

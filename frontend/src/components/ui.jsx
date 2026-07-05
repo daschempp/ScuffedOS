@@ -118,10 +118,10 @@ export function ProgressRing({ value = 0, max = 100, size = 72, thickness = 9, c
   )
 }
 
-export function Checkbox({ checked, onChange, label, strikeWhenChecked }) {
+export function Checkbox({ checked, onChange, label, strikeWhenChecked, disabled }) {
   return (
-    <label className={`sa-check ${strikeWhenChecked && checked ? 'sa-check--done' : ''}`}>
-      <input type="checkbox" checked={checked} onChange={onChange} />
+    <label className={`sa-check ${strikeWhenChecked && checked ? 'sa-check--done' : ''} ${disabled ? 'sa-check--disabled' : ''}`}>
+      <input type="checkbox" checked={checked} onChange={onChange} disabled={disabled} readOnly={disabled} />
       <span className="sa-check__box"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg></span>
       {label && <span>{label}</span>}
     </label>

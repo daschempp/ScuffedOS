@@ -197,6 +197,20 @@ export const api = {
   emailLabelList: () => request('/api/email/labels'),
   emailDraft: (payload) => request('/api/email/draft', { method: 'POST', body: JSON.stringify(payload) }),
 
+  // School / Moodle (M6) — every read comes straight from the moodle_* tables
+  // server-side (a list call never triggers a live Moodle request), so the
+  // screen works while a sync is mid-flight or Moodle is down. Only
+  // moodleConnect (validate the pasted wstoken) and moodleSync (kick a
+  // foreground tick) reach Moodle. The wstoken is pasted once and lives
+  // server-side only — it never crosses this boundary again.
+  moodleCourses: () => request('/api/moodle/courses'),
+  moodleDeadlines: (days) => request(`/api/moodle/deadlines${days ? `?days=${days}` : ''}`),
+  moodleGrades: (courseId) => request(`/api/moodle/grades${courseId ? `?course_id=${courseId}` : ''}`),
+  moodleAnnouncements: (courseId) => request(`/api/moodle/announcements${courseId ? `?course_id=${courseId}` : ''}`),
+  moodleNotifications: () => request('/api/moodle/notifications'),
+  moodleSync: () => request('/api/moodle/sync', { method: 'POST' }),
+  moodleConnect: (payload) => request('/api/moodle/connect', { method: 'POST', body: JSON.stringify(payload) }),
+
   // Second-brain memories.
   listMemories: () => request('/api/memory'),
   createMemory: (text, extras) => request('/api/memory', {

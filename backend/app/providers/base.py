@@ -75,6 +75,95 @@ class NormalizedEmail:
     label_ids: list = field(default_factory=list)   # Gmail labelIds, sync-authoritative
 
 
+@dataclass
+class NormalizedCourse:
+    source: str                          # 'moodle'
+    source_id: str                       # course id
+    shortname: str
+    fullname: str
+    progress: float | None = None        # 0..100 or None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    last_access_at: datetime | None = None
+    hidden: bool = False
+
+
+@dataclass
+class NormalizedDeadline:                # the Timeline (core_calendar_get_action_events_by_timesort)
+    source: str
+    source_id: str                       # calendar event id
+    course_id: str
+    name: str                            # e.g. "Summative assignment is due"
+    module_name: str                     # 'assign' | 'quiz' | 'lesson' | ...
+    event_type: str                      # 'due' | 'close' | ...
+    due_at: datetime                     # from timesort (epoch -> aware UTC)
+    overdue: bool = False
+    url: str = ""                        # viewurl
+
+
+@dataclass
+class NormalizedAssignment:
+    source: str
+    source_id: str                       # assign id
+    course_id: str
+    cmid: str
+    name: str
+    due_at: datetime | None = None
+    cutoff_at: datetime | None = None
+    grade_max: float | None = None
+    submission_status: str = "none"      # 'new'|'draft'|'submitted'|'reopened'|'none'
+    grading_status: str = ""             # 'graded'|'notgraded'|...
+    graded: bool = False
+
+
+@dataclass
+class NormalizedGrade:
+    source: str
+    source_id: str                       # grade item id
+    course_id: str
+    item_name: str
+    item_type: str                       # 'mod'|'course'|'category'
+    grade_formatted: str = "-"           # display string (may contain HTML entities)
+    grade_raw: float | None = None
+    grade_min: float | None = None
+    grade_max: float | None = None
+    graded_at: datetime | None = None
+
+
+@dataclass
+class NormalizedAnnouncement:
+    source: str
+    source_id: str                       # discussion id
+    course_id: str
+    forum_id: str
+    subject: str
+    author: str
+    created_at: datetime
+    summary_html: str = ""               # short; stripped for display
+    url: str = ""
+
+
+@dataclass
+class NormalizedNotification:
+    source: str
+    source_id: str                       # notification id
+    subject: str
+    full_message: str = ""               # stripped for display
+    context_url: str = ""
+    created_at: datetime | None = None
+    read: bool = False
+
+
+@dataclass
+class MoodleSnapshot:                    # the bundle fetch_school_snapshot returns
+    courses: list[NormalizedCourse] = field(default_factory=list)
+    deadlines: list[NormalizedDeadline] = field(default_factory=list)
+    assignments: list[NormalizedAssignment] = field(default_factory=list)
+    grades: list[NormalizedGrade] = field(default_factory=list)
+    announcements: list[NormalizedAnnouncement] = field(default_factory=list)
+    notifications: list[NormalizedNotification] = field(default_factory=list)
+
+
 @runtime_checkable
 class OAuthProvider(Protocol):
     """The connect/callback/disconnect plumbing the shared oauth router drives.
@@ -109,3 +198,12 @@ class EmailProvider(OAuthProvider, Protocol):
     def modify_labels(self, source_id: str, add: list[str] = (), remove: list[str] = ()) -> None: ...
     def list_labels(self) -> list[dict]: ...
     def get_message_meta(self, source_id: str) -> dict: ...
+
+
+@runtime_checkable
+class MoodleProvider(OAuthProvider, Protocol):
+    """Read-only Moodle web-services adapter. Distinguishing method
+    fetch_school_snapshot — moodle_sync selects providers by hasattr on it
+    (mirrors email_sync's hasattr(p,'fetch_messages'))."""
+    def get_site_info(self, token: str) -> dict: ...                 # connect-time validation
+    def fetch_school_snapshot(self, since: datetime | None) -> MoodleSnapshot: ...

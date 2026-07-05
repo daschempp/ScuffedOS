@@ -99,6 +99,8 @@ body {
 .sa-check input:checked + .sa-check__box { background: var(--accent); border-color: var(--accent); }
 .sa-check input:checked + .sa-check__box svg { opacity: 1; transform: scale(1); }
 .sa-check--done { color: var(--text-faint); text-decoration: line-through; }
+.sa-check--disabled { cursor: default; }
+.sa-check--disabled .sa-check__box { opacity: 0.6; box-shadow: none; }
 
 .sa-switch { display: inline-flex; align-items: center; gap: 10px; cursor: pointer; font-size: var(--text-base); color: var(--text-strong); }
 .sa-switch input { position: absolute; opacity: 0; pointer-events: none; }

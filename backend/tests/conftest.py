@@ -11,7 +11,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from app import email_draft, email_sync, email_triage, fitness_sync, food_db, llm, memory_engine, providers, reminders
+from app import email_draft, email_sync, email_triage, fitness_sync, food_db, llm, memory_engine, moodle_sync, providers, reminders
 from app.config import settings
 from app.db import Base, make_engine, make_session_factory
 from app.main import app
@@ -45,6 +45,7 @@ def no_external_services():
     email_triage.configure(None)
     email_sync.configure(None)
     email_draft.configure(None)
+    moodle_sync.configure(None)
     yield
     llm.configure()
     memory_engine.configure("unset")
@@ -55,6 +56,7 @@ def no_external_services():
     email_triage.configure("unset")
     email_sync.configure("unset")
     email_draft.configure("unset")
+    moodle_sync.configure("unset")
 
 
 @pytest.fixture(autouse=True)

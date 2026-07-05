@@ -13,6 +13,7 @@ import { FitnessScreen } from './screens/FitnessScreen.jsx'
 import { FinanceScreen } from './screens/FinanceScreen.jsx'
 import { CRMScreen } from './screens/CRMScreen.jsx'
 import { EmailScreen } from './screens/EmailScreen.jsx'
+import { SchoolScreen } from './screens/SchoolScreen.jsx'
 import { MemoryScreen } from './screens/MemoryScreen.jsx'
 import { ChatPanel } from './assistant/ChatPanel.jsx'
 import { api } from './lib/api.js'
@@ -33,6 +34,7 @@ const SCREENS = {
   habits: { title: 'Habits', sub: '2 of 5 done · keep your streaks alive' },
   people: { title: 'People', sub: '142 contacts · 2 to reach out to' },
   email: { title: 'Email', sub: '12 new · 4 need a reply' },
+  school: { title: 'School', sub: 'Courses, deadlines & grades' },
   settings: { title: 'Settings', sub: 'Preferences & connections' },
 }
 
@@ -119,6 +121,7 @@ export function App() {
   else if (screen === 'habits') body = <HabitsScreen habits={habitsState} />
   else if (screen === 'people') body = <CRMScreen />
   else if (screen === 'email') body = <EmailScreen />
+  else if (screen === 'school') body = <SchoolScreen />
   else body = <Placeholder icon={{ settings: 'settings' }[screen] || 'sparkles'} name={meta.title} />
 
   return (

@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from sqlalchemy import (
-    Date, DateTime, ForeignKey, Index, JSON, String, Text,
+    Boolean, Date, DateTime, Float, ForeignKey, Index, JSON, String, Text,
     UniqueConstraint, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -353,6 +353,183 @@ class Email(Base):
     summary_json: Mapped[list | None] = mapped_column(JSONField)        # list[str] bullets, or None
     triaged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MoodleCourse(Base):
+    """A synced Moodle course (M6). Keyed (owner, source, source_id) =
+    ('moodle', course id) so re-sync upserts idempotently. Read-only this
+    slice — no course content or files stored, only the enrolment summary."""
+
+    __tablename__ = "moodle_courses"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_moodle_courses_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'moodle'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # course id
+    shortname: Mapped[str] = mapped_column(String(255), default="")
+    fullname: Mapped[str] = mapped_column(Text, default="")
+    progress: Mapped[float | None] = mapped_column(Float)              # 0..100 or None
+    start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_access_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MoodleDeadline(Base):
+    """A synced Moodle deadline / calendar action event (M6). Keyed
+    (owner, source, source_id) = ('moodle', calendar event id). Projected
+    read-only into the Calendar/Tasks surfaces at read time (never copied
+    into the tasks/events tables)."""
+
+    __tablename__ = "moodle_deadlines"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_moodle_deadlines_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'moodle'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # calendar event id
+    course_id: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(Text, default="")
+    module_name: Mapped[str] = mapped_column(String(32), default="")   # 'assign'|'quiz'|...
+    event_type: Mapped[str] = mapped_column(String(32), default="")    # 'due'|'close'|...
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    overdue: Mapped[bool] = mapped_column(Boolean, default=False)
+    url: Mapped[str] = mapped_column(Text, default="")
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MoodleAssignment(Base):
+    """A synced Moodle assignment + submission status (M6). Keyed
+    (owner, source, source_id) = ('moodle', assign id). Projected read-only
+    into the Tasks surface at read time via its due date."""
+
+    __tablename__ = "moodle_assignments"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_moodle_assignments_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'moodle'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # assign id
+    course_id: Mapped[str] = mapped_column(String(32), index=True)
+    cmid: Mapped[str] = mapped_column(String(32), default="")
+    name: Mapped[str] = mapped_column(Text, default="")
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cutoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    grade_max: Mapped[float | None] = mapped_column(Float)
+    submission_status: Mapped[str] = mapped_column(String(16), default="none")
+    grading_status: Mapped[str] = mapped_column(String(32), default="")
+    graded: Mapped[bool] = mapped_column(Boolean, default=False)
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MoodleGrade(Base):
+    """A synced Moodle grade item (M6). Keyed (owner, source, source_id) =
+    ('moodle', grade item id). Display string kept alongside raw values."""
+
+    __tablename__ = "moodle_grades"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_moodle_grades_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'moodle'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # grade item id
+    course_id: Mapped[str] = mapped_column(String(32), index=True)
+    item_name: Mapped[str] = mapped_column(Text, default="")
+    item_type: Mapped[str] = mapped_column(String(16), default="")     # 'mod'|'course'|'category'
+    grade_formatted: Mapped[str] = mapped_column(String(64), default="-")
+    grade_raw: Mapped[float | None] = mapped_column(Float)
+    grade_min: Mapped[float | None] = mapped_column(Float)
+    grade_max: Mapped[float | None] = mapped_column(Float)
+    graded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MoodleAnnouncement(Base):
+    """A synced Moodle news-forum announcement (M6). Keyed
+    (owner, source, source_id) = ('moodle', discussion id). Only a short
+    HTML summary is stored (stripped for display); no full post bodies.
+
+    `created_at` is nullable: the provider's `_epoch(disc.get("created"))`
+    can yield None if a discussion lacks a `created` field, and a NOT NULL
+    column would reject that row at sync time."""
+
+    __tablename__ = "moodle_announcements"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_moodle_announcements_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'moodle'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # discussion id
+    course_id: Mapped[str] = mapped_column(String(32), index=True)
+    forum_id: Mapped[str] = mapped_column(String(32), default="")
+    subject: Mapped[str] = mapped_column(Text, default="")
+    author: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    summary_html: Mapped[str] = mapped_column(Text, default="")
+    url: Mapped[str] = mapped_column(Text, default="")
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class MoodleNotification(Base):
+    """A synced Moodle popup notification (M6). Keyed
+    (owner, source, source_id) = ('moodle', notification id). Message text
+    is stripped of HTML for display."""
+
+    __tablename__ = "moodle_notifications"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_moodle_notifications_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'moodle'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # notification id
+    subject: Mapped[str] = mapped_column(Text, default="")
+    full_message: Mapped[str] = mapped_column(Text, default="")
+    context_url: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read: Mapped[bool] = mapped_column(Boolean, default=False)
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

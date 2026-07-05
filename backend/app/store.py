@@ -41,6 +41,12 @@ from .models import (
     HabitCompletion,
     Meal,
     Memory,
+    MoodleAnnouncement,
+    MoodleAssignment,
+    MoodleCourse,
+    MoodleDeadline,
+    MoodleGrade,
+    MoodleNotification,
     NutritionTargets,
     ProviderAccount,
     Task,
@@ -49,7 +55,18 @@ from .models import (
     Workout,
     utcnow,
 )
-from .providers.base import NormalizedEmail, NormalizedSnapshot, NormalizedWorkout, Tokens
+from .providers.base import (
+    NormalizedAnnouncement,
+    NormalizedAssignment,
+    NormalizedCourse,
+    NormalizedDeadline,
+    NormalizedEmail,
+    NormalizedGrade,
+    NormalizedNotification,
+    NormalizedSnapshot,
+    NormalizedWorkout,
+    Tokens,
+)
 
 _TASK_FIELDS = {
     "label", "done", "group", "deadline", "prio", "list", "description",
@@ -423,6 +440,95 @@ def _email_dict(e: Email) -> dict:
     }
 
 
+def _moodle_course_dict(c: MoodleCourse) -> dict:
+    return {
+        "id": c.id,
+        "source_id": c.source_id,
+        "shortname": c.shortname,
+        "fullname": c.fullname,
+        "progress": c.progress,
+        "start_at": aware_utc(c.start_at),
+        "end_at": aware_utc(c.end_at),
+        "last_access_at": aware_utc(c.last_access_at),
+        "hidden": c.hidden,
+    }
+
+
+def _moodle_deadline_dict(d: MoodleDeadline) -> dict:
+    due = aware_utc(d.due_at)
+    return {
+        "id": d.id,
+        "source_id": d.source_id,
+        "course_id": d.course_id,
+        "name": d.name,
+        "module_name": d.module_name,
+        "event_type": d.event_type,
+        "due_at": due,
+        "overdue": d.overdue,
+        "url": d.url,
+        # Derived display string (never stored) — reuse the calendar
+        # "Up next" formatter; a deadline is a point in time, so start==end.
+        "when": event_when_display(due, due, "", None),
+    }
+
+
+def _moodle_assignment_dict(a: MoodleAssignment) -> dict:
+    return {
+        "id": a.id,
+        "source_id": a.source_id,
+        "course_id": a.course_id,
+        "cmid": a.cmid,
+        "name": a.name,
+        "due_at": aware_utc(a.due_at),
+        "cutoff_at": aware_utc(a.cutoff_at),
+        "grade_max": a.grade_max,
+        "submission_status": a.submission_status,
+        "grading_status": a.grading_status,
+        "graded": a.graded,
+    }
+
+
+def _moodle_grade_dict(g: MoodleGrade) -> dict:
+    return {
+        "id": g.id,
+        "source_id": g.source_id,
+        "course_id": g.course_id,
+        "item_name": g.item_name,
+        "item_type": g.item_type,
+        "grade_formatted": g.grade_formatted,
+        "grade_raw": g.grade_raw,
+        "grade_min": g.grade_min,
+        "grade_max": g.grade_max,
+        "graded_at": aware_utc(g.graded_at),
+    }
+
+
+def _moodle_announcement_dict(a: MoodleAnnouncement) -> dict:
+    return {
+        "id": a.id,
+        "source_id": a.source_id,
+        "course_id": a.course_id,
+        "forum_id": a.forum_id,
+        "subject": a.subject,
+        "author": a.author,
+        "created_at": aware_utc(a.created_at),
+        "summary_html": a.summary_html,
+        "url": a.url,
+    }
+
+
+def _moodle_notification_dict(n: MoodleNotification) -> dict:
+    return {
+        "id": n.id,
+        "source_id": n.source_id,
+        "subject": n.subject,
+        "full_message": n.full_message,
+        "context_url": n.context_url,
+        "created_at": aware_utc(n.created_at),
+        "read": n.read,
+    }
+
+
 def _apply_task_patch(task: Task, patch: dict) -> None:
     for key, value in patch.items():
         if key not in _TASK_FIELDS:
@@ -476,7 +582,10 @@ class Store:
             by_task: dict[int, list[TaskReminder]] = {}
             for r in s.scalars(select(TaskReminder).order_by(TaskReminder.remind_at)):
                 by_task.setdefault(r.task_id, []).append(r)
-            return [_task_dict(t, by_task.get(t.id, [])) for t in rows]
+            local = [_task_dict(t, by_task.get(t.id, [])) for t in rows]
+        # Read-time-merge Moodle assignments (contract §H) as read-only School
+        # tasks — appended after local rows, NOT persisted to the tasks table.
+        return local + self.moodle_tasks()
 
     def get_task(self, task_id: int) -> dict | None:
         with self._session() as s:
@@ -830,12 +939,16 @@ class Store:
             return True
 
     def events_between(self, window_start: datetime, window_end: datetime) -> list[dict]:
-        """Concrete occurrences in the window, recurring series expanded."""
+        """Concrete occurrences in the window, recurring series expanded.
+        Read-time-merges in-window Moodle deadlines (contract §H) as read-only
+        'grape' occurrences before the final sort, so Home/Calendar/up_next
+        all show them without any events-table write."""
         with self._session() as s:
             rows = s.scalars(select(Event).order_by(Event.start_at)).all()
         out: list[dict] = []
         for e in rows:
             out.extend(_event_occurrences(e, window_start, window_end))
+        out.extend(self.moodle_calendar_events(window_start, window_end))
         out.sort(key=lambda o: o["start"])
         return out
 
@@ -1412,6 +1525,332 @@ class Store:
             ):
                 s.delete(row)
                 deleted = True
+        return deleted
+
+    # ---- moodle ----
+    def _moodle_row(self, s: Session, model, source: str, source_id: str):
+        from .config import settings
+
+        return s.scalars(
+            select(model)
+            .where(model.owner == settings.owner)
+            .where(model.source == source)
+            .where(model.source_id == source_id)
+        ).first()
+
+    @_retry_integrity
+    def upsert_moodle_course(self, c: NormalizedCourse) -> dict:
+        """Get-or-create by (owner, source, source_id); writes metadata every
+        pass so re-sync keeps the enrolment summary fresh."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._moodle_row(s, MoodleCourse, c.source, c.source_id)
+            if row is None:
+                row = MoodleCourse(owner=settings.owner, source=c.source,
+                                   source_id=c.source_id)
+                s.add(row)
+            row.shortname = c.shortname
+            row.fullname = c.fullname
+            row.progress = c.progress
+            row.start_at = _to_utc(c.start_at) if c.start_at else None
+            row.end_at = _to_utc(c.end_at) if c.end_at else None
+            row.last_access_at = _to_utc(c.last_access_at) if c.last_access_at else None
+            row.hidden = c.hidden
+            s.flush()
+            return _moodle_course_dict(row)
+
+    @_retry_integrity
+    def upsert_moodle_deadline(self, d: NormalizedDeadline) -> dict:
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._moodle_row(s, MoodleDeadline, d.source, d.source_id)
+            if row is None:
+                row = MoodleDeadline(owner=settings.owner, source=d.source,
+                                     source_id=d.source_id)
+                s.add(row)
+            row.course_id = d.course_id
+            row.name = d.name
+            row.module_name = d.module_name
+            row.event_type = d.event_type
+            row.due_at = _to_utc(d.due_at)
+            row.overdue = d.overdue
+            row.url = d.url
+            s.flush()
+            return _moodle_deadline_dict(row)
+
+    @_retry_integrity
+    def upsert_moodle_assignment(self, a: NormalizedAssignment) -> dict:
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._moodle_row(s, MoodleAssignment, a.source, a.source_id)
+            if row is None:
+                row = MoodleAssignment(owner=settings.owner, source=a.source,
+                                       source_id=a.source_id)
+                s.add(row)
+            row.course_id = a.course_id
+            row.cmid = a.cmid
+            row.name = a.name
+            row.due_at = _to_utc(a.due_at) if a.due_at else None
+            row.cutoff_at = _to_utc(a.cutoff_at) if a.cutoff_at else None
+            row.grade_max = a.grade_max
+            row.submission_status = a.submission_status
+            row.grading_status = a.grading_status
+            row.graded = a.graded
+            s.flush()
+            return _moodle_assignment_dict(row)
+
+    @_retry_integrity
+    def upsert_moodle_grade(self, g: NormalizedGrade) -> dict:
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._moodle_row(s, MoodleGrade, g.source, g.source_id)
+            if row is None:
+                row = MoodleGrade(owner=settings.owner, source=g.source,
+                                  source_id=g.source_id)
+                s.add(row)
+            row.course_id = g.course_id
+            row.item_name = g.item_name
+            row.item_type = g.item_type
+            row.grade_formatted = g.grade_formatted
+            row.grade_raw = g.grade_raw
+            row.grade_min = g.grade_min
+            row.grade_max = g.grade_max
+            row.graded_at = _to_utc(g.graded_at) if g.graded_at else None
+            s.flush()
+            return _moodle_grade_dict(row)
+
+    @_retry_integrity
+    def upsert_moodle_announcement(self, a: NormalizedAnnouncement) -> dict:
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._moodle_row(s, MoodleAnnouncement, a.source, a.source_id)
+            if row is None:
+                row = MoodleAnnouncement(owner=settings.owner, source=a.source,
+                                         source_id=a.source_id)
+                s.add(row)
+            row.course_id = a.course_id
+            row.forum_id = a.forum_id
+            row.subject = a.subject
+            row.author = a.author
+            row.created_at = _to_utc(a.created_at) if a.created_at else None
+            row.summary_html = a.summary_html
+            row.url = a.url
+            s.flush()
+            return _moodle_announcement_dict(row)
+
+    @_retry_integrity
+    def upsert_moodle_notification(self, n: NormalizedNotification) -> dict:
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = self._moodle_row(s, MoodleNotification, n.source, n.source_id)
+            if row is None:
+                row = MoodleNotification(owner=settings.owner, source=n.source,
+                                         source_id=n.source_id)
+                s.add(row)
+            row.subject = n.subject
+            row.full_message = n.full_message
+            row.context_url = n.context_url
+            row.created_at = _to_utc(n.created_at) if n.created_at else None
+            row.read = n.read
+            s.flush()
+            return _moodle_notification_dict(row)
+
+    def moodle_courses(self) -> list[dict]:
+        from .config import settings
+
+        with self._session() as s:
+            rows = s.scalars(
+                select(MoodleCourse)
+                .where(MoodleCourse.owner == settings.owner)
+                .order_by(MoodleCourse.shortname)
+            ).all()
+            return [_moodle_course_dict(c) for c in rows]
+
+    def moodle_deadlines(self, days_ahead: int | None = None) -> list[dict]:
+        """Deadlines ordered by due_at asc. With days_ahead, only those due in
+        [now, now + days_ahead)."""
+        from .config import settings
+
+        with self._session() as s:
+            q = (
+                select(MoodleDeadline)
+                .where(MoodleDeadline.owner == settings.owner)
+                .order_by(MoodleDeadline.due_at)
+            )
+            if days_ahead is not None:
+                now = utcnow()
+                horizon = now + timedelta(days=days_ahead)
+                q = q.where(MoodleDeadline.due_at >= now).where(
+                    MoodleDeadline.due_at < horizon
+                )
+            rows = s.scalars(q).all()
+            return [_moodle_deadline_dict(d) for d in rows]
+
+    def moodle_assignments(self, course_id: str | None = None) -> list[dict]:
+        from .config import settings
+
+        with self._session() as s:
+            q = (
+                select(MoodleAssignment)
+                .where(MoodleAssignment.owner == settings.owner)
+                .order_by(MoodleAssignment.due_at)
+            )
+            if course_id is not None:
+                q = q.where(MoodleAssignment.course_id == course_id)
+            rows = s.scalars(q).all()
+            return [_moodle_assignment_dict(a) for a in rows]
+
+    def moodle_calendar_events(
+        self, window_start: datetime, window_end: datetime
+    ) -> list[dict]:
+        """Read-time projection (contract §H): Moodle deadlines whose due_at
+        falls in [window_start, window_end) rendered as calendar occurrences
+        (_occurrence_dict shape) tagged source='moodle'/editable=False. These
+        are NOT rows in the events table — events_between appends them at read
+        time so Home/Calendar show them read-only. tint='grape' and a
+        synthetic 'moodle:<source_id>' id keep them visually + structurally
+        distinct from local events (whose ids are ints)."""
+        shortnames = {c["source_id"]: c["shortname"] for c in self.moodle_courses()}
+        out: list[dict] = []
+        for d in self.moodle_deadlines():
+            start = d["due_at"]
+            if start is None or not (window_start <= start < window_end):
+                continue
+            end = start + timedelta(hours=1)
+            short = shortnames.get(d["course_id"], "")
+            title = f"{d['name']} · {short}" if short else d["name"]
+            out.append({
+                "id": f"moodle:{d['source_id']}",
+                "title": title,
+                "start": start,
+                "end": end,
+                "tint": "grape",
+                "location": "",
+                "description": "",
+                "recurring": False,
+                "recurrence_label": None,
+                "at": clock(start),
+                "source": "moodle",
+                "editable": False,
+            })
+        return out
+
+    def moodle_tasks(self) -> list[dict]:
+        """Read-time projection (contract §H): Moodle assignments that carry a
+        due date rendered as tasks (_task_dict shape) tagged
+        source='moodle'/editable=False. done mirrors submission_status
+        (submitted/reopened => done). group/list='School', prio='med'.
+        due/late come from task_due_display so the UI's overdue styling
+        matches local tasks. Appended by list_tasks at read time — NOT rows in
+        the tasks table. The 'moodle:<source_id>' id can never be edited or
+        deleted through the int-typed /api/tasks/{id} routes."""
+        shortnames = {c["source_id"]: c["shortname"] for c in self.moodle_courses()}
+        now = utcnow()
+        out: list[dict] = []
+        for a in self.moodle_assignments():
+            due_at = a["due_at"]
+            if due_at is None:
+                continue
+            deadline = due_at.date()
+            done = a["submission_status"] in {"submitted", "reopened"}
+            due, late = task_due_display(deadline, done, None)
+            short = shortnames.get(a["course_id"], "")
+            label = f"{a['name']} · {short}" if short else a["name"]
+            out.append({
+                "id": f"moodle:{a['source_id']}",
+                "label": label,
+                "done": done,
+                "group": "School",
+                "deadline": deadline,
+                "prio": "med",
+                "list": "School",
+                "description": "",
+                "subtasks": [],
+                "labels": [],
+                "reminders": [],
+                "files": [],
+                "recurrence": None,
+                "recurrence_label": None,
+                "due": due,
+                "late": late,
+                "created_at": now,
+                "updated_at": now,
+                "completed_at": None,
+                "source": "moodle",
+                "editable": False,
+            })
+        return out
+
+    def moodle_grades(self, course_id: str | None = None) -> list[dict]:
+        from .config import settings
+
+        with self._session() as s:
+            q = (
+                select(MoodleGrade)
+                .where(MoodleGrade.owner == settings.owner)
+                .order_by(MoodleGrade.id)
+            )
+            if course_id is not None:
+                q = q.where(MoodleGrade.course_id == course_id)
+            rows = s.scalars(q).all()
+            return [_moodle_grade_dict(g) for g in rows]
+
+    def moodle_announcements(self, course_id: str | None = None) -> list[dict]:
+        from .config import settings
+
+        with self._session() as s:
+            q = (
+                select(MoodleAnnouncement)
+                .where(MoodleAnnouncement.owner == settings.owner)
+                .order_by(MoodleAnnouncement.created_at.desc())
+            )
+            if course_id is not None:
+                q = q.where(MoodleAnnouncement.course_id == course_id)
+            rows = s.scalars(q).all()
+            return [_moodle_announcement_dict(a) for a in rows]
+
+    def moodle_notifications(self) -> list[dict]:
+        from .config import settings
+
+        with self._session() as s:
+            rows = s.scalars(
+                select(MoodleNotification)
+                .where(MoodleNotification.owner == settings.owner)
+                .order_by(MoodleNotification.created_at.desc())
+            ).all()
+            return [_moodle_notification_dict(n) for n in rows]
+
+    def delete_moodle_data(self, source: str) -> bool:
+        """Disconnect hook (MoodleProvider.on_disconnect): delete every moodle_*
+        row where (owner, source). Returns True iff any row was deleted.
+        Separate from delete_provider_data (which owns the provider_accounts
+        row); the shared router deletes the account, this deletes the domain
+        data. Mirrors delete_email_data."""
+        from .config import settings
+
+        deleted = False
+        with self._session() as s, s.begin():
+            for model in (
+                MoodleCourse,
+                MoodleDeadline,
+                MoodleAssignment,
+                MoodleGrade,
+                MoodleAnnouncement,
+                MoodleNotification,
+            ):
+                for row in s.scalars(
+                    select(model)
+                    .where(model.owner == settings.owner)
+                    .where(model.source == source)
+                ):
+                    s.delete(row)
+                    deleted = True
         return deleted
 
     # ---- snapshots (derive-on-read) ----
