@@ -166,7 +166,7 @@ class FakeProvider:
 
 
 # ---- email provider seam (M5) ---------------------------------------------
-from app.providers.base import NormalizedEmail
+from app.providers.base import MoodleSnapshot, NormalizedEmail
 
 
 class _FakeResponse:
@@ -244,6 +244,69 @@ def gmail_message(msg_id: str, *, thread_id: str = "t1", from_hdr: str,
             ],
         },
     }
+
+
+# ---- moodle provider seam (M6) --------------------------------------------
+class _Seq:
+    """Wrap successive per-call responses for ONE wsfunction. Needed because a
+    plain list is a LITERAL array payload (some Moodle WS functions —
+    core_enrol_get_users_courses, mod_forum_get_forums_by_courses — return a
+    top-level JSON array), so a list cannot also mean 'call sequence'. Use
+    seq(...) ONLY for a wsfunction the provider calls more than once in one
+    fetch (calendar pagination, per-course grades, per-assignment status,
+    per-forum discussions). Exhausting a sequence keeps returning its last item."""
+
+    def __init__(self, items):
+        self.items = list(items)
+        self.i = 0
+
+    def next(self):
+        item = self.items[min(self.i, len(self.items) - 1)]
+        self.i += 1
+        return item
+
+
+def seq(*items):
+    """seq(resp1, resp2, ...) — successive responses for a repeatedly-called wsfunction."""
+    return _Seq(items)
+
+
+class FakeMoodleHTTP:
+    """Scriptable transport for MoodleProvider.configure(fake_http=...).
+
+    Constructed with responses= (alias: payloads=), a dict wsfunction -> value:
+      - a dict OR list value is returned LITERALLY every call (a list is a real
+        top-level array payload, e.g. core_enrol_get_users_courses returns a
+        JSON array of courses);
+      - a seq(...) value pops the next scripted response per successive call.
+    exceptions= maps wsfunction -> an exception dict {"exception","errorcode",
+    "message"} (Moodle returns errors as HTTP 200 with an "exception" key — see
+    contract §C). .post(url, data=...) routes on data["wsfunction"] and records
+    every post as (url, flattened-form-dict) so tests can assert the params
+    reached server.php.
+    """
+
+    def __init__(self, responses: dict | None = None, exceptions: dict | None = None,
+                 payloads: dict | None = None):
+        # payloads= is a back-compat alias for responses=.
+        self.responses = dict(responses if responses is not None else (payloads or {}))
+        self.exceptions = exceptions or {}
+        self.posts: list[tuple[str, dict]] = []  # (url, form-data dict)
+
+    def post(self, url, data=None, headers=None):
+        data = dict(data or {})
+        self.posts.append((url, data))
+        fn = data.get("wsfunction", "")
+        if fn in self.exceptions:
+            # Moodle web-service error: HTTP 200 with an exception body.
+            return _FakeResponse(dict(self.exceptions[fn]))
+        value = self.responses.get(fn, {})
+        if isinstance(value, _Seq):
+            return _FakeResponse(value.next())
+        return _FakeResponse(value)     # literal dict OR top-level array
+
+    def get(self, url, headers=None, params=None):  # unused by MoodleProvider
+        return _FakeResponse({})
 
 
 class FakeEmailProvider:
@@ -327,3 +390,90 @@ class FakeEmailProvider:
     def get_message(self, source_id: str) -> str:
         self.fetched_bodies.append(source_id)
         return self.body
+
+
+class FakeMoodleProvider:
+    """Scriptable MoodleProvider stand-in (name='moodle') — no network.
+
+    Installed via ``providers.configure([FakeMoodleProvider(...)])``. Satisfies the
+    MoodleProvider protocol (contract §B/§C) so the shared oauth router and
+    moodle_sync accept it. Its distinguishing method is fetch_school_snapshot —
+    moodle_sync selects providers by hasattr on it, exactly as email_sync selects
+    by hasattr(p, 'fetch_messages'). Records every OAuth call so router tests can
+    assert exchange/refresh/revoke ran; raise_auth drives the needs_reauth path.
+    """
+
+    name = "moodle"
+
+    def __init__(
+        self,
+        *,
+        tokens: Tokens | None = None,
+        snapshot: MoodleSnapshot | None = None,
+        site_info: dict | None = None,
+        raise_auth: bool = False,
+    ) -> None:
+        self.tokens = tokens or Tokens(
+            access_token="m-wstoken", refresh_token=None, expires_at=None,
+            scopes="", provider_user_id="42",
+        )
+        self.snapshot = snapshot or MoodleSnapshot()
+        self.site_info = site_info or {
+            "userid": 42, "sitename": "WolfWare", "release": "5.2",
+            "functions": [],
+        }
+        self.raise_auth = raise_auth
+        self.exchanged: list[str] = []
+        self.refreshed: list[Tokens] = []
+        self.revoked: list[Tokens] = []
+        self.injected: list[Tokens | None] = []
+        self.fetched_since: list = []
+        self.site_info_calls: list[str] = []
+
+    # ---- OAuthProvider ----
+    def set_tokens(self, tokens):
+        self.injected.append(tokens)
+
+    def authorize_url(self, state: str) -> str:
+        return (
+            "https://moodle-courses2527.wolfware.ncsu.edu/admin/tool/mobile/launch.php"
+            f"?service=moodle_mobile_app&state={state}"
+        )
+
+    def exchange_code(self, code: str) -> Tokens:
+        self.exchanged.append(code)
+        return self.tokens
+
+    def refresh(self, tokens: Tokens) -> Tokens:
+        # Moodle has no refresh endpoint — passthrough (contract §C).
+        self.refreshed.append(tokens)
+        return tokens
+
+    def revoke(self, tokens: Tokens) -> None:
+        self.revoked.append(tokens)
+
+    def success_redirect(self) -> str:
+        return "/?screen=school&connected=moodle"
+
+    def on_connected(self) -> None:
+        from app import moodle_sync
+
+        moodle_sync.tick()
+
+    def on_disconnect(self) -> None:
+        from app.store import store
+
+        store.delete_moodle_data(self.name)
+
+    # ---- MoodleProvider ----
+    def get_site_info(self, token: str) -> dict:
+        self.site_info_calls.append(token)
+        return self.site_info
+
+    def fetch_school_snapshot(self, since):
+        from app.providers.moodle import MoodleAuthError
+
+        if self.raise_auth:
+            raise MoodleAuthError("moodle invalidtoken")
+        self.fetched_since.append(since)
+        return self.snapshot

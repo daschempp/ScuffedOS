@@ -25,6 +25,9 @@ export function Sidebar({ active, onNavigate }) {
     { label: 'Intelligence', items: [
       { id: 'memory', label: 'Second Brain', icon: 'brain' },
     ] },
+    { label: 'School', items: [
+      { id: 'school', label: 'School', icon: 'graduation-cap' },
+    ] },
   ]
   const Item = (it) => (
     <button key={it.id} className={`kit-navitem ${active === it.id ? 'kit-navitem--active' : ''}`} onClick={() => onNavigate(it.id)}>

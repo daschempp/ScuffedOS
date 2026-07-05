@@ -97,6 +97,11 @@ def _email_action(title: str, meta: str) -> dict:
             "cta": "Open email", "screen": "email"}
 
 
+def _moodle_action(title: str, meta: str) -> dict:
+    return {"icon": "graduation-cap", "title": title, "meta": meta,
+            "cta": "Open school", "screen": "school"}
+
+
 # ---- executors (each returns (result, action | None)) ----------------------
 
 def _list_tasks(args: dict):
@@ -466,6 +471,32 @@ def _get_email(args: dict):
             "summary": row["summary"], "when": row["when"], "body": body}, None
 
 
+# ---- school / Moodle (real from M6, read-only) ------------------------------
+
+def _get_courses(args: dict):
+    """List the student's synced Moodle courses (read-only, from the DB —
+    never a live Moodle call)."""
+    return store.moodle_courses(), _moodle_action(
+        "Courses", "Your Moodle courses"
+    )
+
+
+def _get_deadlines(args: dict):
+    """Upcoming Moodle assignment/quiz due dates, optionally within N days
+    (args['days']). Reads store.moodle_deadlines only — no provider call."""
+    return store.moodle_deadlines(args.get("days")), _moodle_action(
+        "Deadlines", "Upcoming Moodle due dates"
+    )
+
+
+def _get_grades(args: dict):
+    """Current Moodle grades, optionally scoped to one course_id
+    (args['course_id']). Reads store.moodle_grades only — no provider call."""
+    return store.moodle_grades(args.get("course_id")), _moodle_action(
+        "Grades", "Your Moodle grades"
+    )
+
+
 # ---- task reminders (real from M3) -------------------------------------------
 
 def _add_reminder(args: dict):
@@ -711,6 +742,23 @@ TOOLS: list[dict] = [
          "email_id": {"type": "integer"}},
          "required": ["email_id"], "additionalProperties": False},
      "run": _get_email},
+    {"name": "get_courses",
+     "description": "List the student's Moodle courses.",
+     "input_schema": {"type": "object", "properties": {},
+         "additionalProperties": False},
+     "run": _get_courses},
+    {"name": "get_deadlines",
+     "description": "Upcoming Moodle assignment/quiz due dates (optionally within N days).",
+     "input_schema": {"type": "object", "properties": {
+         "days": {"type": "integer"}},
+         "additionalProperties": False},
+     "run": _get_deadlines},
+    {"name": "get_grades",
+     "description": "Current Moodle grades, optionally for one course_id.",
+     "input_schema": {"type": "object", "properties": {
+         "course_id": {"type": "string"}},
+         "additionalProperties": False},
+     "run": _get_grades},
 ]
 
 DEFINITIONS = [{k: t[k] for k in ("name", "description", "input_schema")} for t in TOOLS]

@@ -29,6 +29,7 @@ has its own doc.
 | [finance.md](finance.md) | Accounts, budgets, transactions, net worth, subs, bills | ⬜ Planned |
 | [email.md](email.md) | AI triage + draft replies over a synced inbox | ⬜ Planned |
 | [people.md](people.md) | Personal CRM — contacts, cadence, nudges, dates | ⬜ Planned |
+| [school.md](school.md) | Moodle courses, deadlines, grades, announcements (read-only) — `/api/moodle` | 🔨 Building |
 
 ## Shared layer
 

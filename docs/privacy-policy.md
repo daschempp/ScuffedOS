@@ -1,10 +1,10 @@
 # ScuffedOS Privacy Policy
 
-**Effective date:** June 10, 2026
+**Effective date:** July 4, 2026
 
 ScuffedOS is a personal assistant application operated by Dylan Schempp ("we," "us"). It combines tasks, calendar, habits, nutrition, notes, and connected health data behind a single AI assistant. ScuffedOS is a self-hosted application: in the current deployment, the operator and the sole user are the same person, and there are no third-party user accounts.
 
-This policy describes what data ScuffedOS stores, how it is used, and which service providers process it. It applies to the ScuffedOS application and any data obtained through connected services such as WHOOP and Gmail.
+This policy describes what data ScuffedOS stores, how it is used, and which service providers process it. It applies to the ScuffedOS application and any data obtained through connected services such as WHOOP, Gmail, and Moodle.
 
 ## 1. Information we collect
 
@@ -12,7 +12,7 @@ This policy describes what data ScuffedOS stores, how it is used, and which serv
 
 **Derived information.** After each assistant conversation, the app may extract short factual "memories" (for example, a stated preference or goal) and store them, along with vector embeddings of that text, so the assistant can recall relevant context later. Conversation history with the assistant is also stored so conversations can resume.
 
-**Connected service data (with your consent).** If you connect a WHOOP account, ScuffedOS retrieves your WHOOP data via the official WHOOP API after you authorize access through WHOOP's OAuth flow. Depending on the scopes you grant, this may include basic profile information, recovery scores, sleep data, strain and workout data, and related physiological measurements such as heart rate. If you connect a Gmail account, ScuffedOS reads your inbox messages read-only via the Gmail API after you authorize access through Google's OAuth flow (the `gmail.readonly` scope); it stores email metadata (sender, subject, snippet, and an AI-derived category and summary) but never the message bodies. See Section 4 for how WHOOP and Gmail data are handled.
+**Connected service data (with your consent).** If you connect a WHOOP account, ScuffedOS retrieves your WHOOP data via the official WHOOP API after you authorize access through WHOOP's OAuth flow. Depending on the scopes you grant, this may include basic profile information, recovery scores, sleep data, strain and workout data, and related physiological measurements such as heart rate. If you connect a Gmail account, ScuffedOS reads your inbox messages read-only via the Gmail API after you authorize access through Google's OAuth flow (the `gmail.readonly` scope); it stores email metadata (sender, subject, snippet, and an AI-derived category and summary) but never the message bodies. If you connect a Moodle (school learning-management) account, ScuffedOS reads your course information read-only via the Moodle web-services API after you paste in an access token you obtain from your school's Moodle site; it stores course names, assignment due dates, assignment and grade metadata, and short announcement and notification summaries — never assignment files or the full text of course content. See Section 4 for how WHOOP, Gmail, and Moodle data are handled.
 
 **What we do not collect.** ScuffedOS contains no advertising, no third-party analytics, and no tracking technologies. We do not collect data about anyone other than the user of the app.
 
@@ -37,6 +37,7 @@ ScuffedOS sends data to a small set of service providers, each for a specific fu
 | **Supabase** | Managed Postgres database hosting | Structured app data: tasks, events, habits, nutrition logs, conversations, memories and their embeddings, synced WHOOP data, and email metadata (sender, subject, snippet, and AI-derived category/summary — no message bodies) |
 | **WHOOP** | Health data source (only if you connect it) | OAuth authorization; ScuffedOS receives data from WHOOP, not the reverse |
 | **Google (Gmail)** | Email source, read-only (only if you connect it) | OAuth authorization; ScuffedOS reads your Gmail messages via the Gmail API. Message content is retrieved to display it and (subject + a bounded body excerpt) is sent to Anthropic for triage — see Section 4 |
+| **Moodle** (school LMS, e.g. NC State WolfWare) | School source, read-only (only if you connect it) | A `wstoken` you provide; ScuffedOS reads your courses, deadlines, grades, and announcements via the Moodle web-services API to display them. Course data may be included in assistant context sent to Anthropic only when you ask the assistant about school — see Section 4 |
 | **USDA FoodData Central** | Food nutrition lookup | Only the food search text you enter (e.g., "chicken wrap") |
 
 Anthropic and OpenAI process API data under their published API data-usage policies, which (as of the effective date) state that API inputs and outputs are not used to train their models.
@@ -66,6 +67,17 @@ If you choose to connect Gmail:
 
 ScuffedOS is an independent application and is not affiliated with, endorsed by, or sponsored by Google.
 
+If you choose to connect Moodle:
+
+- Access is **read-only** and is granted only after you explicitly provide an access token (a `wstoken`) that you obtain from your school's Moodle site (for NC State WolfWare, from the Security-keys page after signing in). ScuffedOS never sees your school username or password; only the token you paste is stored, server-side, and it is never exposed to the client.
+- ScuffedOS reads your course data to display it in the School section. It **stores** your course names, assignment due dates, assignment and grade metadata (title, status, points), and short announcement and notification summaries.
+- ScuffedOS does **not** store the contents of course files or the full body text of assignments or course pages. Those are **fetched live** from Moodle only when you open them, and are never written to disk.
+- Assignment deadlines from Moodle are **projected into your Calendar and Tasks locally** so they appear alongside your own events and to-dos. These projected entries are read-only markers derived from Moodle data — they are not copied into your calendar or task tables and cannot be edited or deleted through ScuffedOS; changing them happens in Moodle.
+- Moodle data is **never sent to Anthropic except when you ask the assistant about your school** (for example, "what's due this week?"); it is never sent to any other provider, never sold, never shared with third parties for their own purposes, and never used for advertising.
+- You can disconnect Moodle within ScuffedOS at any time. On disconnect, all stored Moodle data and your access token are deleted. As with all deletions, this is honored within 30 days.
+
+ScuffedOS is an independent application and is not affiliated with, endorsed by, or sponsored by Moodle, Moodle Pty Ltd, or North Carolina State University.
+
 ## 5. Data storage and security
 
 - App data is stored in a Postgres database hosted by Supabase; attachments and the memory history file are stored on the operator's machine.
@@ -77,7 +89,7 @@ No system is perfectly secure, but as a single-user, self-hosted application, Sc
 
 ## 6. Data retention and deletion
 
-Data is retained until you delete it. ScuffedOS provides in-app deletion for every domain (tasks, events, habits, logs, memories, conversations), and the operator can delete any record — or all data — directly from the database at any time. Disconnecting WHOOP triggers deletion of synced WHOOP data and tokens as described in Section 4; disconnecting Gmail likewise deletes stored email metadata and Google OAuth tokens. For any deletion request, contact us at the address below and it will be honored within 30 days.
+Data is retained until you delete it. ScuffedOS provides in-app deletion for every domain (tasks, events, habits, logs, memories, conversations), and the operator can delete any record — or all data — directly from the database at any time. Disconnecting WHOOP triggers deletion of synced WHOOP data and tokens as described in Section 4; disconnecting Gmail likewise deletes stored email metadata and Google OAuth tokens; disconnecting Moodle likewise deletes all stored Moodle data (courses, deadlines, assignments, grades, announcements, notifications) and your Moodle access token. For any deletion request, contact us at the address below and it will be honored within 30 days.
 
 ## 7. Your rights and choices
 

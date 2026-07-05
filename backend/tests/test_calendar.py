@@ -4,6 +4,9 @@ from datetime import datetime, timedelta, timezone
 OCCURRENCE_SHAPE = {
     "id", "title", "start", "end", "tint", "location", "description",
     "recurring", "recurrence_label", "at",
+    # Read-time origin markers (M6 School slice-1, contract §H) — additive,
+    # default to local/editable for real rows created via this API.
+    "source", "editable",
 }
 
 
@@ -36,6 +39,7 @@ def test_create_event_defaults_end_and_treats_naive_as_local(client):
     assert ev["tint"] == "sky" and ev["location"] == ""
     assert ev["recurring"] is False and ev["recurrence_label"] is None
     assert isinstance(ev["at"], str) and ev["at"]
+    assert ev["source"] == "local" and ev["editable"] is True
 
 
 def test_create_event_rejects_end_at_or_before_start(client):

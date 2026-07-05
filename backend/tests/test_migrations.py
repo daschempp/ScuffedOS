@@ -32,6 +32,8 @@ ALL_TABLES = {
     "task_reminders", "events", "habits", "habit_completions",
     "meals", "water_days", "nutrition_targets",
     "provider_accounts", "daily_snapshots", "workouts", "emails",
+    "moodle_courses", "moodle_deadlines", "moodle_assignments",
+    "moodle_grades", "moodle_announcements", "moodle_notifications",
 }
 
 
@@ -51,6 +53,30 @@ def test_upgrade_head_builds_full_schema(alembic_cfg, tmp_path):
             "from_email", "subject", "snippet", "received_at", "unread",
             "category", "summary_json", "triaged_at"} <= email_cols
     assert "body" not in email_cols  # privacy: bodies never persisted
+
+    deadline_cols = {c["name"] for c in inspect(engine).get_columns("moodle_deadlines")}
+    assert {"owner", "source", "source_id", "course_id", "name",
+            "module_name", "event_type", "due_at", "overdue", "url",
+            "meta", "created_at", "updated_at"} <= deadline_cols
+    assignment_cols = {c["name"] for c in inspect(engine).get_columns("moodle_assignments")}
+    assert {"owner", "source", "source_id", "course_id", "cmid", "name",
+            "due_at", "cutoff_at", "grade_max", "submission_status",
+            "grading_status", "graded", "meta"} <= assignment_cols
+    grade_cols = {c["name"] for c in inspect(engine).get_columns("moodle_grades")}
+    assert {"owner", "source", "source_id", "course_id", "item_name",
+            "item_type", "grade_formatted", "grade_raw", "grade_min",
+            "grade_max", "graded_at", "meta"} <= grade_cols
+    course_cols = {c["name"] for c in inspect(engine).get_columns("moodle_courses")}
+    assert {"owner", "source", "source_id", "shortname", "fullname",
+            "progress", "start_at", "end_at", "last_access_at", "hidden",
+            "meta"} <= course_cols
+    announcement_cols = {c["name"] for c in inspect(engine).get_columns("moodle_announcements")}
+    assert {"owner", "source", "source_id", "course_id", "forum_id",
+            "subject", "author", "created_at", "summary_html", "url",
+            "meta"} <= announcement_cols
+    notification_cols = {c["name"] for c in inspect(engine).get_columns("moodle_notifications")}
+    assert {"owner", "source", "source_id", "subject", "full_message",
+            "context_url", "created_at", "read", "meta"} <= notification_cols
     engine.dispose()
 
 

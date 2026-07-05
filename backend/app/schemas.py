@@ -19,10 +19,10 @@ from pydantic import BaseModel, Field
 
 Weekday = Annotated[int, Field(ge=0, le=6)]  # Mon=0 … Sun=6
 
-TaskGroup = Literal["Today", "Upcoming", "Someday"]
+TaskGroup = Literal["Today", "Upcoming", "Someday", "School"]  # "School" = read-time Moodle-assignment projection (M6)
 TaskPriority = Literal["low", "med", "high"]
 # The design palette — event colors, habit tints, meal chips all draw from it.
-Tint = Literal["green", "sky", "plum", "honey", "clay"]
+Tint = Literal["green", "sky", "plum", "honey", "clay", "grape"]  # "grape" = read-time Moodle-deadline projection (M6)
 MealSlot = Literal["Breakfast", "Lunch", "Snack", "Dinner"]
 HabitLink = Literal["water", "workout"]
 
@@ -103,7 +103,7 @@ class TaskReminderCreate(BaseModel):
 
 
 class Task(BaseModel):
-    id: int
+    id: int | str  # int for local rows; "moodle:<source_id>" for read-time Moodle projections (M6)
     label: str
     done: bool
     group: TaskGroup
@@ -123,6 +123,11 @@ class Task(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    # Read-time origin markers (M6). Real rows default to local/editable so
+    # existing serializers that omit these keys validate unchanged; Moodle
+    # projections set source="moodle"/editable=False (read-only in the UI).
+    source: str = "local"
+    editable: bool = True
 
 
 class TaskCreate(BaseModel):
@@ -189,7 +194,7 @@ class EventOccurrence(BaseModel):
     series, `id` is the series row and `start`/`end` are this instance's
     times; single-occurrence deletes key on `start`."""
 
-    id: int
+    id: int | str  # int for local rows; "moodle:<source_id>" for read-time Moodle projections (M6)
     title: str
     start: datetime
     end: datetime
@@ -199,6 +204,11 @@ class EventOccurrence(BaseModel):
     recurring: bool
     recurrence_label: str | None
     at: str  # derived display clock, e.g. "9:00am"
+    # Read-time origin markers (M6). Real rows default to local/editable so
+    # existing serializers that omit these keys validate unchanged; Moodle
+    # projections set source="moodle"/editable=False (read-only in the UI).
+    source: str = "local"
+    editable: bool = True
 
 
 class EventCreate(BaseModel):
@@ -502,3 +512,75 @@ class Inbox(BaseModel):
     untriaged: List[EmailOut]
     needs_reply_count: int
     unread_count: int
+
+
+# ---- Moodle schemas (M6 School) ----------------------------------------------
+# Read models for the /api/moodle/* GET endpoints. Every field is served from
+# the moodle_* tables (never a live Moodle call). Tokens/scopes are NEVER in
+# any of these shapes — connection state travels via /api/oauth/status only.
+class CourseOut(BaseModel):
+    id: int
+    source_id: str
+    shortname: str
+    fullname: str
+    progress: float | None
+    start_at: datetime | None
+    end_at: datetime | None
+    last_access_at: datetime | None
+    hidden: bool
+
+
+class DeadlineOut(BaseModel):
+    id: int
+    source_id: str
+    course_id: str
+    name: str
+    module_name: str
+    event_type: str
+    due_at: datetime
+    overdue: bool
+    url: str
+    when: str  # derived display, e.g. "Fri 3:00pm" / "Tomorrow"
+
+
+class GradeOut(BaseModel):
+    id: int
+    source_id: str
+    course_id: str
+    item_name: str
+    item_type: str
+    grade_formatted: str
+    grade_raw: float | None
+    grade_min: float | None
+    grade_max: float | None
+    graded_at: datetime | None
+
+
+class AnnouncementOut(BaseModel):
+    id: int
+    source_id: str
+    course_id: str
+    forum_id: str
+    subject: str
+    author: str
+    created_at: datetime | None
+    summary_html: str
+    url: str
+
+
+class NotificationOut(BaseModel):
+    id: int
+    source_id: str
+    subject: str
+    full_message: str
+    context_url: str
+    created_at: datetime | None
+    read: bool
+
+
+# POST /api/moodle/connect body — the pasted wstoken (bare 32-hex or a
+# launch-redirect URL) plus the optional passport used to verify the launch
+# redirect's md5 prefix (see parse_pasted_token, contract §D).
+class MoodleConnect(BaseModel):
+    token: str
+    passport: str | None = None
