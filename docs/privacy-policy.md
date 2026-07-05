@@ -46,7 +46,7 @@ If you use voice dictation, audio is processed by your browser's built-in speech
 
 File attachments and the memory change-history database are stored locally on the machine running the app, not with any cloud provider. Notifications are generated locally on-device.
 
-## 4. WHOOP and Gmail data
+## 4. WHOOP, Gmail, and Moodle data
 
 If you choose to connect WHOOP:
 
