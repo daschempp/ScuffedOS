@@ -1930,21 +1930,22 @@ def test_get_item_resolves_institution_name_and_products():
 
 
 def test_call_maps_auth_error_code():
+    # Exercises _call's error mapping via get_item (get_accounts lands in Task 11).
     http = FakePlaidHTTP(
-        responses={"/accounts/get": {"error_code": "ITEM_LOGIN_REQUIRED", "error_message": "reauth"}},
-        status={"/accounts/get": 400})
+        responses={"/item/get": {"error_code": "ITEM_LOGIN_REQUIRED", "error_message": "reauth"}},
+        status={"/item/get": 400})
     p = _provider(http)
     with pytest.raises(PlaidAuthError):
-        p.get_accounts("acc-tok")
+        p.get_item("acc-tok")
 
 
 def test_call_maps_non_auth_error_to_plaiderror():
     http = FakePlaidHTTP(
-        responses={"/accounts/get": {"error_code": "RATE_LIMIT_EXCEEDED", "error_message": "slow"}},
-        status={"/accounts/get": 429})
+        responses={"/item/get": {"error_code": "RATE_LIMIT_EXCEEDED", "error_message": "slow"}},
+        status={"/item/get": 429})
     p = _provider(http)
     with pytest.raises(PlaidError):
-        p.get_accounts("acc-tok")
+        p.get_item("acc-tok")
 ```
 
 - [ ] **Step 3: Run test to verify it fails**
@@ -2131,7 +2132,7 @@ class PlaidProvider:
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `cd backend && source ../.venv/bin/activate && TEST_DATABASE_URL= python -m pytest tests/test_plaid_provider.py -q`
-Expected: the four `create/exchange/get_item` + both error tests that call `get_accounts` — **`get_accounts` doesn't exist yet**, so the two `test_call_maps_*` FAIL with `AttributeError`. That's expected; they pass in Task 11. Confirm `test_create_link_token_bank_requests_transactions`, `..._investments_...`, `test_exchange_public_token`, `test_get_item_resolves_institution_name_and_products` **PASS** (4 passed, 2 errors).
+Expected: **6 passed** — all four `create/exchange/get_item` tests plus the two `_call` error-mapping tests (routed through `get_item`, which this task implements). The suite stays green.
 
 - [ ] **Step 6: Commit**
 
@@ -2248,7 +2249,7 @@ Expected: FAIL — `AttributeError: 'PlaidProvider' object has no attribute 'syn
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd backend && source ../.venv/bin/activate && TEST_DATABASE_URL= python -m pytest tests/test_plaid_provider.py -q`
-Expected: PASS (8 passed — the two error tests from Task 10 now pass too).
+Expected: PASS (8 passed — 6 from Task 10 + the 2 new get_accounts/sync tests).
 
 - [ ] **Step 5: Commit**
 
