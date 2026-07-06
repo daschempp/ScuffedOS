@@ -2295,6 +2295,114 @@ class Store:
                                 Decimal(str(current.get(to_category, 0))) + amt)
         return self.finance_budgets(month)
 
+    _RETIREMENT_SUBTYPES = frozenset({
+        "ira", "roth", "roth 401k", "401k", "401a", "403b", "457b", "pension",
+        "retirement", "sep ira", "simple ira", "sarsep", "tsp",
+    })
+
+    def _month_sums(self, s: Session, month: str) -> tuple[Decimal, Decimal]:
+        """(income, spent) for `month` (YYYY-MM), excluding internal transfers."""
+        from .config import settings
+        income = Decimal("0")
+        spent = Decimal("0")
+        for t in s.scalars(
+            select(FinanceTransaction).where(FinanceTransaction.owner == settings.owner)
+        ):
+            if t.date is None or t.date.strftime("%Y-%m") != month or t.amount is None:
+                continue
+            primary = (t.category_primary or "").upper()
+            if t.amount < 0:
+                if primary != "TRANSFER_IN":
+                    income += -t.amount
+            elif t.amount > 0:
+                if primary != "TRANSFER_OUT":
+                    spent += t.amount
+        return income, spent
+
+    def finance_summary(self, month: str | None = None) -> dict:
+        from .config import settings
+        month = month or utcnow().strftime("%Y-%m")
+        y, m = int(month[:4]), int(month[5:7])
+        prev = f"{y - 1:04d}-12" if m == 1 else f"{y:04d}-{m - 1:02d}"
+        with self._session() as s:
+            balance = Decimal("0")
+            for a in s.scalars(
+                select(FinanceAccount)
+                .where(FinanceAccount.owner == settings.owner)
+                .where(FinanceAccount.type == "depository")
+            ):
+                bal = a.available_balance if a.available_balance is not None else a.current_balance
+                if bal is not None:
+                    balance += bal
+            income, spent = self._month_sums(s, month)
+            prev_income, prev_spent = self._month_sums(s, prev)
+        return {
+            "month": month,
+            "balance": float(balance),
+            "income_month": float(income),
+            "spent_month": float(spent),
+            "income_delta": float(income - prev_income),
+            "spent_delta": float(spent - prev_spent),
+        }
+
+    def finance_networth(self) -> dict:
+        from .config import settings
+        with self._session() as s:
+            accounts = s.scalars(
+                select(FinanceAccount).where(FinanceAccount.owner == settings.owner)
+            ).all()
+            crypto_ids = {
+                x.source_id for x in s.scalars(
+                    select(FinanceSecurity)
+                    .where(FinanceSecurity.owner == settings.owner)
+                    .where(FinanceSecurity.type == "cryptocurrency")
+                ).all()
+            }
+            holdings = s.scalars(
+                select(FinanceHolding).where(FinanceHolding.owner == settings.owner)
+            ).all()
+        cash = Decimal("0")
+        credit_loans = Decimal("0")
+        for a in accounts:
+            bal = a.current_balance if a.current_balance is not None else Decimal("0")
+            if a.type == "depository":
+                cash += (a.available_balance if a.available_balance is not None else bal)
+            elif a.type in ("credit", "loan"):
+                credit_loans += bal
+        crypto = Decimal("0")
+        investments = Decimal("0")
+        retirement = Decimal("0")
+        acct_subtype = {a.source_id: (a.subtype or "").lower() for a in accounts}
+        for h in holdings:
+            value = h.institution_value or Decimal("0")
+            if h.security_id in crypto_ids:
+                crypto += value
+            elif acct_subtype.get(h.account_id, "") in self._RETIREMENT_SUBTYPES:
+                retirement += value
+            else:
+                investments += value
+        # Un-itemized investment accounts (no holdings — e.g. some IRAs Plaid
+        # can't itemize) contribute their account balance, classified by subtype.
+        # Accounts WITH holdings are already counted via the holdings loop above,
+        # so this never double-counts.
+        accounts_with_holdings = {h.account_id for h in holdings}
+        for a in accounts:
+            if a.type == "investment" and a.source_id not in accounts_with_holdings:
+                value = a.current_balance or Decimal("0")
+                if (a.subtype or "").lower() in self._RETIREMENT_SUBTYPES:
+                    retirement += value
+                else:
+                    investments += value
+        buckets = [
+            {"name": "Cash", "value": float(cash), "color": "honey"},
+            {"name": "Investments", "value": float(investments), "color": "green"},
+            {"name": "Retirement", "value": float(retirement), "color": "sky"},
+            {"name": "Crypto", "value": float(crypto), "color": "plum"},
+            {"name": "Credit/Loans", "value": float(-credit_loans), "color": "clay"},
+        ]
+        total = cash + investments + retirement + crypto - credit_loans
+        return {"buckets": buckets, "total": float(total)}
+
     # ---- snapshots (derive-on-read) ----
     @_retry_integrity
     def upsert_snapshot(self, snap: NormalizedSnapshot) -> dict:

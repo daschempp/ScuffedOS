@@ -186,3 +186,40 @@ def test_reallocate_budget_moves_limit():
     budgets = {b["category"]: b for b in store.finance_budgets("2026-06")}
     assert budgets["Dining out"]["limit_amount"] == 130.0
     assert budgets["Savings"]["limit_amount"] == 720.0
+
+
+def test_finance_summary_income_spent_and_deltas():
+    store.upsert_finance_account(_acct("acc1", current="4820.50", available="4820.50"))
+    store.apply_transaction_delta(TransactionsDelta(added=[
+        _txn("i1", amount="-3200.00", d=date(2026, 6, 1), primary="INCOME"),
+        _txn("s1", amount="1450.00", d=date(2026, 6, 3), primary="RENT_AND_UTILITIES"),
+        _txn("s2", amount="64.20", d=date(2026, 6, 8), primary="FOOD_AND_DRINK"),
+        _txn("x1", amount="500.00", d=date(2026, 5, 5), primary="FOOD_AND_DRINK"),  # May
+    ], modified=[], removed=[], next_cursor="C", has_more=False))
+    summ = store.finance_summary("2026-06")
+    assert summ["balance"] == 4820.50
+    assert summ["income_month"] == 3200.0
+    assert round(summ["spent_month"], 2) == 1514.20
+    # spent delta vs May (500.00 spent in May): 1514.20 - 500 = +1014.20
+    assert round(summ["spent_delta"], 2) == 1014.20
+
+
+def test_finance_networth_buckets():
+    store.upsert_finance_account(_acct("cash", type="depository", subtype="checking",
+                                       current="18050.00", available="18050.00"))
+    store.upsert_finance_account(_acct("ira", type="investment", subtype="ira",
+                                       current="21400.00", available="0"))
+    store.upsert_finance_account(_acct("cc", type="credit", subtype="credit card",
+                                       current="1200.00", available="0"))
+    store.upsert_finance_security(_sec("s1", "Bitcoin", "BTC", "cryptocurrency"))
+    store.upsert_finance_security(_sec("s2", "VTI", "VTI", "etf"))
+    store.upsert_finance_holding(_hold("s1", account_id="brk", value="3400"))    # crypto
+    store.upsert_finance_holding(_hold("s2", account_id="brk", value="48200"))   # investments
+    nw = store.finance_networth()
+    buckets = {b["name"]: b["value"] for b in nw["buckets"]}
+    assert buckets["Cash"] == 18050.0
+    assert buckets["Crypto"] == 3400.0
+    assert buckets["Investments"] == 48200.0
+    assert buckets["Retirement"] == 21400.0
+    assert buckets["Credit/Loans"] == -1200.0
+    assert round(nw["total"], 2) == round(18050 + 3400 + 48200 + 21400 - 1200, 2)
