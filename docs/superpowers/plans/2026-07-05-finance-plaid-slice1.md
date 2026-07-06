@@ -2580,6 +2580,20 @@ def test_tick_flips_needs_reauth_on_auth_error():
     providers.configure([FakePlaidProvider(raise_auth=True)])
     finance_sync.tick()
     assert store.get_finance_item("itm1")["status"] == "needs_reauth"
+
+
+def test_disconnect_removes_synced_transactions():
+    # Real Plaid txns carry no item_id; the sync must stamp it so disconnect cascades.
+    from tests.fakes import FakePlaidProvider
+    _seed_item(products=("transactions",))
+    delta = TransactionsDelta(added=[_txn("t1")], next_cursor="C", has_more=False)
+    for t in delta.added:        # simulate real Plaid: provider txns have no item_id
+        t.item_id = ""
+    providers.configure([FakePlaidProvider(accounts=[], delta=delta)])
+    finance_sync.tick()
+    assert len(store.finance_transactions()) == 1
+    assert store.delete_finance_item("itm1") is True
+    assert store.finance_transactions() == []   # cascade removed the synced txn
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -2644,6 +2658,10 @@ def _sync_item(provider, item: dict, now: datetime) -> int:
         cursor = store.get_finance_item_cursor(item_id)
         while True:
             delta = provider.sync_transactions(access_token, cursor)
+            # Plaid /transactions/sync objects carry no item_id — stamp it so the
+            # disconnect cascade (delete_finance_item deletes txns by item_id) works.
+            for t in delta.added + delta.modified:
+                t.item_id = item_id
             count += store.apply_transaction_delta(delta)
             cursor = delta.next_cursor
             store.set_finance_item_cursor(item_id, cursor)
