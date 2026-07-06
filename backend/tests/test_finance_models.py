@@ -60,13 +60,16 @@ def test_normalized_dataclasses_construct():
 def test_plaid_provider_is_runtime_checkable():
     class Stub:
         name = "plaid"
-        def create_link_token(self, kind): return {}
+        def create_link_token(self, kind, access_token=None): return {}
         def get_link_public_token(self, link_token): return None
         def exchange_public_token(self, public_token): return ("at", "itm1")
         def get_item(self, access_token): return None
         def get_accounts(self, access_token): return []
         def sync_transactions(self, access_token, cursor): return None
         def get_holdings(self, access_token): return ([], [], [])
+        def get_recurring(self, access_token): return []
+        def get_liabilities(self, access_token): return []
+        def get_investment_transactions(self, access_token, start, end): return ([], [], [])
         def remove_item(self, access_token): return None
     assert isinstance(Stub(), PlaidProvider)
 
@@ -137,3 +140,24 @@ def test_slice2_models_persist_and_roundtrip():
         assert s.query(FinanceLiability).one().next_payment_due_date == date(2026, 7, 15)
         assert s.query(FinanceInvestmentTransaction).one().quantity == Decimal("0.01")
     engine.dispose()
+
+
+def test_slice2_normalized_dataclasses_construct():
+    from datetime import date
+    from app.providers.base import (
+        NormalizedRecurringStream, NormalizedLiability, NormalizedInvestmentTransaction,
+    )
+    r = NormalizedRecurringStream(source="plaid", source_id="str1", item_id="itm1",
+                                  account_id="a1", stream_type="outflow", description="Netflix",
+                                  merchant_name="Netflix", average_amount=Decimal("15.49"),
+                                  frequency="MONTHLY", predicted_next_date=date(2026, 7, 12))
+    assert r.stream_type == "outflow" and r.average_amount == Decimal("15.49")
+    liab = NormalizedLiability(source="plaid", source_id="cc1", item_id="itm1", account_id="cc1",
+                               liability_type="credit", minimum_payment=Decimal("35"),
+                               next_payment_due_date=date(2026, 7, 15))
+    assert liab.liability_type == "credit"
+    it = NormalizedInvestmentTransaction(source="plaid", source_id="it1", item_id="itm1",
+                                         account_id="brk", security_id="s1", type="buy",
+                                         quantity=Decimal("0.01"), amount=Decimal("600"),
+                                         date=date(2026, 6, 10))
+    assert it.type == "buy" and it.quantity == Decimal("0.01")
