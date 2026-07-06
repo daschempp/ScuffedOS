@@ -95,7 +95,7 @@ All tables carry `owner` (default `settings.owner`), aware-UTC `DateTime(timezon
 `default=utcnow`, `JSONField = JSON().with_variant(JSONB(), "postgresql")`, and a unique constraint on
 `(owner, source, source_id)` where `source="plaid"` — except `finance_budgets` (keyed `(owner, category, month)`)
 and `finance_holdings` (a holding is an account×security pair with no Plaid id of its own, keyed
-`(owner, account_id, security_id)`). Idempotent upserts every pass. **Money is `Numeric(14, 2)` + an ISO currency code —
+`(owner, account_id, security_id)`). Idempotent upserts every pass. **Money is `Numeric(16, 2)` + an ISO currency code —
 never float** (`docs/finance.md`: "Decimal money done right"). Add all six table names to
 `tests/test_migrations.py` `ALL_TABLES`.
 
