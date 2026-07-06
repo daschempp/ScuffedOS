@@ -496,3 +496,41 @@ class FakeMoodleProvider:
             raise MoodleAuthError("moodle invalidtoken")
         self.fetched_since.append(since)
         return self.snapshot
+
+
+# ---- plaid provider seam (M7) ---------------------------------------------
+class FakePlaidHTTP:
+    """Scriptable transport for PlaidProvider.configure(fake_http=...).
+
+    Routes .post(url, json=...) by URL-path substring. `responses` maps a path
+    fragment (e.g. '/accounts/get') to a JSON dict (or seq(...) for repeated
+    calls, e.g. paginated /transactions/sync). `status` maps a fragment to an
+    error status_code; when >=400 the matching `responses` body (a Plaid
+    {error_code, error_message} dict) is returned so the provider maps it to
+    PlaidAuthError/PlaidError. Records every post as (url, json-body)."""
+
+    def __init__(self, responses: dict | None = None, status: dict | None = None):
+        self.responses = dict(responses or {})
+        self.status = dict(status or {})
+        self.posts: list[tuple[str, dict]] = []
+
+    def _match(self, url: str, table: dict):
+        for frag, val in table.items():
+            if frag in url:
+                return val
+        return None
+
+    def post(self, url, json=None, headers=None):
+        self.posts.append((url, dict(json or {})))
+        code = self._match(url, self.status) or 200
+        val = self._match(url, self.responses)
+        if code >= 400:
+            body = val if isinstance(val, dict) else {
+                "error_code": "INVALID_ACCESS_TOKEN", "error_message": "bad token"}
+            return _FakeResponse(body, code)
+        if isinstance(val, _Seq):
+            return _FakeResponse(val.next())
+        return _FakeResponse(val if val is not None else {})
+
+    def get(self, url, headers=None, params=None):   # unused by PlaidProvider
+        return _FakeResponse({})
