@@ -14,6 +14,7 @@ from __future__ import annotations
 import functools
 import logging
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +38,12 @@ from .models import (
     DailySnapshot,
     Email,
     Event,
+    FinanceAccount,
+    FinanceBudget,
+    FinanceHolding,
+    FinanceItem,
+    FinanceSecurity,
+    FinanceTransaction,
     Habit,
     HabitCompletion,
     Meal,
@@ -56,16 +63,22 @@ from .models import (
     utcnow,
 )
 from .providers.base import (
+    NormalizedAccount,
     NormalizedAnnouncement,
     NormalizedAssignment,
     NormalizedCourse,
     NormalizedDeadline,
     NormalizedEmail,
     NormalizedGrade,
+    NormalizedHolding,
+    NormalizedItem,
     NormalizedNotification,
+    NormalizedSecurity,
     NormalizedSnapshot,
+    NormalizedTransaction,
     NormalizedWorkout,
     Tokens,
+    TransactionsDelta,
 )
 
 _TASK_FIELDS = {
@@ -469,6 +482,18 @@ def _moodle_deadline_dict(d: MoodleDeadline) -> dict:
         # Derived display string (never stored) — reuse the calendar
         # "Up next" formatter; a deadline is a point in time, so start==end.
         "when": event_when_display(due, due, "", None),
+    }
+
+
+def _finance_item_dict(row: FinanceItem) -> dict:
+    """Client-safe Item view — NO access_token, NO cursor."""
+    return {
+        "item_id": row.source_id,
+        "institution_name": row.institution_name,
+        "status": row.status,
+        "products": list(row.products or []),
+        "connected_at": aware_utc(row.connected_at),
+        "last_sync_at": aware_utc(row.last_sync_at),
     }
 
 
@@ -1852,6 +1877,111 @@ class Store:
                     s.delete(row)
                     deleted = True
         return deleted
+
+    # ---- finance ----
+    def _finance_item_row(self, s: Session, item_id: str) -> FinanceItem | None:
+        from .config import settings
+        return s.scalars(
+            select(FinanceItem)
+            .where(FinanceItem.owner == settings.owner)
+            .where(FinanceItem.source == "plaid")
+            .where(FinanceItem.source_id == item_id)
+        ).first()
+
+    @_retry_integrity
+    def upsert_finance_item(self, item: NormalizedItem, access_token: str) -> dict:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = self._finance_item_row(s, item.item_id)
+            if row is None:
+                row = FinanceItem(owner=settings.owner, source="plaid",
+                                  source_id=item.item_id)
+                s.add(row)
+            row.access_token = access_token
+            row.institution_id = item.institution_id
+            row.institution_name = item.institution_name
+            row.products = list(item.products or [])
+            row.status = "active"
+            s.flush()
+            return _finance_item_dict(row)
+
+    def list_finance_items(self) -> list[dict]:
+        from .config import settings
+        with self._session() as s:
+            rows = s.scalars(
+                select(FinanceItem)
+                .where(FinanceItem.owner == settings.owner)
+                .order_by(FinanceItem.id)
+            ).all()
+            return [_finance_item_dict(r) for r in rows]
+
+    def get_finance_item(self, item_id: str) -> dict | None:
+        with self._session() as s:
+            row = self._finance_item_row(s, item_id)
+            return _finance_item_dict(row) if row else None
+
+    def get_finance_item_token(self, item_id: str) -> str | None:
+        """Server-side only — the access_token for one Item (used by the sync)."""
+        with self._session() as s:
+            row = self._finance_item_row(s, item_id)
+            return row.access_token if row else None
+
+    def set_finance_item_status(self, item_id: str, status: str) -> None:
+        with self._session() as s, s.begin():
+            row = self._finance_item_row(s, item_id)
+            if row is not None:
+                row.status = status
+
+    def set_finance_item_cursor(self, item_id: str, cursor: str | None) -> None:
+        with self._session() as s, s.begin():
+            row = self._finance_item_row(s, item_id)
+            if row is not None:
+                row.cursor = cursor
+
+    def set_finance_item_synced(self, item_id: str, when: datetime | None = None) -> None:
+        with self._session() as s, s.begin():
+            row = self._finance_item_row(s, item_id)
+            if row is not None:
+                row.last_sync_at = _to_utc(when) if when else utcnow()
+
+    def get_finance_item_cursor(self, item_id: str) -> str | None:
+        """Server-side only — the /transactions/sync cursor for one Item."""
+        with self._session() as s:
+            row = self._finance_item_row(s, item_id)
+            return row.cursor if row else None
+
+    def delete_finance_item(self, item_id: str) -> bool:
+        """Disconnect one Item: delete it + its accounts/transactions/holdings,
+        then prune securities no surviving holding references. Returns True iff
+        the Item existed."""
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = self._finance_item_row(s, item_id)
+            if row is None:
+                return False
+            s.delete(row)
+            for model in (FinanceAccount, FinanceTransaction, FinanceHolding):
+                for r in s.scalars(
+                    select(model)
+                    .where(model.owner == settings.owner)
+                    .where(model.item_id == item_id)
+                ):
+                    s.delete(r)
+            # Prune orphan securities (no holding references them any more).
+            live_sec_ids = set(s.scalars(
+                select(FinanceHolding.security_id)
+                .where(FinanceHolding.owner == settings.owner)
+            ).all())
+            for sec in s.scalars(
+                select(FinanceSecurity).where(FinanceSecurity.owner == settings.owner)
+            ):
+                if sec.source_id not in live_sec_ids:
+                    s.delete(sec)
+            return True
+
+    def finance_status(self) -> dict:
+        items = self.list_finance_items()
+        return {"connected": len(items) > 0, "items": items}
 
     # ---- snapshots (derive-on-read) ----
     @_retry_integrity
