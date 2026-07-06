@@ -1052,6 +1052,7 @@ class Store:
         for e in rows:
             out.extend(_event_occurrences(e, window_start, window_end))
         out.extend(self.moodle_calendar_events(window_start, window_end))
+        out.extend(self.finance_calendar_events(window_start, window_end))
         out.sort(key=lambda o: o["start"])
         return out
 
@@ -2417,6 +2418,42 @@ class Store:
                 "auto": False,
             })
         out.sort(key=lambda x: (x["due_date"] or "9999-12-31"))
+        return out
+
+    def finance_calendar_events(self, window_start, window_end) -> list[dict]:
+        """Read-time projection (mirrors moodle_calendar_events): bill due dates +
+        subscription renewals in the window as read-only 'finance:<id>' occurrences.
+        NOT rows in the events table — events_between appends these at read time."""
+        out: list[dict] = []
+
+        def _push(source_id: str, title: str, iso_date: str | None):
+            if not iso_date:
+                return
+            d = date.fromisoformat(iso_date)
+            start = datetime(d.year, d.month, d.day, 9, 0, tzinfo=timezone.utc)
+            if not (window_start <= start < window_end):
+                return
+            out.append({
+                "id": f"finance:{source_id}",
+                "title": title,
+                "start": start,
+                "end": start + timedelta(hours=1),
+                "tint": "honey",
+                "location": "",
+                "description": "",
+                "recurring": False,
+                "recurrence_label": None,
+                "at": clock(start),
+                "source": "finance",
+                "editable": False,
+            })
+
+        for b in self.finance_bills():
+            amt = f" · ${b['amount']:,.0f}" if b.get("amount") is not None else ""
+            _push(f"bill:{b['name']}", f"{b['name']}{amt} due", b.get("due_date"))
+        for sub in self.finance_subscriptions():
+            amt = f" · ${sub['amount']:,.2f}" if sub.get("amount") is not None else ""
+            _push(f"sub:{sub['name']}", f"{sub['name']}{amt} renews", sub.get("next_date"))
         return out
 
     def finance_budgets(self, month: str) -> list[dict]:

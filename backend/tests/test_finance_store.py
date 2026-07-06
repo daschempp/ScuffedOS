@@ -332,3 +332,19 @@ def test_investment_transactions_join_securities_newest_first():
     assert ledger[0]["type"] == "sell"          # newest first (2026-06-11 before 2026-06-10)
     assert ledger[0]["ticker"] == "BTC"
     assert ledger[1]["type"] == "buy" and ledger[1]["amount"] == 600.0
+
+
+def test_bills_appear_in_events_between_read_only():
+    from datetime import datetime, timezone
+    from app.providers.base import NormalizedLiability
+    store.upsert_finance_liability(NormalizedLiability(
+        source="plaid", source_id="cc1", item_id="itm1", account_id="cc1", liability_type="credit",
+        minimum_payment=Decimal("35"), next_payment_due_date=__import__("datetime").date(2026, 7, 15)))
+    occ = store.events_between(datetime(2026, 7, 1, tzinfo=timezone.utc),
+                              datetime(2026, 7, 31, tzinfo=timezone.utc))
+    fin = [o for o in occ if str(o["id"]).startswith("finance:")]
+    assert fin and fin[0]["editable"] is False and fin[0]["source"] == "finance"
+    # out-of-window excluded
+    occ2 = store.events_between(datetime(2026, 8, 1, tzinfo=timezone.utc),
+                               datetime(2026, 8, 31, tzinfo=timezone.utc))
+    assert [o for o in occ2 if str(o["id"]).startswith("finance:")] == []
