@@ -163,3 +163,18 @@ def test_subscriptions_bills_investment_endpoints(client):
     assert any(b["kind"] == "liability" for b in client.get("/api/finance/bills").json())
     itx = client.get("/api/finance/investment-transactions").json()
     assert itx[0]["ticker"] == "BTC" and itx[0]["type"] == "buy"
+
+
+def test_reauth_start_and_complete(client):
+    from tests.fakes import FakePlaidProvider
+    p = FakePlaidProvider(item=NormalizedItem(item_id="itm1", institution_id="ins_1",
+                                              institution_name="Chase", products=["transactions"]))
+    providers.configure([p])
+    client.post("/api/finance/link/complete", json={"link_token": "l"})
+    store.set_finance_item_status("itm1", "needs_reauth")
+    start = client.post("/api/finance/items/itm1/reauth/start")
+    assert start.status_code == 200 and start.json()["hosted_link_url"] == "https://plaid/hl"
+    done = client.post("/api/finance/items/itm1/reauth/complete")
+    assert done.status_code == 200
+    assert store.get_finance_item("itm1")["status"] == "active"     # flipped back
+    assert client.post("/api/finance/items/nope/reauth/start").status_code == 404
