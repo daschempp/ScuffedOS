@@ -1765,6 +1765,18 @@ Expected: FAIL — `AttributeError: 'Store' object has no attribute 'finance_net
                 retirement += value
             else:
                 investments += value
+        # Un-itemized investment accounts (no holdings — e.g. some IRAs Plaid
+        # can't itemize) contribute their account balance, classified by subtype.
+        # Accounts WITH holdings are already counted via the loop above, so this
+        # never double-counts.
+        accounts_with_holdings = {h.account_id for h in holdings}
+        for a in accounts:
+            if a.type == "investment" and a.source_id not in accounts_with_holdings:
+                value = a.current_balance or Decimal("0")
+                if (a.subtype or "").lower() in self._RETIREMENT_SUBTYPES:
+                    retirement += value
+                else:
+                    investments += value
         buckets = [
             {"name": "Cash", "value": float(cash), "color": "honey"},
             {"name": "Investments", "value": float(investments), "color": "green"},
