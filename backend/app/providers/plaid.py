@@ -30,6 +30,7 @@ from .base import (
     NormalizedAccount,
     NormalizedHolding,
     NormalizedItem,
+    NormalizedRecurringStream,
     NormalizedSecurity,
     NormalizedTransaction,
     TransactionsDelta,
@@ -46,6 +47,7 @@ INSTITUTIONS_GET_BY_ID = "/institutions/get_by_id"
 ACCOUNTS_GET = "/accounts/get"
 TRANSACTIONS_SYNC = "/transactions/sync"
 INVESTMENTS_HOLDINGS_GET = "/investments/holdings/get"
+TRANSACTIONS_RECURRING_GET = "/transactions/recurring/get"
 ITEM_REMOVE = "/item/remove"
 
 # Plaid error_codes that mean "this Item needs the user to re-auth" -> needs_reauth.
@@ -252,6 +254,30 @@ class PlaidProvider:
                 iso_currency=h.get("iso_currency_code") or "USD",
             ))
         return accounts, securities, holdings
+
+    def _recurring_stream(self, s: dict, stream_type: str) -> NormalizedRecurringStream:
+        pfc = s.get("personal_finance_category") or {}
+        avg = s.get("average_amount") or {}
+        last = s.get("last_amount") or {}
+        return NormalizedRecurringStream(
+            source="plaid", source_id=s.get("stream_id", ""),
+            item_id="", account_id=s.get("account_id", ""), stream_type=stream_type,
+            description=s.get("description", ""), merchant_name=s.get("merchant_name"),
+            category_primary=pfc.get("primary", ""), category_detailed=pfc.get("detailed", ""),
+            average_amount=_dec(avg.get("amount")) or Decimal("0"),
+            last_amount=_dec(last.get("amount")) or Decimal("0"),
+            frequency=s.get("frequency", ""),
+            first_date=_date(s.get("first_date")), last_date=_date(s.get("last_date")),
+            predicted_next_date=_date(s.get("predicted_next_date")),
+            is_active=bool(s.get("is_active", True)), status=s.get("status", ""),
+            iso_currency=(avg.get("iso_currency_code") or "USD"),
+        )
+
+    def get_recurring(self, access_token: str) -> list[NormalizedRecurringStream]:
+        data = self._call(TRANSACTIONS_RECURRING_GET, {"access_token": access_token})
+        out = [self._recurring_stream(s, "inflow") for s in data.get("inflow_streams") or []]
+        out += [self._recurring_stream(s, "outflow") for s in data.get("outflow_streams") or []]
+        return out
 
     def get_link_public_token(self, link_token: str) -> str | None:
         """Poll /link/token/get for a Hosted-Link public_token. Returns None

@@ -156,6 +156,35 @@ def test_remove_item_posts_access_token():
     assert url.endswith("/item/remove") and body["access_token"] == "tok"
 
 
+def test_get_recurring_parses_inflow_and_outflow():
+    http = FakePlaidHTTP(responses={"/transactions/recurring/get": {
+        "inflow_streams": [{"stream_id": "in1", "account_id": "a1", "description": "Payroll",
+                            "merchant_name": "Acme", "frequency": "BIWEEKLY",
+                            "personal_finance_category": {"primary": "INCOME", "detailed": "INCOME_WAGES"},
+                            "average_amount": {"amount": 2500, "iso_currency_code": "USD"},
+                            "last_amount": {"amount": 2500, "iso_currency_code": "USD"},
+                            "last_date": "2026-06-15", "predicted_next_date": "2026-06-29",
+                            "is_active": True, "status": "MATURE"}],
+        "outflow_streams": [{"stream_id": "out1", "account_id": "a1", "description": "Netflix",
+                             "merchant_name": "Netflix", "frequency": "MONTHLY",
+                             "personal_finance_category": {"primary": "ENTERTAINMENT",
+                                                           "detailed": "ENTERTAINMENT_STREAMING"},
+                             "average_amount": {"amount": 15.49, "iso_currency_code": "USD"},
+                             "last_amount": {"amount": 15.49, "iso_currency_code": "USD"},
+                             "last_date": "2026-06-12", "predicted_next_date": "2026-07-12",
+                             "is_active": True, "status": "MATURE"}]}})
+    p = _provider(http)
+    streams = p.get_recurring("tok")
+    by_id = {s.source_id: s for s in streams}
+    assert by_id["in1"].stream_type == "inflow"
+    assert by_id["out1"].stream_type == "outflow"
+    assert by_id["out1"].average_amount == Decimal("15.49")
+    assert by_id["out1"].category_primary == "ENTERTAINMENT"
+    assert by_id["out1"].predicted_next_date.isoformat() == "2026-07-12"
+    _, body = http.posts[0]
+    assert body["access_token"] == "tok"
+
+
 def test_plaid_registered_in_real_registry():
     from app import providers
     providers.configure("unset")            # real registry
