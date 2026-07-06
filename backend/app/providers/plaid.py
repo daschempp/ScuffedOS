@@ -60,9 +60,12 @@ _AUTH_ERRORCODES = frozenset({
     "ITEM_LOCKED", "USER_SETUP_REQUIRED", "PENDING_EXPIRATION", "ACCESS_NOT_GRANTED",
 })
 
-# Plaid error_codes meaning "this Item doesn't have this product" -> empty pane, not a crash.
+# Plaid error_codes meaning "this Item doesn't have this product (yet)" -> empty
+# pane, not a crash. PRODUCT_NOT_READY fires right after a fresh link while Plaid
+# is still indexing recurring/investments — treat it as absent-for-now, not fatal.
 _FEATURE_ABSENT_ERRORCODES = frozenset({
     "PRODUCTS_NOT_SUPPORTED", "NO_LIABILITY_ACCOUNTS", "NO_ACCOUNTS", "NO_INVESTMENT_ACCOUNTS",
+    "PRODUCT_NOT_READY",
 })
 
 # kind -> (required products, additional_consented_products). A bank consents to
@@ -277,11 +280,18 @@ class PlaidProvider:
         txns: list[NormalizedInvestmentTransaction] = []
         offset = 0
         while True:
-            data = self._call(INVESTMENTS_TRANSACTIONS_GET, {
-                "access_token": access_token,
-                "start_date": start.isoformat(), "end_date": end.isoformat(),
-                "options": {"count": 500, "offset": offset},
-            })
+            try:
+                data = self._call(INVESTMENTS_TRANSACTIONS_GET, {
+                    "access_token": access_token,
+                    "start_date": start.isoformat(), "end_date": end.isoformat(),
+                    "options": {"count": 500, "offset": offset},
+                })
+            except PlaidError as exc:
+                # Feature absent on the very first page -> empty ledger, not a crash
+                # (an Item without investments still runs its other product panes).
+                if offset == 0 and any(code in str(exc) for code in _FEATURE_ABSENT_ERRORCODES):
+                    return [], [], []
+                raise
             item_id = (data.get("item") or {}).get("item_id", "")
             for a in data.get("accounts") or []:
                 acc = self._account(a, item_id)
@@ -326,7 +336,12 @@ class PlaidProvider:
         )
 
     def get_recurring(self, access_token: str) -> list[NormalizedRecurringStream]:
-        data = self._call(TRANSACTIONS_RECURRING_GET, {"access_token": access_token})
+        try:
+            data = self._call(TRANSACTIONS_RECURRING_GET, {"access_token": access_token})
+        except PlaidError as exc:
+            if any(code in str(exc) for code in _FEATURE_ABSENT_ERRORCODES):
+                return []
+            raise
         out = [self._recurring_stream(s, "inflow") for s in data.get("inflow_streams") or []]
         out += [self._recurring_stream(s, "outflow") for s in data.get("outflow_streams") or []]
         return out

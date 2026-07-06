@@ -242,6 +242,24 @@ def test_delete_finance_item_prunes_holdings_and_orphan_securities():
         assert s.scalars(select(FinanceSecurity)).all() == []
 
 
+def test_delete_finance_item_keeps_security_referenced_by_surviving_investment_tx():
+    # A security referenced ONLY by a surviving item's investment-tx (no holding)
+    # must NOT be pruned when a different item is disconnected.
+    from sqlalchemy import select
+    from app.models import FinanceSecurity
+    from app.providers.base import NormalizedInvestmentTransaction
+    store.upsert_finance_item(_item("itmA", products=("transactions",)), access_token="tokA")
+    store.upsert_finance_item(_item("itmB", products=("investments",)), access_token="tokB")
+    store.upsert_finance_security(_sec("s1"))
+    store.upsert_finance_investment_transaction(NormalizedInvestmentTransaction(
+        source="plaid", source_id="it1", item_id="itmB", account_id="brk", security_id="s1",
+        type="buy", quantity=Decimal("0.01"), amount=Decimal("600"), date=date(2026, 6, 10)))
+    assert store.delete_finance_item("itmA") is True
+    with store._session() as s:
+        survivors = {x.source_id for x in s.scalars(select(FinanceSecurity)).all()}
+    assert "s1" in survivors            # still referenced by itmB's investment-tx
+
+
 def test_upsert_and_cascade_slice2_tables():
     from datetime import date
     from app.providers.base import (
@@ -314,6 +332,23 @@ def test_subscriptions_and_bills_split_and_merge():
     assert [b["due_date"] for b in bills] == sorted(b["due_date"] for b in bills)
 
 
+def test_finance_bills_resolves_liability_display_name():
+    # The liability bill's name must resolve to the human account name, not the
+    # opaque Plaid account_id hash. Mirrors finance_holdings' security resolve.
+    from app.providers.base import NormalizedAccount, NormalizedLiability
+    store.upsert_finance_account(NormalizedAccount(
+        source="plaid", source_id="acc_hash_xyz", item_id="itm1", name="Chase Sapphire",
+        official_name=None, mask="1234", type="credit", subtype="credit card",
+        current_balance=Decimal("1200.00"), available_balance=Decimal("0"), iso_currency="USD"))
+    store.upsert_finance_liability(NormalizedLiability(
+        source="plaid", source_id="cc1", item_id="itm1", account_id="acc_hash_xyz",
+        liability_type="credit", minimum_payment=Decimal("35"),
+        next_payment_due_date=date(2026, 7, 15)))
+    bill = next(b for b in store.finance_bills() if b["kind"] == "liability")
+    assert bill["name"] == "Chase Sapphire"       # resolved, not the acc_hash_xyz hash
+    assert bill["sub"] == "credit"
+
+
 def test_investment_transactions_join_securities_newest_first():
     from datetime import date
     from app.providers.base import NormalizedSecurity, NormalizedInvestmentTransaction
@@ -367,5 +402,6 @@ def test_reallocate_clamps_at_zero():
     store.upsert_budgets("2026-06", [{"category": "Dining out", "limit_amount": 50}])
     store.reallocate_budget("2026-06", "Dining out", "Savings", 200)  # more than source has
     budgets = {b["category"]: b for b in store.finance_budgets("2026-06")}
-    assert budgets["Dining out"]["limit_amount"] == 0.0                # clamped, not negative
-    assert budgets["Savings"]["limit_amount"] == 200.0
+    assert budgets["Dining out"]["limit_amount"] == 0.0               # drained, not negative
+    # conserving: dest gains only what the source actually had (50), NOT the 200 asked
+    assert budgets["Savings"]["limit_amount"] == 50.0

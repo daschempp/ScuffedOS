@@ -2058,10 +2058,17 @@ class Store:
                     .where(model.item_id == item_id)
                 ):
                     s.delete(r)
-            # Prune orphan securities (no holding references them any more).
+            # Prune orphan securities (nothing references them any more). A
+            # security can be referenced by a surviving holding OR by a surviving
+            # item's investment transaction — union both so we never prune a
+            # security still in use by a DIFFERENT item.
             live_sec_ids = set(s.scalars(
                 select(FinanceHolding.security_id)
                 .where(FinanceHolding.owner == settings.owner)
+            ).all())
+            live_sec_ids |= set(s.scalars(
+                select(FinanceInvestmentTransaction.security_id)
+                .where(FinanceInvestmentTransaction.owner == settings.owner)
             ).all())
             for sec in s.scalars(
                 select(FinanceSecurity).where(FinanceSecurity.owner == settings.owner)
@@ -2407,6 +2414,11 @@ class Store:
             liabs = s.scalars(
                 select(FinanceLiability).where(FinanceLiability.owner == settings.owner)
             ).all()
+            accts = {
+                a.source_id: a for a in s.scalars(
+                    select(FinanceAccount).where(FinanceAccount.owner == settings.owner)
+                ).all()
+            }
         out = []
         for r in streams:
             if recurring_kind(r.category_primary, r.category_detailed) != "bill":
@@ -2420,8 +2432,10 @@ class Store:
                 "auto": True,
             })
         for l in liabs:
+            acct = accts.get(l.account_id)
             out.append({
-                "name": l.account_id,
+                "name": (acct.name or acct.official_name or acct.mask if acct else None)
+                        or l.account_id,
                 "sub": l.liability_type,
                 "amount": _dec_to_float(l.minimum_payment),
                 "due_date": l.next_payment_due_date.isoformat() if l.next_payment_due_date else None,
@@ -2529,8 +2543,12 @@ class Store:
         to_category's. Local only — never touches a bank."""
         current = {b["category"]: b["limit_amount"] for b in self.finance_budgets(month)}
         amt = Decimal(str(amount))
-        new_from = max(Decimal("0"), Decimal(str(current.get(from_category, 0))) - amt)
-        new_to = max(Decimal("0"), Decimal(str(current.get(to_category, 0))) + amt)
+        from_limit = max(Decimal("0"), Decimal(str(current.get(from_category, 0))))
+        to_limit = Decimal(str(current.get(to_category, 0)))
+        # Conserve: transfer at most what the source holds — never manufacture money.
+        moved = min(max(Decimal("0"), amt), from_limit)
+        new_from = from_limit - moved
+        new_to = to_limit + moved
         self._upsert_one_budget(month, from_category, new_from)
         self._upsert_one_budget(month, to_category, new_to)
         return self.finance_budgets(month)

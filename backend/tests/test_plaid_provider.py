@@ -231,6 +231,47 @@ def test_get_liabilities_auth_error_still_raises():
         p.get_liabilities("tok")
 
 
+def test_get_recurring_feature_absent_returns_empty():
+    http = FakePlaidHTTP(
+        responses={"/transactions/recurring/get": {"error_code": "PRODUCT_NOT_READY",
+                                                   "error_message": "still indexing"}},
+        status={"/transactions/recurring/get": 400})
+    p = _provider(http)
+    assert p.get_recurring("tok") == []
+
+
+def test_get_recurring_auth_error_still_raises():
+    http = FakePlaidHTTP(
+        responses={"/transactions/recurring/get": {"error_code": "ITEM_LOGIN_REQUIRED",
+                                                   "error_message": "reauth"}},
+        status={"/transactions/recurring/get": 400})
+    p = _provider(http)
+    with pytest.raises(PlaidAuthError):
+        p.get_recurring("tok")
+
+
+def test_get_investment_transactions_feature_absent_returns_empty():
+    from datetime import date
+    http = FakePlaidHTTP(
+        responses={"/investments/transactions/get": {"error_code": "PRODUCTS_NOT_SUPPORTED",
+                                                     "error_message": "no investments"}},
+        status={"/investments/transactions/get": 400})
+    p = _provider(http)
+    accts, secs, txns = p.get_investment_transactions("tok", date(2026, 6, 1), date(2026, 6, 30))
+    assert accts == [] and secs == [] and txns == []
+
+
+def test_get_investment_transactions_auth_error_still_raises():
+    from datetime import date
+    http = FakePlaidHTTP(
+        responses={"/investments/transactions/get": {"error_code": "ITEM_LOGIN_REQUIRED",
+                                                     "error_message": "reauth"}},
+        status={"/investments/transactions/get": 400})
+    p = _provider(http)
+    with pytest.raises(PlaidAuthError):
+        p.get_investment_transactions("tok", date(2026, 6, 1), date(2026, 6, 30))
+
+
 def test_plaid_registered_in_real_registry():
     from app import providers
     providers.configure("unset")            # real registry
