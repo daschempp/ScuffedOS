@@ -169,3 +169,48 @@ class PlaidProvider:
                 name = ""
         return NormalizedItem(item_id=item.get("item_id", ""), institution_id=inst_id,
                               institution_name=name, products=products)
+
+    # ---- data ----
+    def get_accounts(self, access_token: str) -> list[NormalizedAccount]:
+        data = self._call(ACCOUNTS_GET, {"access_token": access_token})
+        item_id = (data.get("item") or {}).get("item_id", "")
+        out = []
+        for a in data.get("accounts") or []:
+            bal = a.get("balances") or {}
+            out.append(NormalizedAccount(
+                source="plaid", source_id=a.get("account_id", ""), item_id=item_id,
+                name=a.get("name", ""), official_name=a.get("official_name"),
+                mask=a.get("mask"), type=a.get("type", ""), subtype=a.get("subtype"),
+                current_balance=_dec(bal.get("current")),
+                available_balance=_dec(bal.get("available")),
+                iso_currency=bal.get("iso_currency_code") or "USD",
+            ))
+        return out
+
+    def _txn(self, t: dict) -> NormalizedTransaction:
+        pfc = t.get("personal_finance_category") or {}
+        return NormalizedTransaction(
+            source="plaid", source_id=t.get("transaction_id", ""),
+            account_id=t.get("account_id", ""), item_id=t.get("item_id", ""),
+            name=t.get("name", ""), merchant_name=t.get("merchant_name"),
+            amount=_dec(t.get("amount")) or Decimal("0"),
+            iso_currency=t.get("iso_currency_code") or "USD",
+            date=_date(t.get("date")) or date.today(),
+            authorized_date=_date(t.get("authorized_date")),
+            pending=bool(t.get("pending")),
+            category_primary=pfc.get("primary", ""), category_detailed=pfc.get("detailed", ""),
+            payment_channel=t.get("payment_channel", ""),
+        )
+
+    def sync_transactions(self, access_token: str, cursor: str | None) -> TransactionsDelta:
+        payload = {"access_token": access_token}
+        if cursor:
+            payload["cursor"] = cursor
+        data = self._call(TRANSACTIONS_SYNC, payload)
+        return TransactionsDelta(
+            added=[self._txn(t) for t in data.get("added") or []],
+            modified=[self._txn(t) for t in data.get("modified") or []],
+            removed=[r.get("transaction_id", "") for r in data.get("removed") or []],
+            next_cursor=data.get("next_cursor", ""),
+            has_more=bool(data.get("has_more")),
+        )

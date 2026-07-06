@@ -80,3 +80,40 @@ def test_call_maps_non_auth_error_to_plaiderror():
     p = _provider(http)
     with pytest.raises(PlaidError):
         p.get_item("acc-tok")
+
+
+def test_get_accounts_parses_balances():
+    http = FakePlaidHTTP(responses={"/accounts/get": {
+        "item": {"item_id": "itm1"},
+        "accounts": [{"account_id": "a1", "name": "Checking", "official_name": "Plaid Checking",
+                      "mask": "1234", "type": "depository", "subtype": "checking",
+                      "balances": {"current": 100.5, "available": 90.0, "iso_currency_code": "USD"}}]}})
+    p = _provider(http)
+    accs = p.get_accounts("tok")
+    assert len(accs) == 1
+    assert accs[0].current_balance == Decimal("100.5")
+    assert accs[0].type == "depository" and accs[0].item_id == "itm1"
+
+
+def test_sync_transactions_one_page():
+    http = FakePlaidHTTP(responses={"/transactions/sync": {
+        "added": [{"transaction_id": "t1", "account_id": "a1", "name": "WF",
+                   "merchant_name": "Whole Foods", "amount": 64.2, "iso_currency_code": "USD",
+                   "date": "2026-06-08", "authorized_date": "2026-06-07", "pending": False,
+                   "personal_finance_category": {"primary": "FOOD_AND_DRINK",
+                                                 "detailed": "FOOD_AND_DRINK_GROCERIES"},
+                   "payment_channel": "in store"}],
+        "modified": [], "removed": [{"transaction_id": "t9"}],
+        "next_cursor": "CUR2", "has_more": True}})
+    p = _provider(http)
+    delta = p.sync_transactions("tok", None)
+    assert delta.added[0].amount == Decimal("64.2")
+    assert delta.added[0].category_primary == "FOOD_AND_DRINK"
+    assert delta.removed == ["t9"]
+    assert delta.next_cursor == "CUR2" and delta.has_more is True
+    # cursor omitted on the first call, present on a subsequent one.
+    _, body = http.posts[0]
+    assert "cursor" not in body
+    p.sync_transactions("tok", "CUR2")
+    _, body2 = http.posts[1]
+    assert body2["cursor"] == "CUR2"
