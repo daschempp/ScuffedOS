@@ -103,3 +103,39 @@ def test_finance_transactions_days_filter_excludes_older_than_cutoff():
         modified=[], removed=[], next_cursor="C", has_more=False))
     ids = {t["source_id"] for t in store.finance_transactions(days=10)}
     assert "recent" in ids and "old" not in ids
+
+
+def _sec(source_id="s1", name="Bitcoin", ticker="BTC", type="cryptocurrency"):
+    return NormalizedSecurity(source="plaid", source_id=source_id, name=name,
+                              ticker_symbol=ticker, type=type,
+                              close_price=Decimal("60000"), iso_currency="USD")
+
+
+def _hold(security_id="s1", account_id="acc9", qty="0.05", value="3000"):
+    return NormalizedHolding(source="plaid", item_id="itm1", account_id=account_id,
+                             security_id=security_id, quantity=Decimal(qty),
+                             cost_basis=Decimal("2000"), institution_value=Decimal(value),
+                             institution_price=Decimal("60000"), iso_currency="USD")
+
+
+def test_holdings_join_security_and_flag_crypto():
+    store.upsert_finance_security(_sec())
+    store.upsert_finance_security(_sec("s2", "Apple", "AAPL", "equity"))
+    store.upsert_finance_holding(_hold("s1", value="3000"))
+    store.upsert_finance_holding(_hold("s2", account_id="acc9", value="22640"))
+    holdings = store.finance_holdings()
+    assert len(holdings) == 2
+    btc = next(h for h in holdings if h["ticker"] == "BTC")
+    assert btc["is_crypto"] is True
+    assert btc["value"] == 3000.0
+    assert btc["name"] == "Bitcoin"
+    aapl = next(h for h in holdings if h["ticker"] == "AAPL")
+    assert aapl["is_crypto"] is False
+
+
+def test_holding_upsert_idempotent_by_account_and_security():
+    store.upsert_finance_security(_sec())
+    store.upsert_finance_holding(_hold(value="3000"))
+    store.upsert_finance_holding(_hold(value="3200"))     # same account+security
+    holdings = store.finance_holdings()
+    assert len(holdings) == 1 and holdings[0]["value"] == 3200.0

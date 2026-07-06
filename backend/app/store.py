@@ -2127,6 +2127,80 @@ class Store:
                 q = q.where(FinanceTransaction.category_primary == category)
             return [_finance_transaction_dict(t) for t in s.scalars(q).all()]
 
+    @_retry_integrity
+    def upsert_finance_security(self, sec: NormalizedSecurity) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceSecurity)
+                .where(FinanceSecurity.owner == settings.owner)
+                .where(FinanceSecurity.source == "plaid")
+                .where(FinanceSecurity.source_id == sec.source_id)
+            ).first()
+            if row is None:
+                row = FinanceSecurity(owner=settings.owner, source="plaid",
+                                      source_id=sec.source_id)
+                s.add(row)
+            row.name = sec.name
+            row.ticker_symbol = sec.ticker_symbol
+            row.type = sec.type
+            row.close_price = sec.close_price
+            row.iso_currency = sec.iso_currency
+            row.is_cash_equivalent = sec.is_cash_equivalent
+
+    @_retry_integrity
+    def upsert_finance_holding(self, h: NormalizedHolding) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceHolding)
+                .where(FinanceHolding.owner == settings.owner)
+                .where(FinanceHolding.account_id == h.account_id)
+                .where(FinanceHolding.security_id == h.security_id)
+            ).first()
+            if row is None:
+                row = FinanceHolding(owner=settings.owner, account_id=h.account_id,
+                                     security_id=h.security_id)
+                s.add(row)
+            row.item_id = h.item_id
+            row.quantity = h.quantity
+            row.cost_basis = h.cost_basis
+            row.institution_value = h.institution_value
+            row.institution_price = h.institution_price
+            row.iso_currency = h.iso_currency
+
+    def finance_holdings(self) -> list[dict]:
+        """Holdings joined to their securities, ordered by value desc."""
+        from .config import settings
+        with self._session() as s:
+            secs = {
+                x.source_id: x for x in s.scalars(
+                    select(FinanceSecurity).where(FinanceSecurity.owner == settings.owner)
+                ).all()
+            }
+            rows = s.scalars(
+                select(FinanceHolding)
+                .where(FinanceHolding.owner == settings.owner)
+                .order_by(FinanceHolding.institution_value.desc())
+            ).all()
+            out = []
+            for h in rows:
+                sec = secs.get(h.security_id)
+                out.append({
+                    "id": h.id,
+                    "account_id": h.account_id,
+                    "security_id": h.security_id,
+                    "name": sec.name if sec else h.security_id,
+                    "ticker": (sec.ticker_symbol if sec else None),
+                    "type": (sec.type if sec else ""),
+                    "is_crypto": bool(sec and sec.type == "cryptocurrency"),
+                    "quantity": _dec_to_float(h.quantity),
+                    "value": _dec_to_float(h.institution_value),
+                    "price": _dec_to_float(h.institution_price),
+                    "currency": h.iso_currency,
+                })
+            return out
+
     # ---- snapshots (derive-on-read) ----
     @_retry_integrity
     def upsert_snapshot(self, snap: NormalizedSnapshot) -> dict:
