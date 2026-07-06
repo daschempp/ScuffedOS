@@ -2,6 +2,11 @@
 from datetime import date
 from decimal import Decimal
 
+from app.db import Base, make_engine, make_session_factory
+from app.models import (
+    FinanceAccount, FinanceBudget, FinanceHolding, FinanceItem,
+    FinanceSecurity, FinanceTransaction,
+)
 from app.providers.base import (
     NormalizedAccount,
     NormalizedHolding,
@@ -64,3 +69,35 @@ def test_plaid_provider_is_runtime_checkable():
         def get_holdings(self, access_token): return ([], [], [])
         def remove_item(self, access_token): return None
     assert isinstance(Stub(), PlaidProvider)
+
+
+def test_finance_models_persist_and_roundtrip():
+    engine = make_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = make_session_factory(engine)
+    with Session() as s, s.begin():
+        s.add(FinanceItem(owner="me", source="plaid", source_id="itm1",
+                          access_token="tok", institution_id="ins_1",
+                          institution_name="Chase", products=["transactions"],
+                          status="active"))
+        s.add(FinanceAccount(owner="me", source="plaid", source_id="acc1",
+                             item_id="itm1", name="Checking", type="depository",
+                             subtype="checking", current_balance=Decimal("100.50"),
+                             iso_currency="USD"))
+        s.add(FinanceTransaction(owner="me", source="plaid", source_id="t1",
+                                 account_id="acc1", item_id="itm1", name="WF",
+                                 amount=Decimal("64.20"), iso_currency="USD",
+                                 date=date(2026, 6, 8), category_primary="FOOD_AND_DRINK"))
+        s.add(FinanceSecurity(owner="me", source="plaid", source_id="s1",
+                              name="Bitcoin", ticker_symbol="BTC", type="cryptocurrency",
+                              iso_currency="USD"))
+        s.add(FinanceHolding(owner="me", account_id="acc9", item_id="itm1",
+                             security_id="s1", quantity=Decimal("0.05"),
+                             institution_value=Decimal("3000"), iso_currency="USD"))
+        s.add(FinanceBudget(owner="me", category="Groceries", month="2026-06",
+                            limit_amount=Decimal("400")))
+    with Session() as s:
+        acc = s.query(FinanceAccount).one()
+        assert acc.current_balance == Decimal("100.50")
+        assert s.query(FinanceHolding).one().quantity == Decimal("0.05")
+    engine.dispose()
