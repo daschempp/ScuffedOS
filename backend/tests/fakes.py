@@ -534,3 +534,60 @@ class FakePlaidHTTP:
 
     def get(self, url, headers=None, params=None):   # unused by PlaidProvider
         return _FakeResponse({})
+
+
+class FakePlaidProvider:
+    """Scriptable protocol-level PlaidProvider stand-in (name='plaid') — no
+    network. Installed via providers.configure([FakePlaidProvider(...)]). The
+    finance router/sync call: create_link_token, get_link_public_token,
+    exchange_public_token, get_item, get_accounts, sync_transactions,
+    get_holdings, remove_item. raise_auth drives the needs_reauth path."""
+
+    name = "plaid"
+
+    def __init__(self, *, item=None, accounts=None, delta=None, holdings=None,
+                 public_token="pub-1", access_token="acc-tok", item_id="itm1",
+                 raise_auth=False):
+        from app.providers.base import NormalizedItem, TransactionsDelta
+        self.item = item or NormalizedItem(item_id=item_id, institution_id="ins_1",
+                                           institution_name="Test Bank",
+                                           products=["transactions"])
+        self.accounts = accounts or []
+        self.delta = delta or TransactionsDelta(next_cursor="C1", has_more=False)
+        self.holdings = holdings or ([], [], [])
+        self.public_token = public_token
+        self.access_token = access_token
+        self.item_id = item_id
+        self.raise_auth = raise_auth
+        self.link_kinds: list[str] = []
+        self.removed: list[str] = []
+        self.synced_cursors: list = []
+
+    def create_link_token(self, kind: str) -> dict:
+        self.link_kinds.append(kind)
+        return {"link_token": "link-1", "hosted_link_url": "https://plaid/hl"}
+
+    def get_link_public_token(self, link_token: str):
+        return self.public_token
+
+    def exchange_public_token(self, public_token: str):
+        return self.access_token, self.item_id
+
+    def get_item(self, access_token: str):
+        return self.item
+
+    def get_accounts(self, access_token: str):
+        from app.providers.plaid import PlaidAuthError
+        if self.raise_auth:
+            raise PlaidAuthError("ITEM_LOGIN_REQUIRED")
+        return list(self.accounts)
+
+    def sync_transactions(self, access_token: str, cursor):
+        self.synced_cursors.append(cursor)
+        return self.delta
+
+    def get_holdings(self, access_token: str):
+        return self.holdings
+
+    def remove_item(self, access_token: str) -> None:
+        self.removed.append(access_token)

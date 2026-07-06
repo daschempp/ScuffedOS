@@ -154,3 +154,13 @@ def test_remove_item_posts_access_token():
     p.remove_item("tok")
     url, body = http.posts[0]
     assert url.endswith("/item/remove") and body["access_token"] == "tok"
+
+
+def test_plaid_registered_in_real_registry():
+    from app import providers
+    providers.configure("unset")            # real registry
+    try:
+        p = providers.get("plaid")
+        assert p is not None and p.name == "plaid"
+    finally:
+        providers.configure([])             # restore test isolation

@@ -43,6 +43,11 @@ def _build_real() -> list[OAuthProvider]:
             built.append(MoodleProvider())
         except ImportError:
             pass  # MoodleProvider not present yet (mid-plan) — skip it.
+        try:
+            from .plaid import PlaidProvider
+            built.append(PlaidProvider())
+        except ImportError:
+            pass  # PlaidProvider not present yet (mid-plan) — skip it.
         _real = built
     return _real
 
