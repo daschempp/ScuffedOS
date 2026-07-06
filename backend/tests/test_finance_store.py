@@ -149,3 +149,40 @@ def test_finance_holdings_falls_back_when_security_missing():
     assert h["ticker"] is None
     assert h["type"] == ""
     assert h["is_crypto"] is False
+
+
+def test_budget_bucket_mapping():
+    from app.store import budget_bucket
+    assert budget_bucket("FOOD_AND_DRINK", "FOOD_AND_DRINK_GROCERIES") == "Groceries"
+    assert budget_bucket("FOOD_AND_DRINK", "FOOD_AND_DRINK_RESTAURANT") == "Dining out"
+    assert budget_bucket("RENT_AND_UTILITIES", "") == "Rent & bills"
+    assert budget_bucket("TRANSPORTATION", "") == "Transport"
+    assert budget_bucket("TRANSFER_OUT", "TRANSFER_OUT_SAVINGS") == "Savings"
+    assert budget_bucket("ENTERTAINMENT", "") == "Other"
+
+
+def test_budgets_have_all_categories_with_derived_spend():
+    from app.store import BUDGET_CATEGORIES
+    store.upsert_budgets("2026-06", [{"category": "Groceries", "limit_amount": 400}])
+    # A June grocery outflow (+ amount) and an inflow (should not count as spend).
+    store.apply_transaction_delta(TransactionsDelta(
+        added=[_txn("t1", amount="64.20", d=date(2026, 6, 8),
+                    primary="FOOD_AND_DRINK", detailed="FOOD_AND_DRINK_GROCERIES"),
+               _txn("t2", amount="-500.00", d=date(2026, 6, 5), primary="INCOME")],
+        modified=[], removed=[], next_cursor="C1", has_more=False))
+    budgets = store.finance_budgets("2026-06")
+    assert len(budgets) == len(BUDGET_CATEGORIES)
+    groceries = next(b for b in budgets if b["category"] == "Groceries")
+    assert groceries["limit_amount"] == 400.0
+    assert groceries["spent"] == 64.20
+    assert groceries["color"]  # non-empty tint
+
+
+def test_reallocate_budget_moves_limit():
+    store.upsert_budgets("2026-06", [
+        {"category": "Dining out", "limit_amount": 250},
+        {"category": "Savings", "limit_amount": 600}])
+    store.reallocate_budget("2026-06", "Dining out", "Savings", 120)
+    budgets = {b["category"]: b for b in store.finance_budgets("2026-06")}
+    assert budgets["Dining out"]["limit_amount"] == 130.0
+    assert budgets["Savings"]["limit_amount"] == 720.0

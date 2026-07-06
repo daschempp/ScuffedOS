@@ -81,6 +81,32 @@ from .providers.base import (
     TransactionsDelta,
 )
 
+# ---- finance budget categories (fixed set, slice 1) ----
+BUDGET_CATEGORIES = ["Groceries", "Rent & bills", "Dining out", "Transport", "Savings", "Other"]
+_BUDGET_COLORS = {
+    "Groceries": "clay", "Rent & bills": "honey", "Dining out": "plum",
+    "Transport": "sky", "Savings": "green", "Other": "slate",
+}
+
+
+def budget_bucket(primary: str, detailed: str = "") -> str:
+    """Map a Plaid personal_finance_category to one of the six budget buckets.
+    [confirm-against-live] — real PFC values verified at the live gate."""
+    primary = (primary or "").upper()
+    detailed = (detailed or "").upper()
+    if "GROCERIES" in detailed:
+        return "Groceries"
+    if primary == "FOOD_AND_DRINK":
+        return "Dining out"
+    if primary in ("RENT_AND_UTILITIES", "LOAN_PAYMENTS", "HOME_IMPROVEMENT"):
+        return "Rent & bills"
+    if primary in ("TRANSPORTATION", "TRAVEL"):
+        return "Transport"
+    if primary == "TRANSFER_OUT" and ("SAVINGS" in detailed or "INVESTMENT" in detailed):
+        return "Savings"
+    return "Other"
+
+
 _TASK_FIELDS = {
     "label", "done", "group", "deadline", "prio", "list", "description",
     "subtasks", "labels", "files", "recurrence",
@@ -2200,6 +2226,74 @@ class Store:
                     "currency": h.iso_currency,
                 })
             return out
+
+    def finance_budgets(self, month: str) -> list[dict]:
+        """All six budget categories for `month` (YYYY-MM), each with its local
+        limit and derived spend (Σ outflow amounts mapped to that bucket)."""
+        from .config import settings
+        with self._session() as s:
+            limits = {
+                b.category: b.limit_amount for b in s.scalars(
+                    select(FinanceBudget)
+                    .where(FinanceBudget.owner == settings.owner)
+                    .where(FinanceBudget.month == month)
+                ).all()
+            }
+            txns = s.scalars(
+                select(FinanceTransaction)
+                .where(FinanceTransaction.owner == settings.owner)
+            ).all()
+        spent = {c: Decimal("0") for c in BUDGET_CATEGORIES}
+        for t in txns:
+            if t.date is None or t.date.strftime("%Y-%m") != month:
+                continue
+            if t.amount is None or t.amount <= 0:        # only outflows are "spend"
+                continue
+            spent[budget_bucket(t.category_primary, t.category_detailed)] += t.amount
+        return [
+            {
+                "category": c,
+                "limit_amount": _dec_to_float(limits.get(c, Decimal("0"))),
+                "spent": float(spent[c]),
+                "color": _BUDGET_COLORS[c],
+            }
+            for c in BUDGET_CATEGORIES
+        ]
+
+    @_retry_integrity
+    def _upsert_one_budget(self, month: str, category: str, limit_amount) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceBudget)
+                .where(FinanceBudget.owner == settings.owner)
+                .where(FinanceBudget.category == category)
+                .where(FinanceBudget.month == month)
+            ).first()
+            if row is None:
+                row = FinanceBudget(owner=settings.owner, category=category, month=month)
+                s.add(row)
+            row.limit_amount = Decimal(str(limit_amount))
+
+    def upsert_budgets(self, month: str, budgets: list[dict]) -> list[dict]:
+        for b in budgets:
+            category = b["category"]
+            if category not in BUDGET_CATEGORIES:        # ignore unknown buckets
+                continue
+            self._upsert_one_budget(month, category, b["limit_amount"])
+        return self.finance_budgets(month)
+
+    def reallocate_budget(self, month: str, from_category: str, to_category: str,
+                          amount: float) -> list[dict]:
+        """Logical move: subtract `amount` from from_category's limit, add it to
+        to_category's. Local only — never touches a bank."""
+        current = {b["category"]: b["limit_amount"] for b in self.finance_budgets(month)}
+        amt = Decimal(str(amount))
+        self._upsert_one_budget(month, from_category,
+                                Decimal(str(current.get(from_category, 0))) - amt)
+        self._upsert_one_budget(month, to_category,
+                                Decimal(str(current.get(to_category, 0))) + amt)
+        return self.finance_budgets(month)
 
     # ---- snapshots (derive-on-read) ----
     @_retry_integrity
