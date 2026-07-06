@@ -140,18 +140,21 @@ class PlaidProvider:
         return data
 
     # ---- connect (Hosted Link) ----
-    def create_link_token(self, kind: str) -> dict:
-        products, additional = _PRODUCTS_FOR_KIND.get(kind, _PRODUCTS_FOR_KIND["bank"])
+    def create_link_token(self, kind: str, access_token: str | None = None) -> dict:
         payload = {
             "client_name": "Scuffed OS",
             "language": "en",
             "country_codes": list(settings.plaid_country_codes),
             "user": {"client_user_id": settings.owner},
-            "products": products,
             "hosted_link": {},
         }
-        if additional:
-            payload["additional_consented_products"] = additional
+        if access_token:                    # update mode: repair an existing Item, no products
+            payload["access_token"] = access_token
+        else:
+            products, additional = _PRODUCTS_FOR_KIND.get(kind, _PRODUCTS_FOR_KIND["bank"])
+            payload["products"] = products
+            if additional:
+                payload["additional_consented_products"] = additional
         data = self._call(LINK_TOKEN_CREATE, payload)
         return {
             "link_token": data.get("link_token", ""),

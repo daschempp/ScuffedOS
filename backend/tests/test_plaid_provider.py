@@ -43,6 +43,17 @@ def test_create_link_token_investments_requests_investments():
     assert "additional_consented_products" not in body
 
 
+def test_create_link_token_update_mode_omits_products():
+    http = FakePlaidHTTP(responses={"/link/token/create": {"link_token": "l", "hosted_link_url": "u"}})
+    p = _provider(http)
+    p.create_link_token("bank", access_token="acc-tok")
+    _, body = http.posts[0]
+    assert body["access_token"] == "acc-tok"
+    assert "products" not in body
+    assert "additional_consented_products" not in body
+    assert "hosted_link" in body
+
+
 def test_exchange_public_token():
     http = FakePlaidHTTP(responses={"/item/public_token/exchange": {
         "access_token": "acc-tok", "item_id": "itm1"}})
