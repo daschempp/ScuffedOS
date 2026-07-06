@@ -108,7 +108,7 @@ def test_holdings_read(client):
 
 def test_budgets_get_put_and_reallocate(client):
     got = client.get("/api/finance/budgets?month=2026-06").json()
-    assert len(got) == 6                                    # all six categories present
+    assert len(got) == 10                                   # all ten categories present
     client.put("/api/finance/budgets", json={"month": "2026-06", "budgets": [
         {"category": "Dining out", "limit_amount": 250},
         {"category": "Savings", "limit_amount": 600}]})

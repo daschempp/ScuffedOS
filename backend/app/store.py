@@ -84,16 +84,19 @@ from .providers.base import (
     TransactionsDelta,
 )
 
-# ---- finance budget categories (fixed set, slice 1) ----
-BUDGET_CATEGORIES = ["Groceries", "Rent & bills", "Dining out", "Transport", "Savings", "Other"]
+# ---- finance budget categories (expanded fixed set, slice 2) ----
+BUDGET_CATEGORIES = ["Groceries", "Dining out", "Rent & bills", "Transport",
+                     "Shopping", "Entertainment", "Health", "Travel", "Savings", "Other"]
+# kit.css defines only clay/honey/plum/sky/green (-600) + slate; colors repeat by design.
 _BUDGET_COLORS = {
-    "Groceries": "clay", "Rent & bills": "honey", "Dining out": "plum",
-    "Transport": "sky", "Savings": "green", "Other": "slate",
+    "Groceries": "clay", "Dining out": "plum", "Rent & bills": "honey",
+    "Transport": "sky", "Shopping": "plum", "Entertainment": "sky",
+    "Health": "green", "Travel": "honey", "Savings": "green", "Other": "slate",
 }
 
 
 def budget_bucket(primary: str, detailed: str = "") -> str:
-    """Map a Plaid personal_finance_category to one of the six budget buckets.
+    """Map a Plaid personal_finance_category to one of the ten budget buckets.
     [confirm-against-live] — real PFC values verified at the live gate."""
     primary = (primary or "").upper()
     detailed = (detailed or "").upper()
@@ -103,8 +106,16 @@ def budget_bucket(primary: str, detailed: str = "") -> str:
         return "Dining out"
     if primary in ("RENT_AND_UTILITIES", "LOAN_PAYMENTS", "HOME_IMPROVEMENT"):
         return "Rent & bills"
-    if primary in ("TRANSPORTATION", "TRAVEL"):
+    if primary in ("TRANSPORTATION",):
         return "Transport"
+    if primary == "TRAVEL":
+        return "Travel"
+    if primary in ("GENERAL_MERCHANDISE",):
+        return "Shopping"
+    if primary in ("ENTERTAINMENT",):
+        return "Entertainment"
+    if primary in ("MEDICAL", "PERSONAL_CARE"):
+        return "Health"
     if primary == "TRANSFER_OUT" and ("SAVINGS" in detailed or "INVESTMENT" in detailed):
         return "Savings"
     return "Other"
@@ -2518,10 +2529,10 @@ class Store:
         to_category's. Local only — never touches a bank."""
         current = {b["category"]: b["limit_amount"] for b in self.finance_budgets(month)}
         amt = Decimal(str(amount))
-        self._upsert_one_budget(month, from_category,
-                                Decimal(str(current.get(from_category, 0))) - amt)
-        self._upsert_one_budget(month, to_category,
-                                Decimal(str(current.get(to_category, 0))) + amt)
+        new_from = max(Decimal("0"), Decimal(str(current.get(from_category, 0))) - amt)
+        new_to = max(Decimal("0"), Decimal(str(current.get(to_category, 0))) + amt)
+        self._upsert_one_budget(month, from_category, new_from)
+        self._upsert_one_budget(month, to_category, new_to)
         return self.finance_budgets(month)
 
     _RETIREMENT_SUBTYPES = frozenset({

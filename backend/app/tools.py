@@ -874,7 +874,8 @@ TOOLS: list[dict] = [
      "run": _get_budgets},
     {"name": "set_budget",
      "description": "Set a monthly budget LIMIT for a category (local only; never moves real money). "
-                    "Categories: Groceries, Rent & bills, Dining out, Transport, Savings, Other.",
+                    "Categories: Groceries, Dining out, Rent & bills, Transport, Shopping, "
+                    "Entertainment, Health, Travel, Savings, Other.",
      "input_schema": {"type": "object", "properties": {
          "category": {"type": "string"}, "limit_amount": {"type": "number"},
          "month": {"type": "string"}},

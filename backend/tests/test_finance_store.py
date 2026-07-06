@@ -158,7 +158,7 @@ def test_budget_bucket_mapping():
     assert budget_bucket("RENT_AND_UTILITIES", "") == "Rent & bills"
     assert budget_bucket("TRANSPORTATION", "") == "Transport"
     assert budget_bucket("TRANSFER_OUT", "TRANSFER_OUT_SAVINGS") == "Savings"
-    assert budget_bucket("ENTERTAINMENT", "") == "Other"
+    assert budget_bucket("ENTERTAINMENT", "") == "Entertainment"
 
 
 def test_budgets_have_all_categories_with_derived_spend():
@@ -348,3 +348,24 @@ def test_bills_appear_in_events_between_read_only():
     occ2 = store.events_between(datetime(2026, 8, 1, tzinfo=timezone.utc),
                                datetime(2026, 8, 31, tzinfo=timezone.utc))
     assert [o for o in occ2 if str(o["id"]).startswith("finance:")] == []
+
+
+def test_expanded_budget_categories_and_bucket_mapping():
+    from app.store import BUDGET_CATEGORIES, budget_bucket
+    assert BUDGET_CATEGORIES == ["Groceries", "Dining out", "Rent & bills", "Transport",
+                                 "Shopping", "Entertainment", "Health", "Travel",
+                                 "Savings", "Other"]
+    assert budget_bucket("GENERAL_MERCHANDISE") == "Shopping"
+    assert budget_bucket("ENTERTAINMENT") == "Entertainment"
+    assert budget_bucket("MEDICAL") == "Health"
+    assert budget_bucket("TRAVEL") == "Travel"
+    got = {b["category"] for b in store.finance_budgets("2026-06")}
+    assert len(got) == 10
+
+
+def test_reallocate_clamps_at_zero():
+    store.upsert_budgets("2026-06", [{"category": "Dining out", "limit_amount": 50}])
+    store.reallocate_budget("2026-06", "Dining out", "Savings", 200)  # more than source has
+    budgets = {b["category"]: b for b in store.finance_budgets("2026-06")}
+    assert budgets["Dining out"]["limit_amount"] == 0.0                # clamped, not negative
+    assert budgets["Savings"]["limit_amount"] == 200.0
