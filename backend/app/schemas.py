@@ -631,3 +631,123 @@ class NotificationOut(BaseModel):
 class MoodleConnect(BaseModel):
     token: str
     passport: str | None = None
+
+
+# ---- Finance schemas (M7 Plaid) ---------------------------------------------
+class LinkStart(BaseModel):
+    kind: Literal["bank", "investments"]
+
+
+class LinkStartOut(BaseModel):
+    hosted_link_url: str
+    link_token: str
+
+
+class LinkComplete(BaseModel):
+    link_token: str
+
+
+class FinanceItemOut(BaseModel):
+    item_id: str
+    institution_name: str
+    status: Literal["active", "needs_reauth"]
+    products: List[str]
+    connected_at: datetime
+    last_sync_at: datetime | None
+
+
+class FinanceStatus(BaseModel):
+    connected: bool
+    items: List[FinanceItemOut]
+
+
+class FinanceSummary(BaseModel):
+    month: str
+    balance: float
+    income_month: float
+    spent_month: float
+    income_delta: float
+    spent_delta: float
+
+
+class NetWorthBucket(BaseModel):
+    name: str
+    value: float
+    color: str
+
+
+class NetWorth(BaseModel):
+    buckets: List[NetWorthBucket]
+    total: float
+
+
+class AccountOut(BaseModel):
+    id: int
+    source_id: str
+    item_id: str
+    name: str
+    official_name: str | None
+    mask: str | None
+    type: str
+    subtype: str | None
+    current_balance: float | None
+    available_balance: float | None
+    iso_currency: str
+
+
+class AccountsOut(BaseModel):
+    accounts: List[AccountOut]
+    networth: NetWorth
+
+
+class TransactionOut(BaseModel):
+    id: int
+    source_id: str
+    account_id: str
+    name: str
+    merchant_name: str | None
+    amount: float
+    positive: bool
+    iso_currency: str
+    date: str | None
+    pending: bool
+    category: str
+    when: str
+
+
+class HoldingOut(BaseModel):
+    id: int
+    account_id: str
+    security_id: str
+    name: str
+    ticker: str | None
+    type: str
+    is_crypto: bool
+    quantity: float
+    value: float
+    price: float | None
+    currency: str
+
+
+class BudgetOut(BaseModel):
+    category: str
+    limit_amount: float
+    spent: float
+    color: str
+
+
+class BudgetItem(BaseModel):
+    category: str
+    limit_amount: float
+
+
+class BudgetsUpdate(BaseModel):
+    month: str
+    budgets: List[BudgetItem]
+
+
+class BudgetReallocate(BaseModel):
+    month: str
+    from_category: str
+    to_category: str
+    amount: float
