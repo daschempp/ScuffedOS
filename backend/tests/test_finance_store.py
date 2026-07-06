@@ -139,3 +139,13 @@ def test_holding_upsert_idempotent_by_account_and_security():
     store.upsert_finance_holding(_hold(value="3200"))     # same account+security
     holdings = store.finance_holdings()
     assert len(holdings) == 1 and holdings[0]["value"] == 3200.0
+
+
+def test_finance_holdings_falls_back_when_security_missing():
+    # A holding whose security_id was never registered via upsert_finance_security.
+    store.upsert_finance_holding(_hold("nonesuch", value="500"))
+    h = next(x for x in store.finance_holdings() if x["security_id"] == "nonesuch")
+    assert h["name"] == "nonesuch"
+    assert h["ticker"] is None
+    assert h["type"] == ""
+    assert h["is_crypto"] is False
