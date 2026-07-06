@@ -228,3 +228,34 @@ def test_plaid_registered_in_real_registry():
         assert p is not None and p.name == "plaid"
     finally:
         providers.configure([])             # restore test isolation
+
+
+def test_get_investment_transactions_pages_and_parses():
+    from datetime import date
+    page1 = {"accounts": [{"account_id": "brk", "name": "Coinbase", "type": "investment",
+                           "subtype": "crypto", "balances": {"current": 3000.0, "iso_currency_code": "USD"}}],
+             "securities": [{"security_id": "s1", "name": "Bitcoin", "ticker_symbol": "BTC",
+                             "type": "cryptocurrency", "iso_currency_code": "USD"}],
+             "investment_transactions": [{"investment_transaction_id": "it1", "account_id": "brk",
+                                          "security_id": "s1", "date": "2026-06-10", "name": "BUY BTC",
+                                          "quantity": 0.01, "amount": 600.0, "price": 60000.0,
+                                          "fees": 1.5, "type": "buy", "subtype": "buy",
+                                          "iso_currency_code": "USD"}],
+             "total_investment_transactions": 2}
+    page2 = {"accounts": [], "securities": [],
+             "investment_transactions": [{"investment_transaction_id": "it2", "account_id": "brk",
+                                          "security_id": "s1", "date": "2026-06-11", "name": "SELL BTC",
+                                          "quantity": -0.005, "amount": -300.0, "price": 60000.0,
+                                          "type": "sell", "subtype": "sell", "iso_currency_code": "USD"}],
+             "total_investment_transactions": 2}
+    http = FakePlaidHTTP(responses={"/investments/transactions/get": seq(page1, page2)})
+    p = _provider(http)
+    accts, secs, txns = p.get_investment_transactions("tok", date(2026, 6, 1), date(2026, 6, 30))
+    ids = {t.source_id for t in txns}
+    assert ids == {"it1", "it2"}
+    it1 = next(t for t in txns if t.source_id == "it1")
+    assert it1.type == "buy" and it1.quantity == Decimal("0.01") and it1.amount == Decimal("600")
+    assert secs[0].ticker_symbol == "BTC" and accts[0].source_id == "brk"
+    _, body = http.posts[0]
+    assert body["start_date"] == "2026-06-01" and body["end_date"] == "2026-06-30"
+    assert body["options"]["offset"] == 0

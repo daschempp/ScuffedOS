@@ -29,6 +29,7 @@ from .base import (
     AuthError,
     NormalizedAccount,
     NormalizedHolding,
+    NormalizedInvestmentTransaction,
     NormalizedItem,
     NormalizedLiability,
     NormalizedRecurringStream,
@@ -48,6 +49,7 @@ INSTITUTIONS_GET_BY_ID = "/institutions/get_by_id"
 ACCOUNTS_GET = "/accounts/get"
 TRANSACTIONS_SYNC = "/transactions/sync"
 INVESTMENTS_HOLDINGS_GET = "/investments/holdings/get"
+INVESTMENTS_TRANSACTIONS_GET = "/investments/transactions/get"
 TRANSACTIONS_RECURRING_GET = "/transactions/recurring/get"
 ITEM_REMOVE = "/item/remove"
 LIABILITIES_GET = "/liabilities/get"
@@ -225,31 +227,33 @@ class PlaidProvider:
             has_more=bool(data.get("has_more")),
         )
 
+    def _account(self, a: dict, item_id: str) -> NormalizedAccount:
+        bal = a.get("balances") or {}
+        return NormalizedAccount(
+            source="plaid", source_id=a.get("account_id", ""), item_id=item_id,
+            name=a.get("name", ""), official_name=a.get("official_name"),
+            mask=a.get("mask"), type=a.get("type", ""), subtype=a.get("subtype"),
+            current_balance=_dec(bal.get("current")),
+            available_balance=_dec(bal.get("available")),
+            iso_currency=bal.get("iso_currency_code") or "USD",
+        )
+
+    def _security(self, sec: dict) -> NormalizedSecurity:
+        return NormalizedSecurity(
+            source="plaid", source_id=sec.get("security_id", ""),
+            name=sec.get("name") or "", ticker_symbol=sec.get("ticker_symbol"),
+            type=sec.get("type") or "", close_price=_dec(sec.get("close_price")),
+            iso_currency=sec.get("iso_currency_code") or "USD",
+            is_cash_equivalent=bool(sec.get("is_cash_equivalent")),
+        )
+
     def get_holdings(self, access_token: str) -> tuple[list[NormalizedAccount],
                                                        list[NormalizedSecurity],
                                                        list[NormalizedHolding]]:
         data = self._call(INVESTMENTS_HOLDINGS_GET, {"access_token": access_token})
         item_id = (data.get("item") or {}).get("item_id", "")
-        accounts = []
-        for a in data.get("accounts") or []:
-            bal = a.get("balances") or {}
-            accounts.append(NormalizedAccount(
-                source="plaid", source_id=a.get("account_id", ""), item_id=item_id,
-                name=a.get("name", ""), official_name=a.get("official_name"),
-                mask=a.get("mask"), type=a.get("type", ""), subtype=a.get("subtype"),
-                current_balance=_dec(bal.get("current")),
-                available_balance=_dec(bal.get("available")),
-                iso_currency=bal.get("iso_currency_code") or "USD",
-            ))
-        securities = []
-        for sec in data.get("securities") or []:
-            securities.append(NormalizedSecurity(
-                source="plaid", source_id=sec.get("security_id", ""),
-                name=sec.get("name") or "", ticker_symbol=sec.get("ticker_symbol"),
-                type=sec.get("type") or "", close_price=_dec(sec.get("close_price")),
-                iso_currency=sec.get("iso_currency_code") or "USD",
-                is_cash_equivalent=bool(sec.get("is_cash_equivalent")),
-            ))
+        accounts = [self._account(a, item_id) for a in data.get("accounts") or []]
+        securities = [self._security(sec) for sec in data.get("securities") or []]
         holdings = []
         for h in data.get("holdings") or []:
             holdings.append(NormalizedHolding(
@@ -262,6 +266,43 @@ class PlaidProvider:
                 iso_currency=h.get("iso_currency_code") or "USD",
             ))
         return accounts, securities, holdings
+
+    def get_investment_transactions(self, access_token: str, start: date, end: date) -> tuple[
+        list[NormalizedAccount], list[NormalizedSecurity], list[NormalizedInvestmentTransaction]]:
+        accounts: dict[str, NormalizedAccount] = {}
+        securities: dict[str, NormalizedSecurity] = {}
+        txns: list[NormalizedInvestmentTransaction] = []
+        offset = 0
+        while True:
+            data = self._call(INVESTMENTS_TRANSACTIONS_GET, {
+                "access_token": access_token,
+                "start_date": start.isoformat(), "end_date": end.isoformat(),
+                "options": {"count": 500, "offset": offset},
+            })
+            item_id = (data.get("item") or {}).get("item_id", "")
+            for a in data.get("accounts") or []:
+                acc = self._account(a, item_id)
+                accounts[acc.source_id] = acc
+            for sec in data.get("securities") or []:
+                s = self._security(sec)
+                securities[s.source_id] = s
+            page = data.get("investment_transactions") or []
+            for t in page:
+                txns.append(NormalizedInvestmentTransaction(
+                    source="plaid", source_id=t.get("investment_transaction_id", ""),
+                    item_id=item_id, account_id=t.get("account_id", ""),
+                    security_id=t.get("security_id") or "", type=t.get("type", ""),
+                    subtype=t.get("subtype", ""), name=t.get("name", ""),
+                    quantity=_dec(t.get("quantity")) or Decimal("0"),
+                    amount=_dec(t.get("amount")) or Decimal("0"),
+                    price=_dec(t.get("price")), fees=_dec(t.get("fees")),
+                    date=_date(t.get("date")) or date.today(),
+                    iso_currency=t.get("iso_currency_code") or "USD"))
+            offset += len(page)
+            total = int(data.get("total_investment_transactions") or 0)
+            if not page or offset >= total:
+                break
+        return list(accounts.values()), list(securities.values()), txns
 
     def _recurring_stream(self, s: dict, stream_type: str) -> NormalizedRecurringStream:
         pfc = s.get("personal_finance_category") or {}
