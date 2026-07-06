@@ -117,3 +117,40 @@ def test_sync_transactions_one_page():
     p.sync_transactions("tok", "CUR2")
     _, body2 = http.posts[1]
     assert body2["cursor"] == "CUR2"
+
+
+def test_get_holdings_parses_accounts_securities_holdings():
+    http = FakePlaidHTTP(responses={"/investments/holdings/get": {
+        "accounts": [{"account_id": "brk", "name": "Coinbase", "type": "investment",
+                      "subtype": "crypto", "balances": {"current": 3400.0, "iso_currency_code": "USD"}}],
+        "securities": [{"security_id": "s1", "name": "Bitcoin", "ticker_symbol": "BTC",
+                        "type": "cryptocurrency", "close_price": 60000, "iso_currency_code": "USD",
+                        "is_cash_equivalent": False}],
+        "holdings": [{"account_id": "brk", "security_id": "s1", "quantity": 0.05,
+                      "cost_basis": 2000, "institution_value": 3000, "institution_price": 60000,
+                      "iso_currency_code": "USD"}]}})
+    p = _provider(http)
+    accts, secs, holds = p.get_holdings("tok")
+    assert accts[0].source_id == "brk" and accts[0].type == "investment"
+    assert secs[0].type == "cryptocurrency" and secs[0].ticker_symbol == "BTC"
+    assert holds[0].quantity == Decimal("0.05")
+    assert holds[0].institution_value == Decimal("3000") and holds[0].account_id == "brk"
+
+
+def test_get_link_public_token_returns_none_until_finished():
+    # First poll: no sessions yet. Second poll: a finished session with a public_token.
+    http = FakePlaidHTTP(responses={"/link/token/get": seq(
+        {"link_token": "l", "link_sessions": []},
+        {"link_token": "l", "link_sessions": [
+            {"results": {"item_add_results": [{"public_token": "pub-xyz"}]}}]})})
+    p = _provider(http)
+    assert p.get_link_public_token("l") is None
+    assert p.get_link_public_token("l") == "pub-xyz"
+
+
+def test_remove_item_posts_access_token():
+    http = FakePlaidHTTP(responses={"/item/remove": {}})
+    p = _provider(http)
+    p.remove_item("tok")
+    url, body = http.posts[0]
+    assert url.endswith("/item/remove") and body["access_token"] == "tok"

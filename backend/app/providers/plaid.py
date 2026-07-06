@@ -214,3 +214,56 @@ class PlaidProvider:
             next_cursor=data.get("next_cursor", ""),
             has_more=bool(data.get("has_more")),
         )
+
+    def get_holdings(self, access_token: str) -> tuple[list[NormalizedAccount],
+                                                       list[NormalizedSecurity],
+                                                       list[NormalizedHolding]]:
+        data = self._call(INVESTMENTS_HOLDINGS_GET, {"access_token": access_token})
+        item_id = (data.get("item") or {}).get("item_id", "")
+        accounts = []
+        for a in data.get("accounts") or []:
+            bal = a.get("balances") or {}
+            accounts.append(NormalizedAccount(
+                source="plaid", source_id=a.get("account_id", ""), item_id=item_id,
+                name=a.get("name", ""), official_name=a.get("official_name"),
+                mask=a.get("mask"), type=a.get("type", ""), subtype=a.get("subtype"),
+                current_balance=_dec(bal.get("current")),
+                available_balance=_dec(bal.get("available")),
+                iso_currency=bal.get("iso_currency_code") or "USD",
+            ))
+        securities = []
+        for sec in data.get("securities") or []:
+            securities.append(NormalizedSecurity(
+                source="plaid", source_id=sec.get("security_id", ""),
+                name=sec.get("name") or "", ticker_symbol=sec.get("ticker_symbol"),
+                type=sec.get("type") or "", close_price=_dec(sec.get("close_price")),
+                iso_currency=sec.get("iso_currency_code") or "USD",
+                is_cash_equivalent=bool(sec.get("is_cash_equivalent")),
+            ))
+        holdings = []
+        for h in data.get("holdings") or []:
+            holdings.append(NormalizedHolding(
+                source="plaid", item_id=item_id, account_id=h.get("account_id", ""),
+                security_id=h.get("security_id", ""),
+                quantity=_dec(h.get("quantity")) or Decimal("0"),
+                cost_basis=_dec(h.get("cost_basis")),
+                institution_value=_dec(h.get("institution_value")) or Decimal("0"),
+                institution_price=_dec(h.get("institution_price")),
+                iso_currency=h.get("iso_currency_code") or "USD",
+            ))
+        return accounts, securities, holdings
+
+    def get_link_public_token(self, link_token: str) -> str | None:
+        """Poll /link/token/get for a Hosted-Link public_token. Returns None
+        until the user finishes on Plaid's page. [confirm-against-live] shape."""
+        data = self._call(LINK_TOKEN_GET, {"link_token": link_token})
+        for sess in data.get("link_sessions") or []:
+            results = sess.get("results") or {}
+            for r in results.get("item_add_results") or []:
+                pt = r.get("public_token")
+                if pt:
+                    return pt
+        return None
+
+    def remove_item(self, access_token: str) -> None:
+        self._call(ITEM_REMOVE, {"access_token": access_token})
