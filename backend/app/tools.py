@@ -1,6 +1,6 @@
 """The assistant's tool surface (review D2): read + write over every built
-domain — tasks, memories, calendar, habits, nutrition (M3) — read-only over
-the remaining seeded ones (fitness M4, finance M6).
+domain — tasks, memories, calendar, habits, nutrition (M3), fitness (M4),
+finance (M7, reads + local budget writes only — no Plaid writes).
 
 Each tool pairs a Claude tool definition with an executor. Write executors
 also return an "action card" — the UI's receipt of what actually executed,
@@ -13,7 +13,6 @@ import json
 from datetime import date, datetime, timedelta
 
 from . import email_draft, fitness_sync, food_db, memory_engine, providers, recurrence
-from .seeds import FINANCE_SUMMARY
 from .store import store
 
 _GROUPS = ["Today", "Upcoming", "Someday"]
@@ -536,6 +535,58 @@ def _get_grades(args: dict):
     )
 
 
+# ---- finance / Plaid (real from M7, reads + local budget writes only) -------
+
+def _finance_action(title: str, meta: str) -> dict:
+    return {"icon": "wallet", "title": title, "meta": meta,
+            "cta": "Open finance", "screen": "finance"}
+
+
+def _this_month_str() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _get_finance_summary(args: dict):
+    return store.finance_summary(args.get("month")), _finance_action(
+        "Summary", "Your money this month")
+
+
+def _get_transactions(args: dict):
+    return store.finance_transactions(
+        args.get("days"), args.get("account_id"), args.get("category")
+    ), _finance_action("Transactions", "Recent transactions")
+
+
+def _get_networth(args: dict):
+    return store.finance_networth(), _finance_action("Net worth", "Your net worth")
+
+
+def _get_holdings(args: dict):
+    return store.finance_holdings(), _finance_action("Holdings", "Your investments")
+
+
+def _get_budgets(args: dict):
+    return store.finance_budgets(args.get("month") or _this_month_str()), _finance_action(
+        "Budgets", "Your budgets")
+
+
+def _set_budget(args: dict):
+    month = args.get("month") or _this_month_str()
+    budgets = store.upsert_budgets(month, [{"category": args["category"],
+                                            "limit_amount": args["limit_amount"]}])
+    return {"budgets": budgets}, _finance_action(
+        "Budget updated", f"{args['category']} → ${args['limit_amount']}")
+
+
+def _reallocate_budget(args: dict):
+    month = args.get("month") or _this_month_str()
+    budgets = store.reallocate_budget(month, args["from_category"],
+                                      args["to_category"], args["amount"])
+    return {"budgets": budgets}, _finance_action(
+        "Budget moved", f"${args['amount']} {args['from_category']} → {args['to_category']}")
+
+
 # ---- task reminders (real from M3) -------------------------------------------
 
 def _add_reminder(args: dict):
@@ -549,12 +600,6 @@ def _add_reminder(args: dict):
                          "display": row["display"]}}, _task_action(
         "Reminder set", f"{task['label']} · {row['display']}"
     )
-
-
-def _seed_reader(payload: dict):
-    def read(_args: dict):
-        return payload, None
-    return read
 
 
 _STRING = {"type": "string"}
@@ -728,10 +773,6 @@ TOOLS: list[dict] = [
          "date": {"type": "string", "description": "YYYY-MM-DD, default today."}},
          "additionalProperties": False},
      "run": _log_water},
-    {"name": "get_finance_summary",
-     "description": "Read the finance snapshot (balance, budgets, recent transactions). Call for any money/spending question.",
-     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
-     "run": _seed_reader(FINANCE_SUMMARY)},
     {"name": "get_fitness_today",
      "description": "Read today's WHOOP recovery, sleep and strain plus vitals (HRV, resting HR). Call for any 'how am I doing / how recovered am I' question, and ALWAYS read this first before scheduling training — then use create_event to block a session or create_task to set an intention based on how recovered they are.",
      "input_schema": {"type": "object", "properties": {
@@ -805,6 +846,48 @@ TOOLS: list[dict] = [
          "course_id": {"type": "string"}},
          "additionalProperties": False},
      "run": _get_grades},
+    {"name": "get_finance_summary",
+     "description": "The user's balance, income and spending for a month (default: current).",
+     "input_schema": {"type": "object", "properties": {
+         "month": {"type": "string", "description": "YYYY-MM"}},
+         "additionalProperties": False},
+     "run": _get_finance_summary},
+    {"name": "get_transactions",
+     "description": "Recent bank transactions, optionally filtered by days, account_id, or Plaid category.",
+     "input_schema": {"type": "object", "properties": {
+         "days": {"type": "integer"}, "account_id": {"type": "string"},
+         "category": {"type": "string"}},
+         "additionalProperties": False},
+     "run": _get_transactions},
+    {"name": "get_networth",
+     "description": "Net worth broken down by cash, investments, retirement, crypto and credit/loans.",
+     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+     "run": _get_networth},
+    {"name": "get_holdings",
+     "description": "Investment holdings (stocks, ETFs, crypto) with current values.",
+     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+     "run": _get_holdings},
+    {"name": "get_budgets",
+     "description": "Budget limits and derived spending per category for a month.",
+     "input_schema": {"type": "object", "properties": {
+         "month": {"type": "string"}}, "additionalProperties": False},
+     "run": _get_budgets},
+    {"name": "set_budget",
+     "description": "Set a monthly budget LIMIT for a category (local only; never moves real money). "
+                    "Categories: Groceries, Rent & bills, Dining out, Transport, Savings, Other.",
+     "input_schema": {"type": "object", "properties": {
+         "category": {"type": "string"}, "limit_amount": {"type": "number"},
+         "month": {"type": "string"}},
+         "required": ["category", "limit_amount"], "additionalProperties": False},
+     "run": _set_budget},
+    {"name": "reallocate_budget",
+     "description": "Move budget LIMIT from one category to another (e.g. roll $120 from Dining out into "
+                    "Savings). LOCAL ONLY — never moves real money in a bank. Confirm with the user first.",
+     "input_schema": {"type": "object", "properties": {
+         "from_category": {"type": "string"}, "to_category": {"type": "string"},
+         "amount": {"type": "number"}, "month": {"type": "string"}},
+         "required": ["from_category", "to_category", "amount"], "additionalProperties": False},
+     "run": _reallocate_budget},
 ]
 
 DEFINITIONS = [{k: t[k] for k in ("name", "description", "input_schema")} for t in TOOLS]

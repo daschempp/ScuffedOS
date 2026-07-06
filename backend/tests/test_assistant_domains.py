@@ -133,7 +133,7 @@ def test_search_food_unavailable_tells_model_to_estimate(client):
     assert body["actions"] == []
 
 
-def test_domain_reads_are_real_data_finance_still_sample(client, seeded):
+def test_domain_reads_are_real_data_no_sample_disclaimers(client, seeded):
     monday = date.today() - timedelta(days=date.today().weekday())
     fake = FakeLLM(
         tool_turn(
@@ -149,12 +149,12 @@ def test_domain_reads_are_real_data_finance_still_sample(client, seeded):
 
     results = fake.calls[1]["messages"][-1]["content"]
     by_id = {r["tool_use_id"]: r["content"] for r in results}
-    for built in ("t1", "t2", "t3"):  # M3 domains serve real rows, no disclaimer
+    for built in ("t1", "t2", "t3", "t4"):  # M3 + M7 finance: real rows, no disclaimer
         assert "SAMPLE" not in by_id[built]
     assert len(json.loads(by_id["t1"])["events"]) > 0
     assert json.loads(by_id["t2"])["done_today"] == 2
     assert json.loads(by_id["t3"])["totals"]["kcal"] == 1690
-    assert "SAMPLE DATA" in by_id["t4"]  # finance stays sample until M6
+    assert "balance" in json.loads(by_id["t4"])  # finance is real from M7
 
 
 def test_add_task_reminder_tool_creates_firing_row(client):
