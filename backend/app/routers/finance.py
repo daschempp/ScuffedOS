@@ -72,3 +72,25 @@ def link_complete(payload: LinkComplete) -> dict:
 def status() -> dict:
     """Linked institutions + connection state. No tokens/cursors serialized."""
     return store.finance_status()
+
+
+@router.get("/summary", response_model=FinanceSummary)
+def summary(month: str | None = Query(default=None)) -> dict:
+    return store.finance_summary(month)
+
+
+@router.get("/accounts", response_model=AccountsOut)
+def accounts() -> dict:
+    return {"accounts": store.list_finance_accounts(), "networth": store.finance_networth()}
+
+
+@router.get("/transactions", response_model=list[TransactionOut])
+def transactions(days: int | None = Query(default=None),
+                 account_id: str | None = Query(default=None),
+                 category: str | None = Query(default=None)) -> list[dict]:
+    return store.finance_transactions(days, account_id, category)
+
+
+@router.get("/holdings", response_model=list[HoldingOut])
+def holdings() -> list[dict]:
+    return store.finance_holdings()
