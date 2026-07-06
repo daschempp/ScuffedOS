@@ -26,7 +26,7 @@ has its own doc.
 | [habits.md](habits.md) | Habit definitions + daily completion log / streaks — `/api/habits` | ✅ Built |
 | [nutrition.md](nutrition.md) | Food + water log + macro targets + food DB — `/api/nutrition` | ✅ Built |
 | [fitness.md](fitness.md) | Recovery/strain/sleep + workouts (Whoop sync) | ⬜ Planned |
-| [finance.md](finance.md) | Accounts, budgets, transactions, net worth, subs, bills | ⬜ Planned |
+| [finance.md](finance.md) | Accounts, budgets, transactions, net worth, holdings (subs/bills slice-2) — `/api/finance` | ✅ M7 · live (Plaid, read-only) |
 | [email.md](email.md) | AI triage + draft replies over a synced inbox | ⬜ Planned |
 | [people.md](people.md) | Personal CRM — contacts, cadence, nudges, dates | ⬜ Planned |
 | [school.md](school.md) | Moodle courses, deadlines, grades, announcements (read-only) — `/api/moodle` | 🔨 Building |
