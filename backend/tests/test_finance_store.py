@@ -223,3 +223,20 @@ def test_finance_networth_buckets():
     assert buckets["Retirement"] == 21400.0
     assert buckets["Credit/Loans"] == -1200.0
     assert round(nw["total"], 2) == round(18050 + 3400 + 48200 + 21400 - 1200, 2)
+
+
+def test_delete_finance_item_prunes_holdings_and_orphan_securities():
+    from sqlalchemy import select
+    from app.models import FinanceSecurity
+    store.upsert_finance_item(_item("itm1", products=("investments",)), access_token="tok")
+    store.upsert_finance_account(_acct("brk", type="investment", subtype="brokerage",
+                                       current="3000.00", available="0"))
+    store.upsert_finance_security(_sec("s1"))
+    store.upsert_finance_holding(_hold("s1", account_id="brk", value="3000"))
+    assert len(store.finance_holdings()) == 1
+    assert store.delete_finance_item("itm1") is True
+    # holdings gone, net worth back to zero, and the orphaned security physically pruned
+    assert store.finance_holdings() == []
+    assert store.finance_networth()["total"] == 0.0
+    with store._session() as s:
+        assert s.scalars(select(FinanceSecurity)).all() == []
