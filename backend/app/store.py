@@ -110,6 +110,17 @@ def budget_bucket(primary: str, detailed: str = "") -> str:
     return "Other"
 
 
+def recurring_kind(primary: str, detailed: str = "") -> str:
+    """Split a recurring OUTFLOW stream into 'subscription' vs 'bill' by Plaid PFC.
+    [confirm-against-live] — real PFC values verified at the live gate."""
+    primary = (primary or "").upper()
+    if primary in ("RENT_AND_UTILITIES", "LOAN_PAYMENTS", "INSURANCE"):
+        return "bill"
+    if primary in ("ENTERTAINMENT", "GENERAL_SERVICES"):
+        return "subscription"
+    return "other"
+
+
 _TASK_FIELDS = {
     "label", "done", "group", "deadline", "prio", "list", "description",
     "subtasks", "labels", "files", "recurrence",
@@ -2311,6 +2322,68 @@ class Store:
                     "currency": h.iso_currency,
                 })
             return out
+
+    def finance_subscriptions(self) -> list[dict]:
+        """Active recurring OUTFLOW streams classified 'subscription', by next date."""
+        from .config import settings
+        with self._session() as s:
+            rows = s.scalars(
+                select(FinanceRecurring)
+                .where(FinanceRecurring.owner == settings.owner)
+                .where(FinanceRecurring.stream_type == "outflow")
+                .where(FinanceRecurring.is_active.is_(True))
+            ).all()
+        out = []
+        for r in rows:
+            if recurring_kind(r.category_primary, r.category_detailed) != "subscription":
+                continue
+            out.append({
+                "name": r.merchant_name or r.description,
+                "merchant_name": r.merchant_name,
+                "amount": _dec_to_float(r.average_amount),
+                "frequency": r.frequency,
+                "next_date": r.predicted_next_date.isoformat() if r.predicted_next_date else None,
+                "category": r.category_primary,
+            })
+        out.sort(key=lambda x: (x["next_date"] or "9999-12-31"))
+        return out
+
+    def finance_bills(self) -> list[dict]:
+        """Recurring 'bill' streams merged with liabilities (statement/due), by due date."""
+        from .config import settings
+        with self._session() as s:
+            streams = s.scalars(
+                select(FinanceRecurring)
+                .where(FinanceRecurring.owner == settings.owner)
+                .where(FinanceRecurring.stream_type == "outflow")
+                .where(FinanceRecurring.is_active.is_(True))
+            ).all()
+            liabs = s.scalars(
+                select(FinanceLiability).where(FinanceLiability.owner == settings.owner)
+            ).all()
+        out = []
+        for r in streams:
+            if recurring_kind(r.category_primary, r.category_detailed) != "bill":
+                continue
+            out.append({
+                "name": r.merchant_name or r.description,
+                "sub": r.description,
+                "amount": _dec_to_float(r.average_amount),
+                "due_date": r.predicted_next_date.isoformat() if r.predicted_next_date else None,
+                "kind": "recurring",
+                "auto": True,
+            })
+        for l in liabs:
+            out.append({
+                "name": l.account_id,
+                "sub": l.liability_type,
+                "amount": _dec_to_float(l.minimum_payment),
+                "due_date": l.next_payment_due_date.isoformat() if l.next_payment_due_date else None,
+                "kind": "liability",
+                "auto": False,
+            })
+        out.sort(key=lambda x: (x["due_date"] or "9999-12-31"))
+        return out
 
     def finance_budgets(self, month: str) -> list[dict]:
         """All six budget categories for `month` (YYYY-MM), each with its local

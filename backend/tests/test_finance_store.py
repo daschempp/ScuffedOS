@@ -279,3 +279,36 @@ def test_upsert_and_cascade_slice2_tables():
         assert s.scalars(_select(FinanceRecurring)).all() == []
         assert s.scalars(_select(FinanceLiability)).all() == []
         assert s.scalars(_select(FinanceInvestmentTransaction)).all() == []
+
+
+def test_subscriptions_and_bills_split_and_merge():
+    from datetime import date
+    from app.providers.base import NormalizedRecurringStream, NormalizedLiability
+    store.upsert_finance_recurring(NormalizedRecurringStream(
+        source="plaid", source_id="sub1", item_id="itm1", account_id="a1", stream_type="outflow",
+        description="Netflix", merchant_name="Netflix", category_primary="ENTERTAINMENT",
+        average_amount=Decimal("15.49"), frequency="MONTHLY", predicted_next_date=date(2026, 7, 12),
+        is_active=True))
+    store.upsert_finance_recurring(NormalizedRecurringStream(
+        source="plaid", source_id="bill1", item_id="itm1", account_id="a1", stream_type="outflow",
+        description="Verizon", merchant_name="Verizon", category_primary="RENT_AND_UTILITIES",
+        average_amount=Decimal("70"), frequency="MONTHLY", predicted_next_date=date(2026, 7, 16),
+        is_active=True))
+    store.upsert_finance_recurring(NormalizedRecurringStream(
+        source="plaid", source_id="pay1", item_id="itm1", account_id="a1", stream_type="inflow",
+        description="Payroll", merchant_name="Acme", category_primary="INCOME",
+        average_amount=Decimal("2500"), frequency="BIWEEKLY", is_active=True))
+    store.upsert_finance_liability(NormalizedLiability(
+        source="plaid", source_id="cc1", item_id="itm1", account_id="cc1", liability_type="credit",
+        minimum_payment=Decimal("35"), next_payment_due_date=date(2026, 7, 15)))
+    subs = store.finance_subscriptions()
+    assert [s["name"] for s in subs] == ["Netflix"]           # inflow + bill excluded
+    assert subs[0]["amount"] == 15.49
+    bills = store.finance_bills()
+    names = {b["name"] for b in bills}
+    assert "Verizon" in names                                 # utility recurring stream = bill
+    assert "Netflix" not in names                             # entertainment stream = subscription, not bill
+    # recurring bill + liability both present, sorted by due date
+    assert any(b["kind"] == "recurring" for b in bills)
+    assert any(b["kind"] == "liability" and b["amount"] == 35.0 for b in bills)
+    assert [b["due_date"] for b in bills] == sorted(b["due_date"] for b in bills)
