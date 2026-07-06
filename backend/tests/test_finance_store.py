@@ -92,3 +92,14 @@ def test_finance_transactions_filters():
         modified=[], removed=[], next_cursor="C1", has_more=False))
     assert len(store.finance_transactions(account_id="acc1")) == 1
     assert len(store.finance_transactions(category="TRANSPORTATION")) == 1
+
+
+def test_finance_transactions_days_filter_excludes_older_than_cutoff():
+    from datetime import datetime, timedelta, timezone
+    today = datetime.now(timezone.utc).date()
+    store.apply_transaction_delta(TransactionsDelta(
+        added=[_txn("recent", d=today - timedelta(days=2)),
+               _txn("old", d=today - timedelta(days=40))],
+        modified=[], removed=[], next_cursor="C", has_more=False))
+    ids = {t["source_id"] for t in store.finance_transactions(days=10)}
+    assert "recent" in ids and "old" not in ids
