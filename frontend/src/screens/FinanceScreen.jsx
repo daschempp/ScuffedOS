@@ -215,7 +215,7 @@ export function FinanceScreen() {
 
       {/* slice-2 sample panels (clearly labeled) */}
       <div className="kit-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        <Card title="Subscriptions" action={<Badge color="slate">Sample · slice 2</Badge>}>
+        <Card title="Subscriptions" action={<Badge color="neutral">Sample · slice 2</Badge>}>
           {SAMPLE_SUBS.map((s, i) => (
             <div className="kit-sub" key={i}>
               <span className="kit-sub__logo" style={{ background: s.color }}>{s.letter}</span>
@@ -224,7 +224,7 @@ export function FinanceScreen() {
             </div>
           ))}
         </Card>
-        <Card title="Bills & recurring" action={<Badge color="slate">Sample · slice 2</Badge>}>
+        <Card title="Bills & recurring" action={<Badge color="neutral">Sample · slice 2</Badge>}>
           {SAMPLE_BILLS.map((b, i) => (
             <div className="kit-sub" key={i}>
               <span className="kit-workout__ico" style={{ width: 38, height: 38, background: `var(--${b.tint}-100)`, color: `var(--${b.tint}-600)` }}><Icon name={b.icon} /></span>
