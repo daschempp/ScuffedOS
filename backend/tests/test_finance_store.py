@@ -240,3 +240,42 @@ def test_delete_finance_item_prunes_holdings_and_orphan_securities():
     assert store.finance_networth()["total"] == 0.0
     with store._session() as s:
         assert s.scalars(select(FinanceSecurity)).all() == []
+
+
+def test_upsert_and_cascade_slice2_tables():
+    from datetime import date
+    from app.providers.base import (
+        NormalizedItem, NormalizedRecurringStream, NormalizedLiability,
+        NormalizedInvestmentTransaction,
+    )
+    store.upsert_finance_item(NormalizedItem(item_id="itm1", institution_id="ins_1",
+                                             institution_name="Chase", products=["transactions"]),
+                              access_token="tok")
+    store.upsert_finance_recurring(NormalizedRecurringStream(
+        source="plaid", source_id="str1", item_id="itm1", account_id="a1",
+        stream_type="outflow", description="Netflix", merchant_name="Netflix",
+        category_primary="ENTERTAINMENT", average_amount=Decimal("15.49"),
+        frequency="MONTHLY", predicted_next_date=date(2026, 7, 12)))
+    store.upsert_finance_liability(NormalizedLiability(
+        source="plaid", source_id="cc1", item_id="itm1", account_id="cc1",
+        liability_type="credit", minimum_payment=Decimal("35"),
+        next_payment_due_date=date(2026, 7, 15)))
+    store.upsert_finance_investment_transaction(NormalizedInvestmentTransaction(
+        source="plaid", source_id="it1", item_id="itm1", account_id="brk", security_id="s1",
+        type="buy", quantity=Decimal("0.01"), amount=Decimal("600"), date=date(2026, 6, 10)))
+    # idempotent re-upsert keeps one row
+    store.upsert_finance_recurring(NormalizedRecurringStream(
+        source="plaid", source_id="str1", item_id="itm1", account_id="a1",
+        stream_type="outflow", description="Netflix", merchant_name="Netflix",
+        average_amount=Decimal("16.49"), frequency="MONTHLY"))
+    from sqlalchemy import select as _select
+    from app.models import FinanceRecurring, FinanceLiability, FinanceInvestmentTransaction
+    with store._session() as s:
+        assert len(s.scalars(_select(FinanceRecurring)).all()) == 1        # re-upsert didn't duplicate
+        assert len(s.scalars(_select(FinanceInvestmentTransaction)).all()) == 1
+    # disconnect cascades all three new tables
+    assert store.delete_finance_item("itm1") is True
+    with store._session() as s:
+        assert s.scalars(_select(FinanceRecurring)).all() == []
+        assert s.scalars(_select(FinanceLiability)).all() == []
+        assert s.scalars(_select(FinanceInvestmentTransaction)).all() == []

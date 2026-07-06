@@ -41,7 +41,10 @@ from .models import (
     FinanceAccount,
     FinanceBudget,
     FinanceHolding,
+    FinanceInvestmentTransaction,
     FinanceItem,
+    FinanceLiability,
+    FinanceRecurring,
     FinanceSecurity,
     FinanceTransaction,
     Habit,
@@ -2024,7 +2027,8 @@ class Store:
             if row is None:
                 return False
             s.delete(row)
-            for model in (FinanceAccount, FinanceTransaction, FinanceHolding):
+            for model in (FinanceAccount, FinanceTransaction, FinanceHolding,
+                          FinanceRecurring, FinanceLiability, FinanceInvestmentTransaction):
                 for r in s.scalars(
                     select(model)
                     .where(model.owner == settings.owner)
@@ -2194,6 +2198,87 @@ class Store:
             row.institution_value = h.institution_value
             row.institution_price = h.institution_price
             row.iso_currency = h.iso_currency
+
+    @_retry_integrity
+    def upsert_finance_recurring(self, r) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceRecurring)
+                .where(FinanceRecurring.owner == settings.owner)
+                .where(FinanceRecurring.source == "plaid")
+                .where(FinanceRecurring.source_id == r.source_id)
+            ).first()
+            if row is None:
+                row = FinanceRecurring(owner=settings.owner, source="plaid", source_id=r.source_id)
+                s.add(row)
+            row.item_id = r.item_id
+            row.account_id = r.account_id
+            row.stream_type = r.stream_type
+            row.description = r.description
+            row.merchant_name = r.merchant_name
+            row.category_primary = r.category_primary
+            row.category_detailed = r.category_detailed
+            row.average_amount = r.average_amount
+            row.last_amount = r.last_amount
+            row.frequency = r.frequency
+            row.first_date = r.first_date
+            row.last_date = r.last_date
+            row.predicted_next_date = r.predicted_next_date
+            row.is_active = r.is_active
+            row.status = r.status
+            row.iso_currency = r.iso_currency
+
+    @_retry_integrity
+    def upsert_finance_liability(self, l) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceLiability)
+                .where(FinanceLiability.owner == settings.owner)
+                .where(FinanceLiability.source == "plaid")
+                .where(FinanceLiability.source_id == l.source_id)
+            ).first()
+            if row is None:
+                row = FinanceLiability(owner=settings.owner, source="plaid", source_id=l.source_id)
+                s.add(row)
+            row.item_id = l.item_id
+            row.account_id = l.account_id
+            row.liability_type = l.liability_type
+            row.last_statement_balance = l.last_statement_balance
+            row.minimum_payment = l.minimum_payment
+            row.next_payment_due_date = l.next_payment_due_date
+            row.last_payment_amount = l.last_payment_amount
+            row.last_payment_date = l.last_payment_date
+            row.apr_percentage = l.apr_percentage
+            row.iso_currency = l.iso_currency
+
+    @_retry_integrity
+    def upsert_finance_investment_transaction(self, it) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceInvestmentTransaction)
+                .where(FinanceInvestmentTransaction.owner == settings.owner)
+                .where(FinanceInvestmentTransaction.source == "plaid")
+                .where(FinanceInvestmentTransaction.source_id == it.source_id)
+            ).first()
+            if row is None:
+                row = FinanceInvestmentTransaction(owner=settings.owner, source="plaid",
+                                                   source_id=it.source_id)
+                s.add(row)
+            row.item_id = it.item_id
+            row.account_id = it.account_id
+            row.security_id = it.security_id
+            row.type = it.type
+            row.subtype = it.subtype
+            row.name = it.name
+            row.quantity = it.quantity
+            row.amount = it.amount
+            row.price = it.price
+            row.fees = it.fees
+            row.date = it.date
+            row.iso_currency = it.iso_currency
 
     def finance_holdings(self) -> list[dict]:
         """Holdings joined to their securities, ordered by value desc."""
