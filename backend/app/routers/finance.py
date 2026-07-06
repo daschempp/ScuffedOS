@@ -12,8 +12,9 @@ from fastapi import APIRouter, HTTPException, Query
 from .. import finance_sync, providers
 from ..providers.plaid import PlaidAuthError, PlaidError
 from ..schemas import (
-    AccountsOut, BudgetOut, BudgetReallocate, BudgetsUpdate, FinanceStatus,
-    FinanceSummary, HoldingOut, LinkComplete, LinkStart, LinkStartOut, TransactionOut,
+    AccountsOut, BillOut, BudgetOut, BudgetReallocate, BudgetsUpdate, FinanceStatus,
+    FinanceSummary, HoldingOut, InvestmentTxnOut, LinkComplete, LinkStart, LinkStartOut,
+    ReauthStartOut, SubscriptionOut, TransactionOut,
 )
 from ..store import store
 
@@ -94,6 +95,21 @@ def transactions(days: int | None = Query(default=None),
 @router.get("/holdings", response_model=list[HoldingOut])
 def holdings() -> list[dict]:
     return store.finance_holdings()
+
+
+@router.get("/subscriptions", response_model=list[SubscriptionOut])
+def subscriptions() -> list[dict]:
+    return store.finance_subscriptions()
+
+
+@router.get("/bills", response_model=list[BillOut])
+def bills() -> list[dict]:
+    return store.finance_bills()
+
+
+@router.get("/investment-transactions", response_model=list[InvestmentTxnOut])
+def investment_transactions(days: int | None = Query(default=None)) -> list[dict]:
+    return store.finance_investment_transactions(days)
 
 
 @router.get("/budgets", response_model=list[BudgetOut])
