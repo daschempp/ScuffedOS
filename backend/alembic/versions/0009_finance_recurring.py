@@ -118,6 +118,8 @@ def upgrade() -> None:
                     "finance_investment_transactions", ["item_id"])
     op.create_index(op.f("ix_finance_investment_transactions_account_id"),
                     "finance_investment_transactions", ["account_id"])
+    op.create_index(op.f("ix_finance_investment_transactions_security_id"),
+                    "finance_investment_transactions", ["security_id"])
     op.create_index(op.f("ix_finance_investment_transactions_date"),
                     "finance_investment_transactions", ["date"])
 
