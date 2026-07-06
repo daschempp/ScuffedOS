@@ -566,6 +566,19 @@ def _get_holdings(args: dict):
     return store.finance_holdings(), _finance_action("Holdings", "Your investments")
 
 
+def _get_subscriptions(args: dict):
+    return store.finance_subscriptions(), _finance_action("Subscriptions", "Recurring subscriptions")
+
+
+def _get_bills(args: dict):
+    return store.finance_bills(), _finance_action("Bills", "Upcoming bills")
+
+
+def _get_investment_transactions(args: dict):
+    return store.finance_investment_transactions(args.get("days")), _finance_action(
+        "Investment activity", "Buys, sells and dividends")
+
+
 def _get_budgets(args: dict):
     return store.finance_budgets(args.get("month") or _this_month_str()), _finance_action(
         "Budgets", "Your budgets")
@@ -867,6 +880,19 @@ TOOLS: list[dict] = [
      "description": "Investment holdings (stocks, ETFs, crypto) with current values.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
      "run": _get_holdings},
+    {"name": "get_subscriptions",
+     "description": "The user's recurring subscriptions (name, amount, cadence, next renewal).",
+     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+     "run": _get_subscriptions},
+    {"name": "get_bills",
+     "description": "Upcoming bills and loan/credit-card payments with due dates.",
+     "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+     "run": _get_bills},
+    {"name": "get_investment_transactions",
+     "description": "Investment buys, sells and dividends, optionally limited to the last N days.",
+     "input_schema": {"type": "object", "properties": {
+         "days": {"type": "integer"}}, "additionalProperties": False},
+     "run": _get_investment_transactions},
     {"name": "get_budgets",
      "description": "Budget limits and derived spending per category for a month.",
      "input_schema": {"type": "object", "properties": {
