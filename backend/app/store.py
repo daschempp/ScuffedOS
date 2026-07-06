@@ -2323,6 +2323,40 @@ class Store:
                 })
             return out
 
+    def finance_investment_transactions(self, days: int | None = None) -> list[dict]:
+        """Investment buys/sells/dividends joined to securities, newest first."""
+        from .config import settings
+        with self._session() as s:
+            secs = {
+                x.source_id: x for x in s.scalars(
+                    select(FinanceSecurity).where(FinanceSecurity.owner == settings.owner)
+                ).all()
+            }
+            q = (
+                select(FinanceInvestmentTransaction)
+                .where(FinanceInvestmentTransaction.owner == settings.owner)
+                .order_by(FinanceInvestmentTransaction.date.desc(),
+                          FinanceInvestmentTransaction.id.desc())
+            )
+            if days is not None:
+                cutoff = (utcnow() - timedelta(days=days)).date()
+                q = q.where(FinanceInvestmentTransaction.date >= cutoff)
+            rows = s.scalars(q).all()
+        out = []
+        for t in rows:
+            sec = secs.get(t.security_id)
+            out.append({
+                "type": t.type,
+                "name": t.name or (sec.name if sec else t.security_id),
+                "ticker": (sec.ticker_symbol if sec else None),
+                "quantity": _dec_to_float(t.quantity),
+                "amount": _dec_to_float(t.amount),
+                "price": _dec_to_float(t.price),
+                "date": t.date.isoformat() if t.date else None,
+                "currency": t.iso_currency,
+            })
+        return out
+
     def finance_subscriptions(self) -> list[dict]:
         """Active recurring OUTFLOW streams classified 'subscription', by next date."""
         from .config import settings

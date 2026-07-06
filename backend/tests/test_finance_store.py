@@ -312,3 +312,23 @@ def test_subscriptions_and_bills_split_and_merge():
     assert any(b["kind"] == "recurring" for b in bills)
     assert any(b["kind"] == "liability" and b["amount"] == 35.0 for b in bills)
     assert [b["due_date"] for b in bills] == sorted(b["due_date"] for b in bills)
+
+
+def test_investment_transactions_join_securities_newest_first():
+    from datetime import date
+    from app.providers.base import NormalizedSecurity, NormalizedInvestmentTransaction
+    store.upsert_finance_security(NormalizedSecurity(
+        source="plaid", source_id="s1", name="Bitcoin", ticker_symbol="BTC",
+        type="cryptocurrency", iso_currency="USD"))
+    store.upsert_finance_investment_transaction(NormalizedInvestmentTransaction(
+        source="plaid", source_id="it1", item_id="itm1", account_id="brk", security_id="s1",
+        type="buy", name="BUY BTC", quantity=Decimal("0.01"), amount=Decimal("600"),
+        price=Decimal("60000"), date=date(2026, 6, 10)))
+    store.upsert_finance_investment_transaction(NormalizedInvestmentTransaction(
+        source="plaid", source_id="it2", item_id="itm1", account_id="brk", security_id="s1",
+        type="sell", name="SELL BTC", quantity=Decimal("-0.005"), amount=Decimal("-300"),
+        date=date(2026, 6, 11)))
+    ledger = store.finance_investment_transactions()
+    assert ledger[0]["type"] == "sell"          # newest first (2026-06-11 before 2026-06-10)
+    assert ledger[0]["ticker"] == "BTC"
+    assert ledger[1]["type"] == "buy" and ledger[1]["amount"] == 600.0
