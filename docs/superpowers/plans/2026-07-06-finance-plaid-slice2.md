@@ -910,13 +910,20 @@ def test_upsert_and_cascade_slice2_tables():
         source="plaid", source_id="str1", item_id="itm1", account_id="a1",
         stream_type="outflow", description="Netflix", merchant_name="Netflix",
         average_amount=Decimal("16.49"), frequency="MONTHLY"))
-    assert len(store.finance_investment_transactions()) == 1
-    # disconnect cascades
+    from sqlalchemy import select as _select
+    from app.models import FinanceRecurring, FinanceLiability, FinanceInvestmentTransaction
+    with store._session() as s:
+        assert len(s.scalars(_select(FinanceRecurring)).all()) == 1        # re-upsert didn't duplicate
+        assert len(s.scalars(_select(FinanceInvestmentTransaction)).all()) == 1
+    # disconnect cascades all three new tables
     assert store.delete_finance_item("itm1") is True
-    assert store.finance_investment_transactions() == []
+    with store._session() as s:
+        assert s.scalars(_select(FinanceRecurring)).all() == []
+        assert s.scalars(_select(FinanceLiability)).all() == []
+        assert s.scalars(_select(FinanceInvestmentTransaction)).all() == []
 ```
 
-(Note: `finance_investment_transactions()` is delivered in Task 9; this test also anchors Task 9. If running strictly task-by-task, keep this test but expect it green only after Task 9 — or split the read assertions out. For subagent execution, implement Steps 3–4 here for the upserts + cascade, and the `finance_investment_transactions` read in Task 9.)
+This test is self-contained (direct ORM queries, no dependency on later read methods).
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1015,10 +1022,10 @@ Expected: FAIL (`store has no attribute 'upsert_finance_recurring'`).
                           FinanceRecurring, FinanceLiability, FinanceInvestmentTransaction):
 ```
 
-- [ ] **Step 5: Run test** (expect the read-dependent assertions to pass only after Task 9; the upsert + cascade portions are exercised in Task 9's test too)
+- [ ] **Step 5: Run test to verify it passes**
 
-Run: `cd backend && python -m pytest tests/test_finance_store.py -k slice2 -v`
-Expected: `test_upsert_and_cascade_slice2_tables` PASSES once Task 9 lands (`finance_investment_transactions`). Provisionally, run the upsert path via `python -c` or defer the assertion — see Task 9.
+Run: `cd backend && python -m pytest tests/test_finance_store.py::test_upsert_and_cascade_slice2_tables -v`
+Expected: PASS.
 
 - [ ] **Step 6: Commit**
 
@@ -1205,9 +1212,9 @@ def test_investment_transactions_join_securities_newest_first():
         type="sell", name="SELL BTC", quantity=Decimal("-0.005"), amount=Decimal("-300"),
         date=date(2026, 6, 11)))
     ledger = store.finance_investment_transactions()
-    assert [t["source_id"] if "source_id" in t else t["type"] for t in ledger][0] == "sell"  # newest first
+    assert ledger[0]["type"] == "sell"          # newest first (2026-06-11 before 2026-06-10)
     assert ledger[0]["ticker"] == "BTC"
-    assert ledger[1]["amount"] == 600.0
+    assert ledger[1]["type"] == "buy" and ledger[1]["amount"] == 600.0
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
