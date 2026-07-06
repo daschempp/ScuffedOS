@@ -94,3 +94,42 @@ def transactions(days: int | None = Query(default=None),
 @router.get("/holdings", response_model=list[HoldingOut])
 def holdings() -> list[dict]:
     return store.finance_holdings()
+
+
+@router.get("/budgets", response_model=list[BudgetOut])
+def budgets(month: str | None = Query(default=None)) -> list[dict]:
+    return store.finance_budgets(month or _this_month())
+
+
+@router.put("/budgets", response_model=list[BudgetOut])
+def save_budgets(payload: BudgetsUpdate) -> list[dict]:
+    return store.upsert_budgets(payload.month, [b.model_dump() for b in payload.budgets])
+
+
+@router.post("/budgets/reallocate", response_model=list[BudgetOut])
+def reallocate(payload: BudgetReallocate) -> list[dict]:
+    return store.reallocate_budget(payload.month, payload.from_category,
+                                   payload.to_category, payload.amount)
+
+
+@router.post("/items/{item_id}/disconnect", response_model=FinanceStatus)
+def disconnect(item_id: str) -> dict:
+    """Remove one linked Item at Plaid (best-effort) then delete its local data.
+    Deletion is the user-facing guarantee, so a failed remote remove never blocks it."""
+    provider = providers.get("plaid")
+    token = store.get_finance_item_token(item_id)
+    if token and provider is not None:
+        try:
+            provider.remove_item(token)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning("plaid remove_item failed for %s, deleting anyway: %s", item_id, exc)
+    if not store.delete_finance_item(item_id):
+        raise HTTPException(status_code=404, detail=f"No linked item '{item_id}'")
+    return store.finance_status()
+
+
+@router.post("/sync")
+def sync_now() -> dict:
+    """Run one finance sync pass now. Reads never depend on it."""
+    count = finance_sync.tick()
+    return {"synced": count, "items": [i["item_id"] for i in store.list_finance_items()]}

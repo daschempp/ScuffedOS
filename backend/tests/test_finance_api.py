@@ -104,3 +104,37 @@ def test_holdings_read(client):
     client.post("/api/finance/link/complete", json={"link_token": "l"})
     holds = client.get("/api/finance/holdings").json()
     assert holds[0]["ticker"] == "BTC" and holds[0]["is_crypto"] is True and holds[0]["value"] == 3000.0
+
+
+def test_budgets_get_put_and_reallocate(client):
+    got = client.get("/api/finance/budgets?month=2026-06").json()
+    assert len(got) == 6                                    # all six categories present
+    client.put("/api/finance/budgets", json={"month": "2026-06", "budgets": [
+        {"category": "Dining out", "limit_amount": 250},
+        {"category": "Savings", "limit_amount": 600}]})
+    client.post("/api/finance/budgets/reallocate", json={
+        "month": "2026-06", "from_category": "Dining out", "to_category": "Savings", "amount": 120})
+    budgets = {b["category"]: b for b in client.get("/api/finance/budgets?month=2026-06").json()}
+    assert budgets["Dining out"]["limit_amount"] == 130.0
+    assert budgets["Savings"]["limit_amount"] == 720.0
+
+
+def test_disconnect_removes_item_and_calls_remove(client):
+    from tests.fakes import FakePlaidProvider
+    p = FakePlaidProvider(item=NormalizedItem(item_id="itm1", institution_id="ins_1",
+                                              institution_name="Chase", products=["transactions"]))
+    providers.configure([p])
+    client.post("/api/finance/link/complete", json={"link_token": "l"})
+    res = client.post("/api/finance/items/itm1/disconnect")
+    assert res.status_code == 200 and res.json()["connected"] is False
+    assert p.removed == ["acc-tok"]                         # remote remove attempted
+    # Second disconnect → 404 (already gone).
+    assert client.post("/api/finance/items/itm1/disconnect").status_code == 404
+
+
+def test_sync_endpoint(client):
+    from tests.fakes import FakePlaidProvider
+    providers.configure([FakePlaidProvider()])
+    client.post("/api/finance/link/complete", json={"link_token": "l"})
+    res = client.post("/api/finance/sync")
+    assert res.status_code == 200 and "itm1" in res.json()["items"]
