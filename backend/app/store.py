@@ -485,6 +485,44 @@ def _moodle_deadline_dict(d: MoodleDeadline) -> dict:
     }
 
 
+def _dec_to_float(x) -> float | None:
+    return float(x) if x is not None else None
+
+
+def _finance_account_dict(a: FinanceAccount) -> dict:
+    return {
+        "id": a.id,
+        "source_id": a.source_id,
+        "item_id": a.item_id,
+        "name": a.name,
+        "official_name": a.official_name,
+        "mask": a.mask,
+        "type": a.type,
+        "subtype": a.subtype,
+        "current_balance": _dec_to_float(a.current_balance),
+        "available_balance": _dec_to_float(a.available_balance),
+        "iso_currency": a.iso_currency,
+    }
+
+
+def _finance_transaction_dict(t: FinanceTransaction) -> dict:
+    return {
+        "id": t.id,
+        "source_id": t.source_id,
+        "account_id": t.account_id,
+        "name": t.name,
+        "merchant_name": t.merchant_name,
+        "amount": _dec_to_float(t.amount),
+        "positive": (t.amount is not None and t.amount < 0),   # inflow
+        "iso_currency": t.iso_currency,
+        "date": t.date.isoformat() if t.date else None,
+        "pending": t.pending,
+        "category": t.category_primary,
+        "when": relative_when(_to_utc(datetime(t.date.year, t.date.month, t.date.day)))
+                if t.date else "",
+    }
+
+
 def _finance_item_dict(row: FinanceItem) -> dict:
     """Client-safe Item view — NO access_token, NO cursor."""
     return {
@@ -1982,6 +2020,112 @@ class Store:
     def finance_status(self) -> dict:
         items = self.list_finance_items()
         return {"connected": len(items) > 0, "items": items}
+
+    def _finance_account_row(self, s: Session, source_id: str) -> FinanceAccount | None:
+        from .config import settings
+        return s.scalars(
+            select(FinanceAccount)
+            .where(FinanceAccount.owner == settings.owner)
+            .where(FinanceAccount.source == "plaid")
+            .where(FinanceAccount.source_id == source_id)
+        ).first()
+
+    @_retry_integrity
+    def upsert_finance_account(self, a: NormalizedAccount) -> dict:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = self._finance_account_row(s, a.source_id)
+            if row is None:
+                row = FinanceAccount(owner=settings.owner, source="plaid",
+                                     source_id=a.source_id)
+                s.add(row)
+            row.item_id = a.item_id
+            row.name = a.name
+            row.official_name = a.official_name
+            row.mask = a.mask
+            row.type = a.type
+            row.subtype = a.subtype
+            row.current_balance = a.current_balance
+            row.available_balance = a.available_balance
+            row.iso_currency = a.iso_currency
+            s.flush()
+            return _finance_account_dict(row)
+
+    def list_finance_accounts(self) -> list[dict]:
+        from .config import settings
+        with self._session() as s:
+            rows = s.scalars(
+                select(FinanceAccount)
+                .where(FinanceAccount.owner == settings.owner)
+                .order_by(FinanceAccount.id)
+            ).all()
+            return [_finance_account_dict(a) for a in rows]
+
+    @_retry_integrity
+    def upsert_finance_transaction(self, t: NormalizedTransaction) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceTransaction)
+                .where(FinanceTransaction.owner == settings.owner)
+                .where(FinanceTransaction.source == "plaid")
+                .where(FinanceTransaction.source_id == t.source_id)
+            ).first()
+            if row is None:
+                row = FinanceTransaction(owner=settings.owner, source="plaid",
+                                         source_id=t.source_id)
+                s.add(row)
+            row.account_id = t.account_id
+            row.item_id = t.item_id
+            row.name = t.name
+            row.merchant_name = t.merchant_name
+            row.amount = t.amount
+            row.iso_currency = t.iso_currency
+            row.date = t.date
+            row.authorized_date = t.authorized_date
+            row.pending = t.pending
+            row.category_primary = t.category_primary
+            row.category_detailed = t.category_detailed
+            row.payment_channel = t.payment_channel
+
+    def apply_transaction_delta(self, delta: TransactionsDelta) -> int:
+        """Apply one /transactions/sync page: upsert added+modified by
+        transaction_id, delete removed. Returns rows added+modified."""
+        from .config import settings
+        for t in delta.added:
+            self.upsert_finance_transaction(t)
+        for t in delta.modified:
+            self.upsert_finance_transaction(t)
+        if delta.removed:
+            with self._session() as s, s.begin():
+                for tid in delta.removed:
+                    row = s.scalars(
+                        select(FinanceTransaction)
+                        .where(FinanceTransaction.owner == settings.owner)
+                        .where(FinanceTransaction.source == "plaid")
+                        .where(FinanceTransaction.source_id == tid)
+                    ).first()
+                    if row is not None:
+                        s.delete(row)
+        return len(delta.added) + len(delta.modified)
+
+    def finance_transactions(self, days: int | None = None, account_id: str | None = None,
+                             category: str | None = None) -> list[dict]:
+        from .config import settings
+        with self._session() as s:
+            q = (
+                select(FinanceTransaction)
+                .where(FinanceTransaction.owner == settings.owner)
+                .order_by(FinanceTransaction.date.desc(), FinanceTransaction.id.desc())
+            )
+            if days is not None:
+                cutoff = (utcnow() - timedelta(days=days)).date()
+                q = q.where(FinanceTransaction.date >= cutoff)
+            if account_id is not None:
+                q = q.where(FinanceTransaction.account_id == account_id)
+            if category is not None:
+                q = q.where(FinanceTransaction.category_primary == category)
+            return [_finance_transaction_dict(t) for t in s.scalars(q).all()]
 
     # ---- snapshots (derive-on-read) ----
     @_retry_integrity
