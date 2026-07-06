@@ -80,3 +80,50 @@ def test_disconnect_removes_synced_transactions():
     assert len(store.finance_transactions()) == 1
     assert store.delete_finance_item("itm1") is True
     assert store.finance_transactions() == []   # cascade removed the synced txn
+
+
+def test_tick_syncs_recurring_and_liabilities_on_transactions_item():
+    from datetime import date
+    from tests.fakes import FakePlaidProvider
+    from app.providers.base import NormalizedRecurringStream, NormalizedLiability
+    _seed_item(products=("transactions",))
+    rec = NormalizedRecurringStream(source="plaid", source_id="sub1", item_id="", account_id="a1",
+                                    stream_type="outflow", description="Netflix", merchant_name="Netflix",
+                                    category_primary="ENTERTAINMENT", average_amount=Decimal("15.49"),
+                                    frequency="MONTHLY", predicted_next_date=date(2026, 7, 12))
+    liab = NormalizedLiability(source="plaid", source_id="cc1", item_id="", account_id="cc1",
+                               liability_type="credit", minimum_payment=Decimal("35"),
+                               next_payment_due_date=date(2026, 7, 15))
+    providers.configure([FakePlaidProvider(accounts=[_acct()], recurring=[rec], liabilities=[liab])])
+    finance_sync.tick()
+    assert len(store.finance_subscriptions()) == 1
+    assert any(b["kind"] == "liability" for b in store.finance_bills())
+
+
+def test_tick_syncs_investment_transactions_on_investments_item():
+    from datetime import date
+    from tests.fakes import FakePlaidProvider
+    from app.providers.base import (
+        NormalizedAccount, NormalizedSecurity, NormalizedInvestmentTransaction,
+    )
+    _seed_item(products=("investments",))
+    sec = NormalizedSecurity(source="plaid", source_id="s1", name="BTC", ticker_symbol="BTC",
+                             type="cryptocurrency", iso_currency="USD")
+    it = NormalizedInvestmentTransaction(source="plaid", source_id="it1", item_id="itm1",
+                                         account_id="brk", security_id="s1", type="buy",
+                                         quantity=Decimal("0.01"), amount=Decimal("600"),
+                                         date=date(2026, 6, 10))
+    prov = FakePlaidProvider(holdings=([_acct("brk")], [sec], []),
+                             investment_txns=([_acct("brk")], [sec], [it]))
+    providers.configure([prov])
+    finance_sync.tick()
+    assert len(store.finance_investment_transactions()) == 1
+
+
+def test_tick_survives_liabilities_absent():
+    # Provider returns [] for liabilities (feature absent) — no crash, no rows.
+    from tests.fakes import FakePlaidProvider
+    _seed_item(products=("transactions",))
+    providers.configure([FakePlaidProvider(accounts=[_acct()])])  # recurring/liabilities default []
+    assert finance_sync.tick() >= 1
+    assert store.finance_bills() == []
