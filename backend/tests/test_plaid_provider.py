@@ -29,7 +29,7 @@ def test_create_link_token_bank_requests_transactions(monkeypatch):
     url, body = http.posts[0]
     assert url.endswith("/link/token/create")
     assert body["products"] == ["transactions"]
-    assert body["additional_consented_products"] == ["investments"]
+    assert body["additional_consented_products"] == ["investments", "liabilities"]
     assert "hosted_link" in body
     assert body["client_id"] == "cid" and body["secret"] == "sek"
 
@@ -183,6 +183,41 @@ def test_get_recurring_parses_inflow_and_outflow():
     assert by_id["out1"].predicted_next_date.isoformat() == "2026-07-12"
     _, body = http.posts[0]
     assert body["access_token"] == "tok"
+
+
+def test_get_liabilities_flattens_types():
+    http = FakePlaidHTTP(responses={"/liabilities/get": {"liabilities": {
+        "credit": [{"account_id": "cc1", "last_statement_balance": 1250.0,
+                    "minimum_payment_amount": 35.0, "next_payment_due_date": "2026-07-15",
+                    "last_payment_amount": 200.0, "last_payment_date": "2026-06-10",
+                    "aprs": [{"apr_percentage": 19.99, "apr_type": "purchase_apr"}]}],
+        "mortgage": [{"account_id": "mg1", "next_monthly_payment": 1800.0,
+                      "next_payment_due_date": "2026-07-01"}],
+        "student": []}}})
+    p = _provider(http)
+    liabs = {l.account_id: l for l in p.get_liabilities("tok")}
+    assert liabs["cc1"].liability_type == "credit"
+    assert liabs["cc1"].minimum_payment == Decimal("35")
+    assert liabs["cc1"].apr_percentage == Decimal("19.99")
+    assert liabs["mg1"].liability_type == "mortgage"
+
+
+def test_get_liabilities_feature_absent_returns_empty():
+    http = FakePlaidHTTP(
+        responses={"/liabilities/get": {"error_code": "PRODUCTS_NOT_SUPPORTED",
+                                        "error_message": "no liabilities"}},
+        status={"/liabilities/get": 400})
+    p = _provider(http)
+    assert p.get_liabilities("tok") == []
+
+
+def test_get_liabilities_auth_error_still_raises():
+    http = FakePlaidHTTP(
+        responses={"/liabilities/get": {"error_code": "ITEM_LOGIN_REQUIRED", "error_message": "reauth"}},
+        status={"/liabilities/get": 400})
+    p = _provider(http)
+    with pytest.raises(PlaidAuthError):
+        p.get_liabilities("tok")
 
 
 def test_plaid_registered_in_real_registry():

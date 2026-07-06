@@ -30,6 +30,7 @@ from .base import (
     NormalizedAccount,
     NormalizedHolding,
     NormalizedItem,
+    NormalizedLiability,
     NormalizedRecurringStream,
     NormalizedSecurity,
     NormalizedTransaction,
@@ -49,6 +50,7 @@ TRANSACTIONS_SYNC = "/transactions/sync"
 INVESTMENTS_HOLDINGS_GET = "/investments/holdings/get"
 TRANSACTIONS_RECURRING_GET = "/transactions/recurring/get"
 ITEM_REMOVE = "/item/remove"
+LIABILITIES_GET = "/liabilities/get"
 
 # Plaid error_codes that mean "this Item needs the user to re-auth" -> needs_reauth.
 _AUTH_ERRORCODES = frozenset({
@@ -56,10 +58,16 @@ _AUTH_ERRORCODES = frozenset({
     "ITEM_LOCKED", "USER_SETUP_REQUIRED", "PENDING_EXPIRATION", "ACCESS_NOT_GRANTED",
 })
 
+# Plaid error_codes meaning "this Item doesn't have this product" -> empty pane, not a crash.
+_FEATURE_ABSENT_ERRORCODES = frozenset({
+    "PRODUCTS_NOT_SUPPORTED", "NO_LIABILITY_ACCOUNTS", "NO_ACCOUNTS", "NO_INVESTMENT_ACCOUNTS",
+})
+
 # kind -> (required products, additional_consented_products). A bank consents to
-# investments too, so a bank+brokerage login surfaces holdings.
+# investments and liabilities too, so a bank+brokerage/credit login surfaces
+# holdings and liabilities panes.
 _PRODUCTS_FOR_KIND = {
-    "bank": (["transactions"], ["investments"]),
+    "bank": (["transactions"], ["investments", "liabilities"]),
     "investments": (["investments"], []),
 }
 
@@ -277,6 +285,37 @@ class PlaidProvider:
         data = self._call(TRANSACTIONS_RECURRING_GET, {"access_token": access_token})
         out = [self._recurring_stream(s, "inflow") for s in data.get("inflow_streams") or []]
         out += [self._recurring_stream(s, "outflow") for s in data.get("outflow_streams") or []]
+        return out
+
+    def _liability(self, a: dict, liability_type: str) -> NormalizedLiability:
+        aprs = a.get("aprs") or []
+        apr = _dec((aprs[0] or {}).get("apr_percentage")) if aprs else None
+        due = a.get("next_payment_due_date")
+        pay = a.get("minimum_payment_amount")
+        if pay is None:
+            pay = a.get("next_monthly_payment")           # mortgage naming
+        return NormalizedLiability(
+            source="plaid", source_id=a.get("account_id", ""), item_id="",
+            account_id=a.get("account_id", ""), liability_type=liability_type,
+            last_statement_balance=_dec(a.get("last_statement_balance")),
+            minimum_payment=_dec(pay), next_payment_due_date=_date(due),
+            last_payment_amount=_dec(a.get("last_payment_amount")),
+            last_payment_date=_date(a.get("last_payment_date")),
+            apr_percentage=apr, iso_currency="USD",
+        )
+
+    def get_liabilities(self, access_token: str) -> list[NormalizedLiability]:
+        try:
+            data = self._call(LIABILITIES_GET, {"access_token": access_token})
+        except PlaidError as exc:
+            if any(code in str(exc) for code in _FEATURE_ABSENT_ERRORCODES):
+                return []
+            raise
+        liabs = (data.get("liabilities") or {})
+        out: list[NormalizedLiability] = []
+        for kind in ("credit", "mortgage", "student"):
+            for a in liabs.get(kind) or []:
+                out.append(self._liability(a, kind))
         return out
 
     def get_link_public_token(self, link_token: str) -> str | None:
