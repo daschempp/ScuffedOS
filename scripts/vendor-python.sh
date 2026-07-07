@@ -13,13 +13,11 @@ REQ="$ROOT/backend/requirements.txt"
 
 # Extra deps beyond requirements.txt:
 #   - uvicorn[standard] : compiled extras (uvloop/httptools) for the ASGI server.
-#   - cryptography      : DELIBERATE forward-vendor for Slice 2's secrets vault
-#                          (spec §4.5). Not needed by Slice-1 runtime code, but
-#                          bundling it now means Slice 2 doesn't have to
-#                          re-vendor the whole (~195 MB) interpreter tree just
-#                          to add one wheel. Inert at runtime until Slice 2
-#                          imports it.
-EXTRA_DEPS=("uvicorn[standard]" "cryptography")
+#   - cryptography      : Slice 2's secrets vault (spec §4.5) — AES-256-GCM +
+#                          HKDF. First-class runtime import as of Slice 2.
+#   - keyring           : Slice 2's secrets vault — wraps the single vault key
+#                          in one OS-keychain item in the packaged app.
+EXTRA_DEPS=("uvicorn[standard]" "cryptography" "keyring")
 
 rm -rf "$OUT" "$RAW"
 mkdir -p "$BUILD"
@@ -126,7 +124,7 @@ echo "==> Fail-on-sdist audit: verify all C-extension deps have cp314 arm64 .so"
 "$OUT/bin/python3" - <<'PY'
 import importlib.util, sys
 sys.exit(0 if all(
-    importlib.util.find_spec(m) for m in ("psycopg", "pydantic_core", "fastapi", "uvicorn", "alembic")
+    importlib.util.find_spec(m) for m in ("psycopg", "pydantic_core", "fastapi", "uvicorn", "alembic", "cryptography", "keyring")
 ) else 1)
 PY
 
