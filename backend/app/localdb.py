@@ -133,15 +133,57 @@ def initdb(paths: Paths, user: str) -> None:
     ])
 
 
+def _quote_conf_string(value: str) -> str:
+    """Single-quote a postgresql.conf string value, doubling embedded quotes
+    per the conf-file escaping rule (an unadorned '' inside a '...' literal
+    is a literal single quote)."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+def write_runtime_conf(paths: Paths) -> Path:
+    """Write <pgdata>/scuffedos.conf with the settings that used to live in
+    the `-o` string passed to pg_ctl. Postgres conf files accept single-quoted
+    string values containing spaces, so this is how a spaced run_dir (the
+    default App Support path, e.g. `.../Application Support/ScuffedOS/run`)
+    survives: the `-o` inline-string approach hands the whole string to
+    Postgres, which splits it on whitespace and truncates the path at the
+    first space. Overwritten on every start() so run_dir is always current.
+    """
+    conf_path = paths.pgdata_dir / "scuffedos.conf"
+    conf_path.write_text(
+        f"unix_socket_directories = {_quote_conf_string(str(paths.run_dir))}\n"
+        f"listen_addresses = {_quote_conf_string('127.0.0.1')}\n"
+        f"jit = off\n"
+    )
+    return conf_path
+
+
+def ensure_runtime_conf_included(paths: Paths) -> None:
+    """Append `include_if_exists 'scuffedos.conf'` to postgresql.conf exactly
+    once. scuffedos.conf sits alongside postgresql.conf in pgdata, and
+    include_if_exists resolves relative paths against the including file's
+    own directory, so a bare filename (no path) is correct here."""
+    main_conf = paths.pgdata_dir / "postgresql.conf"
+    directive = "include_if_exists 'scuffedos.conf'"
+    existing = main_conf.read_text() if main_conf.exists() else ""
+    if directive in existing:
+        return
+    with main_conf.open("a") as f:
+        if existing and not existing.endswith("\n"):
+            f.write("\n")
+        f.write(f"{directive}\n")
+
+
 def start(paths: Paths) -> None:
     if is_stale_pidfile(paths.pgdata_dir):
         (paths.pgdata_dir / "postmaster.pid").unlink(missing_ok=True)
+    write_runtime_conf(paths)
+    ensure_runtime_conf_included(paths)
     logfile = paths.logs_dir / "pg.log"
     _run([
         str(pg_bin(paths, "pg_ctl")),
         "-D", str(paths.pgdata_dir),
         "-l", str(logfile),
-        "-o", f"-k {paths.run_dir} -c listen_addresses=127.0.0.1 -c jit=off",
         "-w", "start",
     ])
 
@@ -202,10 +244,21 @@ def run_alembic_upgrade(dsn: str) -> None:
 
     Mirrors tests/test_migrations.py:_make_cfg so a bundled app whose cwd is
     Resources/backend still finds alembic.ini + the versions dir.
+
+    socket_dsn() percent-encodes its host path (see that function's docstring
+    for why), so a spaced App Support path yields a DSN containing a literal
+    `%` (e.g. `...host=/.../Application%20Support/...`). alembic.config.Config
+    stores main options in a stdlib configparser under the hood, whose default
+    (non-raw) interpolation treats a bare `%` as the start of an interpolation
+    token and raises `ValueError: invalid interpolation syntax` on `%20`. `%%`
+    is configparser's documented escape for a literal `%`, so double any `%`
+    in the DSN before handing it to set_main_option; the doubling is undone
+    when configparser later reads the value back out (interpolation resolves
+    `%%` to `%`), so alembic/SQLAlchemy see the correctly percent-encoded DSN.
     """
     cfg = Config(str(BACKEND_DIR / "alembic.ini"))
     cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", dsn)
+    cfg.set_main_option("sqlalchemy.url", dsn.replace("%", "%%"))
     command.upgrade(cfg, "head")
 
 

@@ -109,6 +109,58 @@ def test_start_clears_stale_pidfile_before_pg_ctl(tmp_path, monkeypatch):
     assert any("pg_ctl" in " ".join(map(str, c)) for c in calls)
 
 
+def test_write_runtime_conf_single_quotes_spaced_run_dir(tmp_path):
+    """The default App Support run-dir contains a space
+    (~/Library/Application Support/ScuffedOS/run). Postgres conf files accept
+    single-quoted string values containing spaces, so scuffedos.conf must
+    single-quote unix_socket_directories rather than relying on shell/argv
+    word-splitting (which is exactly what broke the old `-o "-k <path> ..."`
+    approach)."""
+    spaced_root = tmp_path / "Library" / "Application Support" / "ScuffedOS"
+    paths = localdb.resolve_paths(str(spaced_root))
+    localdb.ensure_dirs(paths)
+
+    conf_path = localdb.write_runtime_conf(paths)
+
+    assert conf_path == paths.pgdata_dir / "scuffedos.conf"
+    lines = conf_path.read_text().splitlines()
+    assert f"unix_socket_directories = '{paths.run_dir}'" in lines
+    assert "listen_addresses = '127.0.0.1'" in lines
+    assert "jit = off" in lines
+
+
+def test_start_pg_ctl_argv_has_no_o_flag_with_raw_spaced_path(tmp_path, monkeypatch):
+    """Regression guard for the MF6 ship-blocker: pg_ctl's argv must never
+    carry a `-o` string embedding paths.run_dir unquoted, since Postgres
+    splits the `-o` string on whitespace and truncates a spaced path at the
+    first space (e.g. `.../Application Support/ScuffedOS/run` -> the
+    `-k`-value silently becomes `.../Application`). The settings now live in
+    scuffedos.conf (a conf file, where single-quoted values may contain
+    spaces) instead of the space-splitting `-o` argument."""
+    spaced_root = tmp_path / "Library" / "Application Support" / "ScuffedOS"
+    paths = localdb.resolve_paths(str(spaced_root))
+    localdb.ensure_dirs(paths)
+    calls = []
+    monkeypatch.setattr(localdb.subprocess, "run",
+                        lambda *a, **k: calls.append(a[0]) or _ok())
+
+    localdb.start(paths)
+
+    assert len(calls) == 1
+    argv = [str(a) for a in calls[0]]
+    assert "-o" not in argv
+    assert not any(str(paths.run_dir) in a for a in argv)
+    assert "pg_ctl" in argv[0]
+    assert "-w" in argv and "start" in argv
+
+    # And the settings must actually be reachable via scuffedos.conf, wired
+    # in through postgresql.conf's include_if_exists.
+    conf_text = (paths.pgdata_dir / "scuffedos.conf").read_text()
+    assert f"unix_socket_directories = '{paths.run_dir}'" in conf_text
+    main_conf_text = (paths.pgdata_dir / "postgresql.conf").read_text()
+    assert "include_if_exists 'scuffedos.conf'" in main_conf_text
+
+
 def test_initdb_invokes_binary_with_expected_args(tmp_path, monkeypatch):
     paths = localdb.resolve_paths(str(tmp_path))
     localdb.ensure_dirs(paths)
