@@ -90,6 +90,40 @@ def test_body_excerpt_truncated_to_about_2kb():
     assert len(e.body_excerpt) <= 2048
 
 
+def test_list_message_ids_lists_inbox_without_fetching_bodies():
+    # The list step must issue exactly ONE Gmail call (messages.list) and no
+    # per-message messages.get — that GET is deferred to fetch_message so the
+    # sync can gate it on already-triaged ids.
+    http = FakeGmailHTTP(messages={
+        "m1": gmail_message("m1", from_hdr="a@x.com", subject="s",
+                            date_hdr="Mon, 30 Jun 2026 08:00:00 +0000"),
+        "m2": gmail_message("m2", from_hdr="b@x.com", subject="s",
+                            date_hdr="Mon, 30 Jun 2026 08:00:00 +0000"),
+    })
+    ids = _provider(http).list_message_ids(since=None)
+
+    assert ids == ["m1", "m2"]
+    assert len(http.gets) == 1                     # only the list call, no bodies
+    assert http.gets[0][0].endswith("/messages")
+
+
+def test_fetch_message_gets_single_message_body():
+    http = FakeGmailHTTP(messages={"m1": gmail_message(
+        "m1", thread_id="th1", from_hdr="Priya Rao <priya@x.io>",
+        subject="Re: deadline", date_hdr="Mon, 30 Jun 2026 08:24:00 -0700",
+        snippet="Does the 30th work?", label_ids=["INBOX", "UNREAD"],
+        body_text="Confirming the 30th.")})
+
+    e = _provider(http).fetch_message("m1")
+
+    assert isinstance(e, NormalizedEmail)
+    assert e.source_id == "m1" and e.from_email == "priya@x.io"
+    assert "Confirming" in e.body_excerpt
+    # Exactly one messages.get for the single id (no list call).
+    assert len(http.gets) == 1
+    assert http.gets[0][0].endswith("/messages/m1")
+
+
 def test_fetch_messages_auth_failure_raises_google_auth_error():
     http = FakeGmailHTTP(list_ids=["m1"], status={"/messages": 401})
     with pytest.raises(GoogleAuthError):
