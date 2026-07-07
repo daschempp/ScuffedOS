@@ -11,12 +11,15 @@ and CORS is also enabled for direct access from the dev origin.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextlib
+import os
+import signal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import email_sync, finance_sync, fitness_sync, moodle_sync, reminders
+from . import email_sync, finance_sync, fitness_sync, localdb, moodle_sync, reminders
 from .config import settings
 from .errors import install_error_handlers
 from .routers import (
@@ -34,10 +37,44 @@ from .routers import (
 )
 
 
+_pg_stopped = False
+
+
+def _resources_pgsql_dir() -> "os.PathLike | str":
+    """Where the vendored pgsql tree lives before it's copied to App Support.
+
+    The launcher stub exports RESOURCES_PGSQL_DIR pointing at
+    Contents/Resources/pgsql. If unset (e.g. a manual managed-PG dev run),
+    fall back to a sibling 'pgsql' of the app-support root.
+    """
+    env = os.environ.get("RESOURCES_PGSQL_DIR")
+    if env:
+        return env
+    paths = localdb.resolve_paths(settings.app_support_dir)
+    return paths.pgsql_dir
+
+
+def _maybe_boot_managed_pg() -> None:
+    if not settings.scuffedos_managed_pg:
+        return
+    dsn = localdb.boot(settings, _resources_pgsql_dir())
+    settings.database_url = dsn
+
+
+def _maybe_stop_managed_pg() -> None:
+    global _pg_stopped
+    if _pg_stopped or not settings.scuffedos_managed_pg:
+        return
+    _pg_stopped = True
+    localdb.shutdown(settings)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(_: FastAPI):
     """Start the reminder tick and the fitness/email/moodle-sync loops alongside
-    the server; stop them on shutdown."""
+    the server; stop them on shutdown. In the packaged app (SCUFFEDOS_MANAGED_PG)
+    also boot a local Postgres before any DB-touching loop and stop it last."""
+    _maybe_boot_managed_pg()
     reminder_task: asyncio.Task | None = None
     fitness_task: asyncio.Task | None = None
     email_task: asyncio.Task | None = None
@@ -59,9 +96,28 @@ async def lifespan(_: FastAPI):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+    _maybe_stop_managed_pg()
 
 
 app = FastAPI(title="Scuffed OS API", version="0.1.0", lifespan=lifespan)
+
+# Hard-exit safety net: the lifespan post-yield block does not run on SIGTERM/
+# hard exit, so also stop the managed Postgres from atexit + a SIGTERM handler.
+# Both call the idempotent _maybe_stop_managed_pg (guarded by _pg_stopped), so a
+# clean shutdown never double-stops. On the flag-off dev path these are no-ops.
+atexit.register(_maybe_stop_managed_pg)
+
+
+def _sigterm_stop(_signum, _frame):
+    _maybe_stop_managed_pg()
+    raise SystemExit(0)
+
+
+try:
+    signal.signal(signal.SIGTERM, _sigterm_stop)
+except ValueError:
+    # signal.signal only works on the main thread; TestClient/threaded runs skip it.
+    pass
 
 app.add_middleware(
     CORSMiddleware,
