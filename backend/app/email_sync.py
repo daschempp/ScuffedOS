@@ -90,9 +90,15 @@ def _sync_provider(provider, now: datetime) -> int:
 
     since = acct["last_sync_at"]  # None on a fresh account -> full backfill via list
     count = 0
-    for email in provider.fetch_messages(since):
-        if store.email_triaged(email.source, email.source_id):
+    # List the INBOX ids first, then gate the expensive per-message body fetch
+    # (messages.get) on already-triaged ids: skip ids that are fully triaged, but
+    # still fetch + (re-)triage ids that are new OR stored-but-untriaged
+    # (category IS NULL). This avoids re-transiting full bodies for messages that
+    # already have a category every tick (design §4 step 2).
+    for msg_id in provider.list_message_ids(since):
+        if store.email_triaged(provider.name, msg_id):
             continue
+        email = provider.fetch_message(msg_id)
         category, summary = email_triage.triage(
             email.subject, email.from_name, email.from_email,
             email.snippet, email.body_excerpt,

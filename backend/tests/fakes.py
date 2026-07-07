@@ -359,6 +359,7 @@ class FakeEmailProvider:
         self.injected: list[Tokens | None] = []
         self.fetched_since: list = []
         self.fetched_bodies: list[str] = []
+        self.fetched_ids: list[str] = []      # ids whose body was messages.get'd
 
     # ---- OAuthProvider ----
     def set_tokens(self, tokens):
@@ -398,13 +399,29 @@ class FakeEmailProvider:
         store.delete_email_data(self.name)
 
     # ---- EmailProvider ----
-    def fetch_messages(self, since):
+    def list_message_ids(self, since):
+        """messages.list step: record the cursor, return INBOX ids only (no
+        bodies). Auth failures surface here — the real list GET is the first
+        authed Gmail call each pass."""
         from app.providers.google import GoogleAuthError
 
         if self.raise_auth:
             raise GoogleAuthError("gmail 401")
         self.fetched_since.append(since)
-        return list(self.messages)
+        return [m.source_id for m in self.messages]
+
+    def fetch_message(self, source_id: str):
+        """Per-id messages.get step: record which ids had their body fetched so
+        tests can assert already-triaged ids are NOT re-GET."""
+        self.fetched_ids.append(source_id)
+        for m in self.messages:
+            if m.source_id == source_id:
+                return m
+        raise KeyError(source_id)
+
+    def fetch_messages(self, since):
+        """Batch convenience = list + per-id get (mirrors GoogleProvider)."""
+        return [self.fetch_message(mid) for mid in self.list_message_ids(since)]
 
     def get_message(self, source_id: str) -> str:
         self.fetched_bodies.append(source_id)

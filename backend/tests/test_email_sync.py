@@ -68,6 +68,33 @@ def test_tick_skips_already_stored_ids():
     assert triage.calls == []  # never re-triaged
 
 
+def test_tick_does_not_refetch_body_for_already_triaged_ids():
+    # Three ids in the INBOX list: one already fully triaged, one stored but
+    # untriaged (category IS NULL), one brand new. The sync must GET the body
+    # (messages.get) ONLY for the new + stored-but-untriaged ids — never for
+    # the fully-triaged one (design §4 step 2: get only ids not already stored).
+    prov = FakeEmailProvider(messages=[
+        _email("done"), _email("untriaged"), _email("new"),
+    ])
+    providers.configure([prov])
+    triage = _FakeTriage(("fyi", ["noted"]))
+    email_triage.configure(triage)
+    _connect_google()
+    # 'done' is fully triaged (category set) -> must be skipped, body not fetched.
+    store.upsert_email(_email("done"), "fyi", ["already"])
+    # 'untriaged' is stored but NOT triaged (category None) -> must be re-fetched.
+    store.upsert_email(_email("untriaged"), None, None)
+
+    count = email_sync.tick(now=datetime(2026, 6, 30, 18, tzinfo=timezone.utc))
+
+    # Bodies fetched only for the two that need triage — NOT the triaged one.
+    assert set(prov.fetched_ids) == {"untriaged", "new"}
+    assert "done" not in prov.fetched_ids
+    # Triage ran exactly for those two; 'done' was never re-triaged.
+    assert len(triage.calls) == 2
+    assert count == 2
+
+
 def test_tick_stores_untriaged_message_when_triage_returns_none():
     prov = FakeEmailProvider(messages=[_email("m1")])
     providers.configure([prov])

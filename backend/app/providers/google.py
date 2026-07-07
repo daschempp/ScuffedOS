@@ -345,27 +345,40 @@ class GoogleProvider:
             raise GoogleAuthError(f"Gmail POST {url} returned {res.status_code}")
         return res.json() or {}
 
-    def fetch_messages(self, since: datetime | None) -> list[NormalizedEmail]:
-        """List the INBOX (maxResults=email_backfill_count) then map each message
-        (headers + snippet + a bounded plain-text body excerpt) to a
-        NormalizedEmail. `since` is accepted for signature parity with the pull
-        providers; Gmail idempotency is handled by store.email_exists in the
-        sync (list returns the newest INBOX ids each pass). Auth/transport
-        failures raise GoogleAuthError so the sync flips needs_reauth."""
+    def list_message_ids(self, since: datetime | None) -> list[str]:
+        """The messages.list step: list the INBOX (maxResults=email_backfill_count)
+        and return the message ids ONLY — no per-message body fetch. Split out
+        from fetch_messages so the sync can gate the expensive messages.get on
+        already-triaged ids (design §4 step 2). `since` is accepted for signature
+        parity with the pull providers (Gmail idempotency is handled by the sync
+        via store.email_triaged; list returns the newest INBOX ids each pass).
+        Auth/transport failures raise GoogleAuthError so the sync flips
+        needs_reauth."""
         listing = self._get(
             f"{GMAIL_API_BASE}/messages",
             params={"labelIds": "INBOX", "maxResults": settings.email_backfill_count},
         )
-        out: list[NormalizedEmail] = []
-        for ref in listing.get("messages") or []:
-            msg_id = ref.get("id")
-            if not msg_id:
-                continue
-            msg = self._get(
-                f"{GMAIL_API_BASE}/messages/{msg_id}", params={"format": "full"}
-            )
-            out.append(self._to_email(msg))
-        return out
+        return [
+            ref["id"] for ref in (listing.get("messages") or []) if ref.get("id")
+        ]
+
+    def fetch_message(self, source_id: str) -> NormalizedEmail:
+        """The per-id messages.get step: full-format GET of one message mapped to
+        a NormalizedEmail (headers + snippet + a bounded plain-text body excerpt).
+        Called by the sync only for ids that are new or stored-but-untriaged, so
+        already-triaged messages never re-transit their full body. Auth/transport
+        failures raise GoogleAuthError so the sync flips needs_reauth."""
+        msg = self._get(
+            f"{GMAIL_API_BASE}/messages/{source_id}", params={"format": "full"}
+        )
+        return self._to_email(msg)
+
+    def fetch_messages(self, since: datetime | None) -> list[NormalizedEmail]:
+        """Batch convenience = list + per-id get for every INBOX id. Used by the
+        live smoke test and the provider unit tests; the sync engine instead
+        drives list_message_ids + fetch_message so it can skip messages.get for
+        already-triaged ids. Auth/transport failures raise GoogleAuthError."""
+        return [self.fetch_message(msg_id) for msg_id in self.list_message_ids(since)]
 
     @staticmethod
     def _to_email(msg: dict) -> NormalizedEmail:
