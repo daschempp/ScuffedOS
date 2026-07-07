@@ -42,6 +42,10 @@ below come from it. **All four are feasible for an unsigned app; none is a hard 
 - No PyInstaller/Nuitka single-binary freeze of the backend.
 - No new product features. M8 is **packaging + a Settings surface only.**
 - No rewrite of the store to SQLite / no swap of Mem0's vector backend.
+- **Apple-Silicon (arm64) only.** The vendored Postgres + Python binaries are arm64; the `.app`
+  will not run on an Intel Mac. (Accepted 2026-07-07 — the target machine is Apple Silicon.)
+- **No macOS CI build job in M8.** The `.app` is built by a **local** script; a CI build job is a
+  deferred later add (§8).
 
 ---
 
@@ -52,7 +56,7 @@ below come from it. **All four are feasible for an unsigned app; none is a hard 
 | 1 | Ship scope | **Personal daily-driver, macOS (arm64), unsigned.** |
 | 2 | Backend runtime | **Tauri sidecar, managed Python env** (vendored relocatable CPython, no freeze). |
 | 3 | Data layer | **App-managed local Postgres** (vendored PG17 + pgvector; the **Python sidecar owns its lifecycle**). |
-| 4 | Secrets/config | **In-app Settings screen** (UX as chosen) backed by a **machine-bound AES-256-GCM encrypted vault** — *not* raw Keychain (see §7 for why the store changed). |
+| 4 | Secrets/config | **In-app Settings screen** (UX as chosen) backed by a **machine-bound AES-256-GCM encrypted vault** — *not* raw Keychain (see §7); slice 2 also wraps the single vault key in one Keychain item (OS-managed at-rest). |
 | 5 | Sequencing | **Merge M7 first, then branch** `m8-ship-tauri` from the complete `main`. |
 
 ---
@@ -186,8 +190,10 @@ interpreter and `exec Resources/py/bin/python3 -m uvicorn app.main:app --host 12
   view which integrations are configured and paste/update keys; first-run onboarding nudges the
   user to add keys. A "re-authenticate integrations" recovery path handles vault decrypt failure
   (e.g. `IOPlatformUUID` changed after a hardware move) instead of crashing.
-- *Optional later upgrade (not required for M8):* wrap only the 32-byte vault key in a single
-  `keyring` item to get OS-managed at-rest protection at the cost of exactly one prompt per update.
+- **Slice-2 hardening (in scope, decided 2026-07-07):** wrap only the 32-byte vault key in a
+  single `keyring` item so the OS encrypts the master key at rest. This costs at most **one**
+  "Always Allow" prompt per app update (not the N-item re-prompt storm of raw per-secret Keychain
+  use, §7); the vault file remains the store of record, Keychain guards only the wrapping key.
 
 ### 4.6 Frontend changes — minimal
 
@@ -254,7 +260,8 @@ survives rebuilds, fully offline, single-user-appropriate. This is the one place
 
 ## 8. Build / packaging pipeline
 
-A new `scripts/` + CI job (macOS arm64 runner) produces the `.app`:
+A new **local build script** (`scripts/build-app.sh`, run on an Apple-Silicon Mac) produces the
+`.app`. **CI stays ubuntu** (backend tests + frontend build) unchanged — no macOS runner in M8.
 
 1. **Vendor Postgres+pgvector:** download pinned theseus PG17.10.0, build pgvector 0.8.4 against it,
    ad-hoc re-sign `vector.dylib`, stamp + cache the combined tarball. Verify with `otool -L`
@@ -263,10 +270,15 @@ A new `scripts/` + CI job (macOS arm64 runner) produces the `.app`:
    `backend/requirements.txt` (+ `uvicorn[standard]`, `cryptography`), prune, ad-hoc re-sign touched
    Mach-O, `otool -L` check. Fail the build if any dep compiled from sdist.
 3. **Frontend:** `npm ci && npm run build`.
-4. **Tauri bundle:** `cargo tauri build` (no signing identity) → `ScuffedOS.app`.
-5. **Clean-machine verification (spike, see §10):** on a second Mac / fresh user account with
+4. **Icon:** render `frontend/public/assets/logo-mark.svg` → 1024px PNG → `iconutil` `.icns`; wire
+   as the Tauri bundle icon (reuse the existing brand mark — decided 2026-07-07).
+5. **Tauri bundle:** `cargo tauri build` (no signing identity) → `ScuffedOS.app`.
+6. **Clean-machine verification (spike, see §10):** on a second Mac / fresh user account with
    networking **disabled**, right-click▸Open, confirm uvicorn boots, `alembic upgrade` runs, and a
    pgvector/Mem0 query works — **zero network calls.**
+
+*Deferred:* a macOS-arm64 **CI build job** that runs this script and uploads the `.app` artifact —
+added later only if downloadable/reproducible builds are wanted; M8 builds locally.
 
 Pinned tools/versions (as of 2026-07): PostgreSQL **17.10.0** (theseus), pgvector **0.8.4**,
 CPython **3.14.5** (python-build-standalone via **uv 0.11.19**), `py-app-standalone`, Tauri **v2** +
@@ -301,8 +313,10 @@ Big milestone → two slices, matching the project's pattern. The two spikes are
 because they de-risk the core value prop (a reliable double-click) before any polish.
 
 **Slice 1 — "It launches and works."**
-- Tauri v2 scaffold (`src-tauri/`), Rust toolchain in CI, launcher stub, capabilities.
+- Tauri v2 scaffold (`src-tauri/`), Rust toolchain (local), launcher stub, capabilities.
 - Vendored Python env + vendored PG17/pgvector build scripts.
+- `scripts/build-app.sh` (local, Apple-Silicon): vendor PG+Python, generate `.icns` from
+  `logo-mark.svg`, `cargo tauri build` → `ScuffedOS.app` (§8).
 - `app/localdb.py` (managed-Postgres lifecycle) behind `SCUFFEDOS_MANAGED_PG`; `/health` endpoint.
 - Health-gated hidden window, dynamic port handoff, teardown (Python-owned + Rust backstop).
 - Frontend API-base switch to the Tauri port (Vite-proxy fallback in dev).
@@ -313,9 +327,11 @@ because they de-risk the core value prop (a reliable double-click) before any po
 **Slice 2 — "Settings, secrets & first-run polish."**
 - `app/secrets.py` encrypted vault + config seam (vault → env fallback), migrate integration key
   reads onto it.
-- `GET/PUT /api/settings/secrets` + `SettingsScreen.jsx` (icon, sidebar, first-run onboarding,
+- **Keychain-wrapped vault key:** wrap the single vault master key in one `keyring` item so the OS
+  encrypts the master key at rest (≤1 prompt per app update; §4.5).
+- `GET/PUT /api/settings/secrets` + `SettingsScreen.jsx` (sidebar entry, first-run onboarding,
   re-auth recovery path).
-- App icon/branding, quit/relaunch UX, diagnostic error window, `docs/ship.md` + doc-fix of the
+- Branding polish, quit/relaunch UX, diagnostic error window, `docs/ship.md` + doc-fix of the
   stale "M7 Tauri" references.
 - **DoD:** first-run user with an empty vault can enter keys in Settings and use every integration;
   keys survive an app update (no re-prompt storm); acceptance smoke recorded; suite green.
@@ -348,9 +364,17 @@ because they de-risk the core value prop (a reliable double-click) before any po
   local encrypted-vault storage of tokens is worth a line — a small privacy "wave" via the
   `publish-privacy-policy` skill if the effective date is bumped.
 
-## 13. Open questions
+## 13. Resolved (2026-07-07 review)
 
-- **CI runner:** does the existing GitHub Actions setup have (or can it add) a macOS **arm64** runner
-  for the vendoring + `cargo tauri build` job? (Cross-building the arm64 `.app` from Intel is out of scope.)
-- **Icon/branding source:** reuse `design-system/` assets for the `.app` icon, or new art?
-- **Whether to include the optional Keychain-wrapped-key upgrade** in slice 2 or defer entirely.
+The three open questions from the first draft are settled:
+
+- **Build/CI:** `.app` is built by a **local** `scripts/build-app.sh` on the Apple-Silicon Mac; CI
+  stays ubuntu (tests + frontend build). A macOS-arm64 CI build job is **deferred** (§8) — not needed
+  for a personal daily-driver, easy to add later for downloadable artifacts.
+- **Icon:** reuse the existing brand **`logo-mark.svg` → `.icns`** at build time (§8 step 4). No new art.
+- **Keychain-wrapped vault key:** **in scope for slice 2** (§4.5, §10) — OS-managed at-rest encryption
+  of the single vault key, ≤1 prompt per update.
+
+Accepted assumptions (§1 non-goals): **Apple-Silicon-only** (won't run on Intel); **~250–350 MB**
+bundle (§11). Remaining build-time verification (not a design question): confirm cp314 arm64 wheels
+exist for every C-extension dep so first-run stays fully offline (§4.3).
