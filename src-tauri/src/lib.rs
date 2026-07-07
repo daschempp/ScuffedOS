@@ -113,6 +113,15 @@ fn html_escape(s: &str) -> String {
 /// The health-gate timeout is one-shot, but guard against a double-open anyway:
 /// if a "diagnostic" window already exists (e.g. a future retry path), focus it
 /// instead of stacking a second identical window.
+///
+/// Delivery: the HTML is written to a temp file and loaded via a `file:` URL
+/// (`WebviewUrl::External`). A `data:` URL would require the `webview-data-url`
+/// Cargo feature (not enabled), so `WebviewUrl::App("data:…")` / any `data:`
+/// scheme is rejected at runtime by `prepare_webview`
+/// (tauri-2.11.5/src/manager/webview.rs:477-482 →
+/// `Err(InvalidWebviewUrl(..))`). The `file:` scheme reaches no feature gate
+/// there and flows through `WebviewUrl::External` (webview.rs:462-471) to the
+/// success path (`pending.url = url.to_string()`, webview.rs:500).
 fn show_diagnostic_window(app: &tauri::AppHandle, backend_tail: &str, pg_tail: &str) {
     use tauri::Manager;
     if let Some(existing) = app.get_webview_window("diagnostic") {
@@ -135,23 +144,38 @@ fn show_diagnostic_window(app: &tauri::AppHandle, backend_tail: &str, pg_tail: &
         html_escape(backend_tail),
         html_escape(pg_tail),
     );
-    let url = tauri::WebviewUrl::App(format!("data:text/html,{}", urlencoding_encode(&html)).into());
-    let _ = tauri::WebviewWindowBuilder::new(app, "diagnostic", url)
+
+    // Write the page to a temp file and load it via a file: URL. If the write or
+    // URL construction fails, fall back to showing the main window so the user
+    // is never left staring at nothing.
+    let html_path = std::env::temp_dir().join("scuffedos-startup-problem.html");
+    let url = match std::fs::write(&html_path, html.as_bytes())
+        .map_err(|e| format!("write diagnostic HTML to {}: {e}", html_path.display()))
+        .and_then(|()| {
+            tauri::Url::from_file_path(&html_path)
+                .map_err(|()| format!("build file: URL from {}", html_path.display()))
+        }) {
+        Ok(url) => url,
+        Err(e) => {
+            eprintln!("[shell] failed to prepare diagnostic window: {e}");
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+            }
+            return;
+        }
+    };
+
+    if let Err(e) = tauri::WebviewWindowBuilder::new(app, "diagnostic", tauri::WebviewUrl::External(url))
         .title("ScuffedOS — startup problem")
         .inner_size(720.0, 560.0)
-        .build();
-}
-
-/// Minimal percent-encoding for the data: URL (avoids a new crate dependency).
-fn urlencoding_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 2);
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            _ => out.push_str(&format!("%{:02X}", b)),
+        .build()
+    {
+        eprintln!("[shell] failed to open diagnostic window: {e}");
+        // Last-resort fallback: surface the main window rather than nothing.
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.show();
         }
     }
-    out
 }
 
 #[tauri::command]
