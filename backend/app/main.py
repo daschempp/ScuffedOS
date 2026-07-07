@@ -89,3 +89,14 @@ app.include_router(finance.router)
 @app.get("/api/health", tags=["meta"])
 def health() -> dict:
     return {"status": "ok", "service": "scuffed-os-api"}
+
+
+@app.get("/health", tags=["meta"])
+def ship_health() -> dict:
+    """Bare-root health probe for the Tauri sidecar gate.
+
+    Intentionally DB-free: returns 200 as soon as uvicorn is serving, so the
+    Rust shell can show the window without waiting on managed-Postgres. The
+    /api/health route above is the frontend-facing one behind the Vite proxy.
+    """
+    return {"status": "ok"}
