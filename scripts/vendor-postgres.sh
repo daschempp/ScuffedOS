@@ -46,12 +46,12 @@ codesign --force --sign - "$VECTOR_DYLIB"
 echo "==> Relocation check (no /opt/homebrew or absolute build paths)"
 BAD=0
 while IFS= read -r macho; do
-  if otool -L "$macho" 2>/dev/null | grep -E '/opt/homebrew|/usr/local/Cellar' >/dev/null; then
+  if otool -L "$macho" 2>/dev/null | grep -E '/opt/homebrew|/usr/local/Cellar|/private/var/folders' >/dev/null; then
     echo "NON-RELOCATABLE: $macho"
-    otool -L "$macho" | grep -E '/opt/homebrew|/usr/local/Cellar'
+    otool -L "$macho" | grep -E '/opt/homebrew|/usr/local/Cellar|/private/var/folders'
     BAD=1
   fi
-done < <(find "$PGROOT" \( -name '*.dylib' -o -name '*.so' \) -o -path '*/bin/*' -type f)
+done < <(find "$PGROOT" -type f \( -name '*.dylib' -o -name '*.so' -o -path '*/bin/*' \))
 if [ "$BAD" -ne 0 ]; then
   echo "FAIL: non-relocatable references found"; exit 1
 fi

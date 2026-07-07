@@ -136,7 +136,7 @@ while IFS= read -r macho; do
   if otool -L "$macho" 2>/dev/null | grep -E '/opt/homebrew|/usr/local/Cellar|/private/var/folders' >/dev/null; then
     echo "NON-RELOCATABLE: $macho"; BAD=1
   fi
-done < <(find "$OUT" \( -name '*.dylib' -o -name '*.so' \))
+done < <(find "$OUT" -type f \( -name '*.dylib' -o -name '*.so' -o -path '*/bin/*' \))
 [ "$BAD" -eq 0 ] || { echo "FAIL: non-relocatable references"; exit 1; }
 
 echo "PY_SERIES=$PY_SERIES PY_VERSION=$("$OUT/bin/python3" --version | awk '{print $2}')" > "$BUILD/py.stamp"
