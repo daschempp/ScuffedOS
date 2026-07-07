@@ -12,8 +12,9 @@ from fastapi import APIRouter, HTTPException, Query
 from .. import finance_sync, providers
 from ..providers.plaid import PlaidAuthError, PlaidError
 from ..schemas import (
-    AccountsOut, BudgetOut, BudgetReallocate, BudgetsUpdate, FinanceStatus,
-    FinanceSummary, HoldingOut, LinkComplete, LinkStart, LinkStartOut, TransactionOut,
+    AccountsOut, BillOut, BudgetOut, BudgetReallocate, BudgetsUpdate, FinanceStatus,
+    FinanceSummary, HoldingOut, InvestmentTxnOut, LinkComplete, LinkStart, LinkStartOut,
+    ReauthStartOut, SubscriptionOut, TransactionOut,
 )
 from ..store import store
 
@@ -96,6 +97,21 @@ def holdings() -> list[dict]:
     return store.finance_holdings()
 
 
+@router.get("/subscriptions", response_model=list[SubscriptionOut])
+def subscriptions() -> list[dict]:
+    return store.finance_subscriptions()
+
+
+@router.get("/bills", response_model=list[BillOut])
+def bills() -> list[dict]:
+    return store.finance_bills()
+
+
+@router.get("/investment-transactions", response_model=list[InvestmentTxnOut])
+def investment_transactions(days: int | None = Query(default=None)) -> list[dict]:
+    return store.finance_investment_transactions(days)
+
+
 @router.get("/budgets", response_model=list[BudgetOut])
 def budgets(month: str | None = Query(default=None)) -> list[dict]:
     return store.finance_budgets(month or _this_month())
@@ -125,6 +141,37 @@ def disconnect(item_id: str) -> dict:
             logger.warning("plaid remove_item failed for %s, deleting anyway: %s", item_id, exc)
     if not store.delete_finance_item(item_id):
         raise HTTPException(status_code=404, detail=f"No linked item '{item_id}'")
+    return store.finance_status()
+
+
+@router.post("/items/{item_id}/reauth/start", response_model=ReauthStartOut)
+def reauth_start(item_id: str) -> dict:
+    """Mint an update-mode Hosted Link to repair an expired Item in place."""
+    provider = providers.get("plaid")
+    if provider is None:
+        raise HTTPException(status_code=502, detail="Plaid is unavailable")
+    token = store.get_finance_item_token(item_id)
+    if not token:
+        raise HTTPException(status_code=404, detail=f"No linked item '{item_id}'")
+    item = store.get_finance_item(item_id)
+    kind = "investments" if (item and item.get("products") == ["investments"]) else "bank"
+    try:
+        data = provider.create_link_token(kind, access_token=token)
+    except (PlaidError, PlaidAuthError) as exc:
+        logger.warning("plaid reauth/start failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Plaid rejected the request") from exc
+    return {"hosted_link_url": data.get("hosted_link_url", ""),
+            "link_token": data.get("link_token", "")}
+
+
+@router.post("/items/{item_id}/reauth/complete", response_model=FinanceStatus)
+def reauth_complete(item_id: str) -> dict:
+    """Optimistically mark the Item active and sync. If reauth didn't actually
+    succeed, the next tick re-flips it to needs_reauth."""
+    if store.get_finance_item(item_id) is None:
+        raise HTTPException(status_code=404, detail=f"No linked item '{item_id}'")
+    store.set_finance_item_status(item_id, "active")
+    finance_sync.tick()
     return store.finance_status()
 
 

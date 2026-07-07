@@ -751,3 +751,37 @@ class BudgetReallocate(BaseModel):
     from_category: str
     to_category: str
     amount: float
+
+
+class SubscriptionOut(BaseModel):
+    name: str
+    merchant_name: str | None
+    amount: float | None
+    frequency: str
+    next_date: str | None
+    category: str
+
+
+class BillOut(BaseModel):
+    name: str
+    sub: str
+    amount: float | None
+    due_date: str | None
+    kind: str
+    auto: bool
+
+
+class InvestmentTxnOut(BaseModel):
+    type: str
+    name: str
+    ticker: str | None
+    quantity: float
+    amount: float
+    price: float | None
+    date: str | None
+    currency: str
+
+
+class ReauthStartOut(BaseModel):
+    hosted_link_url: str
+    link_token: str

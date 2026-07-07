@@ -36,6 +36,7 @@ ALL_TABLES = {
     "moodle_grades", "moodle_announcements", "moodle_notifications",
     "finance_items", "finance_accounts", "finance_transactions",
     "finance_securities", "finance_holdings", "finance_budgets",
+    "finance_recurring", "finance_liabilities", "finance_investment_transactions",
 }
 
 

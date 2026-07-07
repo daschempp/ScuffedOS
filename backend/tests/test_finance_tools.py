@@ -27,3 +27,11 @@ def test_finance_tools_registered_in_definitions():
     names = {d["name"] for d in tools.DEFINITIONS}
     assert {"get_finance_summary", "get_transactions", "get_networth",
             "get_holdings", "get_budgets", "set_budget", "reallocate_budget"} <= names
+
+
+def test_finance_slice2_read_tools_registered_and_run():
+    names = {d["name"] for d in tools.DEFINITIONS}
+    assert {"get_subscriptions", "get_bills", "get_investment_transactions"} <= names
+    result, action = tools.execute("get_subscriptions", {})
+    assert action["screen"] == "finance"
+    assert isinstance(json.loads(result), list)

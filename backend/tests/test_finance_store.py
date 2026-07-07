@@ -158,7 +158,7 @@ def test_budget_bucket_mapping():
     assert budget_bucket("RENT_AND_UTILITIES", "") == "Rent & bills"
     assert budget_bucket("TRANSPORTATION", "") == "Transport"
     assert budget_bucket("TRANSFER_OUT", "TRANSFER_OUT_SAVINGS") == "Savings"
-    assert budget_bucket("ENTERTAINMENT", "") == "Other"
+    assert budget_bucket("ENTERTAINMENT", "") == "Entertainment"
 
 
 def test_budgets_have_all_categories_with_derived_spend():
@@ -240,3 +240,168 @@ def test_delete_finance_item_prunes_holdings_and_orphan_securities():
     assert store.finance_networth()["total"] == 0.0
     with store._session() as s:
         assert s.scalars(select(FinanceSecurity)).all() == []
+
+
+def test_delete_finance_item_keeps_security_referenced_by_surviving_investment_tx():
+    # A security referenced ONLY by a surviving item's investment-tx (no holding)
+    # must NOT be pruned when a different item is disconnected.
+    from sqlalchemy import select
+    from app.models import FinanceSecurity
+    from app.providers.base import NormalizedInvestmentTransaction
+    store.upsert_finance_item(_item("itmA", products=("transactions",)), access_token="tokA")
+    store.upsert_finance_item(_item("itmB", products=("investments",)), access_token="tokB")
+    store.upsert_finance_security(_sec("s1"))
+    store.upsert_finance_investment_transaction(NormalizedInvestmentTransaction(
+        source="plaid", source_id="it1", item_id="itmB", account_id="brk", security_id="s1",
+        type="buy", quantity=Decimal("0.01"), amount=Decimal("600"), date=date(2026, 6, 10)))
+    assert store.delete_finance_item("itmA") is True
+    with store._session() as s:
+        survivors = {x.source_id for x in s.scalars(select(FinanceSecurity)).all()}
+    assert "s1" in survivors            # still referenced by itmB's investment-tx
+
+
+def test_upsert_and_cascade_slice2_tables():
+    from datetime import date
+    from app.providers.base import (
+        NormalizedItem, NormalizedRecurringStream, NormalizedLiability,
+        NormalizedInvestmentTransaction,
+    )
+    store.upsert_finance_item(NormalizedItem(item_id="itm1", institution_id="ins_1",
+                                             institution_name="Chase", products=["transactions"]),
+                              access_token="tok")
+    store.upsert_finance_recurring(NormalizedRecurringStream(
+        source="plaid", source_id="str1", item_id="itm1", account_id="a1",
+        stream_type="outflow", description="Netflix", merchant_name="Netflix",
+        category_primary="ENTERTAINMENT", average_amount=Decimal("15.49"),
+        frequency="MONTHLY", predicted_next_date=date(2026, 7, 12)))
+    store.upsert_finance_liability(NormalizedLiability(
+        source="plaid", source_id="cc1", item_id="itm1", account_id="cc1",
+        liability_type="credit", minimum_payment=Decimal("35"),
+        next_payment_due_date=date(2026, 7, 15)))
+    store.upsert_finance_investment_transaction(NormalizedInvestmentTransaction(
+        source="plaid", source_id="it1", item_id="itm1", account_id="brk", security_id="s1",
+        type="buy", quantity=Decimal("0.01"), amount=Decimal("600"), date=date(2026, 6, 10)))
+    # idempotent re-upsert keeps one row
+    store.upsert_finance_recurring(NormalizedRecurringStream(
+        source="plaid", source_id="str1", item_id="itm1", account_id="a1",
+        stream_type="outflow", description="Netflix", merchant_name="Netflix",
+        average_amount=Decimal("16.49"), frequency="MONTHLY"))
+    from sqlalchemy import select as _select
+    from app.models import FinanceRecurring, FinanceLiability, FinanceInvestmentTransaction
+    with store._session() as s:
+        assert len(s.scalars(_select(FinanceRecurring)).all()) == 1        # re-upsert didn't duplicate
+        assert len(s.scalars(_select(FinanceInvestmentTransaction)).all()) == 1
+    # disconnect cascades all three new tables
+    assert store.delete_finance_item("itm1") is True
+    with store._session() as s:
+        assert s.scalars(_select(FinanceRecurring)).all() == []
+        assert s.scalars(_select(FinanceLiability)).all() == []
+        assert s.scalars(_select(FinanceInvestmentTransaction)).all() == []
+
+
+def test_subscriptions_and_bills_split_and_merge():
+    from datetime import date
+    from app.providers.base import NormalizedRecurringStream, NormalizedLiability
+    store.upsert_finance_recurring(NormalizedRecurringStream(
+        source="plaid", source_id="sub1", item_id="itm1", account_id="a1", stream_type="outflow",
+        description="Netflix", merchant_name="Netflix", category_primary="ENTERTAINMENT",
+        average_amount=Decimal("15.49"), frequency="MONTHLY", predicted_next_date=date(2026, 7, 12),
+        is_active=True))
+    store.upsert_finance_recurring(NormalizedRecurringStream(
+        source="plaid", source_id="bill1", item_id="itm1", account_id="a1", stream_type="outflow",
+        description="Verizon", merchant_name="Verizon", category_primary="RENT_AND_UTILITIES",
+        average_amount=Decimal("70"), frequency="MONTHLY", predicted_next_date=date(2026, 7, 16),
+        is_active=True))
+    store.upsert_finance_recurring(NormalizedRecurringStream(
+        source="plaid", source_id="pay1", item_id="itm1", account_id="a1", stream_type="inflow",
+        description="Payroll", merchant_name="Acme", category_primary="INCOME",
+        average_amount=Decimal("2500"), frequency="BIWEEKLY", is_active=True))
+    store.upsert_finance_liability(NormalizedLiability(
+        source="plaid", source_id="cc1", item_id="itm1", account_id="cc1", liability_type="credit",
+        minimum_payment=Decimal("35"), next_payment_due_date=date(2026, 7, 15)))
+    subs = store.finance_subscriptions()
+    assert [s["name"] for s in subs] == ["Netflix"]           # inflow + bill excluded
+    assert subs[0]["amount"] == 15.49
+    bills = store.finance_bills()
+    names = {b["name"] for b in bills}
+    assert "Verizon" in names                                 # utility recurring stream = bill
+    assert "Netflix" not in names                             # entertainment stream = subscription, not bill
+    # recurring bill + liability both present, sorted by due date
+    assert any(b["kind"] == "recurring" for b in bills)
+    assert any(b["kind"] == "liability" and b["amount"] == 35.0 for b in bills)
+    assert [b["due_date"] for b in bills] == sorted(b["due_date"] for b in bills)
+
+
+def test_finance_bills_resolves_liability_display_name():
+    # The liability bill's name must resolve to the human account name, not the
+    # opaque Plaid account_id hash. Mirrors finance_holdings' security resolve.
+    from app.providers.base import NormalizedAccount, NormalizedLiability
+    store.upsert_finance_account(NormalizedAccount(
+        source="plaid", source_id="acc_hash_xyz", item_id="itm1", name="Chase Sapphire",
+        official_name=None, mask="1234", type="credit", subtype="credit card",
+        current_balance=Decimal("1200.00"), available_balance=Decimal("0"), iso_currency="USD"))
+    store.upsert_finance_liability(NormalizedLiability(
+        source="plaid", source_id="cc1", item_id="itm1", account_id="acc_hash_xyz",
+        liability_type="credit", minimum_payment=Decimal("35"),
+        next_payment_due_date=date(2026, 7, 15)))
+    bill = next(b for b in store.finance_bills() if b["kind"] == "liability")
+    assert bill["name"] == "Chase Sapphire"       # resolved, not the acc_hash_xyz hash
+    assert bill["sub"] == "credit"
+
+
+def test_investment_transactions_join_securities_newest_first():
+    from datetime import date
+    from app.providers.base import NormalizedSecurity, NormalizedInvestmentTransaction
+    store.upsert_finance_security(NormalizedSecurity(
+        source="plaid", source_id="s1", name="Bitcoin", ticker_symbol="BTC",
+        type="cryptocurrency", iso_currency="USD"))
+    store.upsert_finance_investment_transaction(NormalizedInvestmentTransaction(
+        source="plaid", source_id="it1", item_id="itm1", account_id="brk", security_id="s1",
+        type="buy", name="BUY BTC", quantity=Decimal("0.01"), amount=Decimal("600"),
+        price=Decimal("60000"), date=date(2026, 6, 10)))
+    store.upsert_finance_investment_transaction(NormalizedInvestmentTransaction(
+        source="plaid", source_id="it2", item_id="itm1", account_id="brk", security_id="s1",
+        type="sell", name="SELL BTC", quantity=Decimal("-0.005"), amount=Decimal("-300"),
+        date=date(2026, 6, 11)))
+    ledger = store.finance_investment_transactions()
+    assert ledger[0]["type"] == "sell"          # newest first (2026-06-11 before 2026-06-10)
+    assert ledger[0]["ticker"] == "BTC"
+    assert ledger[1]["type"] == "buy" and ledger[1]["amount"] == 600.0
+
+
+def test_bills_appear_in_events_between_read_only():
+    from datetime import datetime, timezone
+    from app.providers.base import NormalizedLiability
+    store.upsert_finance_liability(NormalizedLiability(
+        source="plaid", source_id="cc1", item_id="itm1", account_id="cc1", liability_type="credit",
+        minimum_payment=Decimal("35"), next_payment_due_date=__import__("datetime").date(2026, 7, 15)))
+    occ = store.events_between(datetime(2026, 7, 1, tzinfo=timezone.utc),
+                              datetime(2026, 7, 31, tzinfo=timezone.utc))
+    fin = [o for o in occ if str(o["id"]).startswith("finance:")]
+    assert fin and fin[0]["editable"] is False and fin[0]["source"] == "finance"
+    # out-of-window excluded
+    occ2 = store.events_between(datetime(2026, 8, 1, tzinfo=timezone.utc),
+                               datetime(2026, 8, 31, tzinfo=timezone.utc))
+    assert [o for o in occ2 if str(o["id"]).startswith("finance:")] == []
+
+
+def test_expanded_budget_categories_and_bucket_mapping():
+    from app.store import BUDGET_CATEGORIES, budget_bucket
+    assert BUDGET_CATEGORIES == ["Groceries", "Dining out", "Rent & bills", "Transport",
+                                 "Shopping", "Entertainment", "Health", "Travel",
+                                 "Savings", "Other"]
+    assert budget_bucket("GENERAL_MERCHANDISE") == "Shopping"
+    assert budget_bucket("ENTERTAINMENT") == "Entertainment"
+    assert budget_bucket("MEDICAL") == "Health"
+    assert budget_bucket("TRAVEL") == "Travel"
+    got = {b["category"] for b in store.finance_budgets("2026-06")}
+    assert len(got) == 10
+
+
+def test_reallocate_clamps_at_zero():
+    store.upsert_budgets("2026-06", [{"category": "Dining out", "limit_amount": 50}])
+    store.reallocate_budget("2026-06", "Dining out", "Savings", 200)  # more than source has
+    budgets = {b["category"]: b for b in store.finance_budgets("2026-06")}
+    assert budgets["Dining out"]["limit_amount"] == 0.0               # drained, not negative
+    # conserving: dest gains only what the source actually had (50), NOT the 200 asked
+    assert budgets["Savings"]["limit_amount"] == 50.0

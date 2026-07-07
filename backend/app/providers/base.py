@@ -286,6 +286,62 @@ class TransactionsDelta:                   # one /transactions/sync page
     has_more: bool = False
 
 
+@dataclass
+class NormalizedRecurringStream:           # /transactions/recurring/get
+    source: str                            # 'plaid'
+    source_id: str                         # Plaid stream_id
+    item_id: str
+    account_id: str
+    stream_type: str                       # 'inflow' | 'outflow'
+    description: str
+    merchant_name: str | None
+    category_primary: str = ""
+    category_detailed: str = ""
+    average_amount: Decimal = Decimal("0")
+    last_amount: Decimal = Decimal("0")
+    frequency: str = ""                    # WEEKLY|BIWEEKLY|SEMI_MONTHLY|MONTHLY|ANNUALLY|UNKNOWN
+    first_date: date | None = None
+    last_date: date | None = None
+    predicted_next_date: date | None = None
+    is_active: bool = True
+    status: str = ""
+    iso_currency: str = "USD"
+
+
+@dataclass
+class NormalizedLiability:                  # /liabilities/get
+    source: str                            # 'plaid'
+    source_id: str                         # = account_id it describes
+    item_id: str
+    account_id: str
+    liability_type: str                    # 'credit' | 'mortgage' | 'student'
+    last_statement_balance: Decimal | None = None
+    minimum_payment: Decimal | None = None
+    next_payment_due_date: date | None = None
+    last_payment_amount: Decimal | None = None
+    last_payment_date: date | None = None
+    apr_percentage: Decimal | None = None
+    iso_currency: str = "USD"
+
+
+@dataclass
+class NormalizedInvestmentTransaction:      # /investments/transactions/get
+    source: str                            # 'plaid'
+    source_id: str                         # investment_transaction_id
+    item_id: str
+    account_id: str
+    security_id: str
+    type: str                              # buy|sell|cash|fee|transfer|...
+    subtype: str = ""
+    name: str = ""
+    quantity: Decimal = Decimal("0")
+    amount: Decimal = Decimal("0")
+    price: Decimal | None = None
+    fees: Decimal | None = None
+    date: date | None = None
+    iso_currency: str = "USD"
+
+
 @runtime_checkable
 class PlaidProvider(Protocol):
     """Read-only Plaid REST adapter. NOT an OAuthProvider (Hosted Link is a
@@ -293,7 +349,7 @@ class PlaidProvider(Protocol):
     get_accounts. Multi-Item: every data method takes an item's access_token."""
     name: str                             # 'plaid'
 
-    def create_link_token(self, kind: str) -> dict: ...          # {'link_token','hosted_link_url',...}
+    def create_link_token(self, kind: str, access_token: str | None = None) -> dict: ...          # {'link_token','hosted_link_url',...}
     def get_link_public_token(self, link_token: str) -> str | None: ...
     def exchange_public_token(self, public_token: str) -> tuple[str, str]: ...  # (access_token, item_id)
     def get_item(self, access_token: str) -> NormalizedItem: ...
@@ -302,4 +358,9 @@ class PlaidProvider(Protocol):
     def get_holdings(self, access_token: str) -> tuple[list[NormalizedAccount],
                                                        list[NormalizedSecurity],
                                                        list[NormalizedHolding]]: ...
+    def get_recurring(self, access_token: str) -> list["NormalizedRecurringStream"]: ...
+    def get_liabilities(self, access_token: str) -> list["NormalizedLiability"]: ...
+    def get_investment_transactions(self, access_token: str, start: "date", end: "date") -> tuple[
+        list["NormalizedAccount"], list["NormalizedSecurity"],
+        list["NormalizedInvestmentTransaction"]]: ...
     def remove_item(self, access_token: str) -> None: ...
