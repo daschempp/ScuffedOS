@@ -78,10 +78,91 @@ fn wait_for_health(port: u16) -> bool {
     false
 }
 
+/// Resolve ~/Library/Application Support/ScuffedOS/logs/<name>.
+fn app_log_path(name: &str) -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    std::path::PathBuf::from(home)
+        .join("Library")
+        .join("Application Support")
+        .join("ScuffedOS")
+        .join("logs")
+        .join(name)
+}
+
+/// Return the last `max_bytes` of a UTF-8 log file (or a placeholder if absent).
+fn tail_file(path: &std::path::Path, max_bytes: usize) -> String {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let start = bytes.len().saturating_sub(max_bytes);
+            String::from_utf8_lossy(&bytes[start..]).into_owned()
+        }
+        Err(_) => format!("(no log at {})", path.display()),
+    }
+}
+
+/// HTML-escape for safe interpolation into the inline diagnostic page.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Open a diagnostic window surfacing the backend + pg log tails on a
+/// health-gate timeout, instead of a blank hidden main window (spec §6).
+///
+/// The health-gate timeout is one-shot, but guard against a double-open anyway:
+/// if a "diagnostic" window already exists (e.g. a future retry path), focus it
+/// instead of stacking a second identical window.
+fn show_diagnostic_window(app: &tauri::AppHandle, backend_tail: &str, pg_tail: &str) {
+    use tauri::Manager;
+    if let Some(existing) = app.get_webview_window("diagnostic") {
+        let _ = existing.set_focus();
+        return;
+    }
+    let html = format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>ScuffedOS — startup problem</title>\
+         <style>body{{font:13px -apple-system,system-ui,sans-serif;margin:0;padding:20px;background:#1c1b19;color:#e8e4dd}}\
+         h1{{font-size:18px;margin:0 0 4px}}p{{color:#b8b2a7;margin:0 0 16px}}\
+         h2{{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#8a8578;margin:18px 0 6px}}\
+         pre{{background:#111;border:1px solid #333;border-radius:6px;padding:12px;overflow:auto;max-height:32vh;white-space:pre-wrap;word-break:break-word}}\
+         button{{margin-top:18px;padding:8px 16px;border:0;border-radius:6px;background:#c4552e;color:#fff;font-size:13px;cursor:pointer}}</style></head>\
+         <body><h1>ScuffedOS didn't finish starting</h1>\
+         <p>The backend did not become ready in time. The logs below may explain why.</p>\
+         <h2>backend.log</h2><pre>{}</pre>\
+         <h2>pg.log</h2><pre>{}</pre>\
+         <button onclick=\"window.__TAURI_INTERNALS__.invoke('quit_app')\">Quit</button>\
+         </body></html>",
+        html_escape(backend_tail),
+        html_escape(pg_tail),
+    );
+    let url = tauri::WebviewUrl::App(format!("data:text/html,{}", urlencoding_encode(&html)).into());
+    let _ = tauri::WebviewWindowBuilder::new(app, "diagnostic", url)
+        .title("ScuffedOS — startup problem")
+        .inner_size(720.0, 560.0)
+        .build();
+}
+
+/// Minimal percent-encoding for the data: URL (avoids a new crate dependency).
+fn urlencoding_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 2);
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .invoke_handler(tauri::generate_handler![api_port])
+        .invoke_handler(tauri::generate_handler![api_port, quit_app])
         .setup(|app| {
             let port = free_port();
 
@@ -128,12 +209,11 @@ pub fn run() {
                         let _ = win.show();
                     }
                 } else {
-                    eprintln!("[shell] health-gate timed out on :{port}; backend did not become ready");
-                    // Minimal diagnostic: still show the window so the user isn't
-                    // stuck on a blank hidden app; frontend shows its own error UI.
-                    if let Some(win) = show_handle.get_webview_window("main") {
-                        let _ = win.show();
-                    }
+                    eprintln!("[shell] health-gate timed out on :{port}; showing diagnostic window");
+                    let backend_tail = tail_file(&app_log_path("backend.log"), 8192);
+                    let pg_tail = tail_file(&app_log_path("pg.log"), 8192);
+                    show_diagnostic_window(&show_handle, &backend_tail, &pg_tail);
+                    // Do NOT show the blank main window; the diagnostic replaces it.
                 }
             });
 
