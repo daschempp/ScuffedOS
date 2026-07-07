@@ -3,7 +3,21 @@
    server on :8000 (see vite.config.js). Set VITE_API_URL to point elsewhere
    (e.g. a deployed backend). Every caller is expected to handle failure
    gracefully (the UI falls back to local behavior when the backend is down). */
-const BASE = import.meta.env.VITE_API_URL || ''
+/* Base URL for backend calls. Precedence:
+   1. VITE_API_URL — explicit build/deploy override.
+   2. window.__TAURI_API_BASE__ — set by main.jsx from the Tauri api_port
+      command before first render, in the packaged .app.
+   3. '' — dev: relative '/api' paths hit the Vite proxy (vite.config.js). */
+let BASE =
+  import.meta.env.VITE_API_URL ||
+  (typeof window !== 'undefined' && window.__TAURI_API_BASE__) ||
+  ''
+
+/* Allow the Tauri bootstrap (main.jsx) to inject the resolved 127.0.0.1:<port>
+   base before the first fetch. No trailing slash — paths already begin '/api'. */
+export function setApiBase(base) {
+  BASE = base ? base.replace(/\/$/, '') : ''
+}
 
 /* Thrown for non-2xx API responses (vs. a network-level TypeError when the
    backend is unreachable — callers use that distinction to decide between
