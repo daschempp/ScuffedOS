@@ -34,6 +34,8 @@ ALL_TABLES = {
     "provider_accounts", "daily_snapshots", "workouts", "emails",
     "moodle_courses", "moodle_deadlines", "moodle_assignments",
     "moodle_grades", "moodle_announcements", "moodle_notifications",
+    "finance_items", "finance_accounts", "finance_transactions",
+    "finance_securities", "finance_holdings", "finance_budgets",
 }
 
 

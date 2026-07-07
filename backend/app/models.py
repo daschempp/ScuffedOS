@@ -13,9 +13,10 @@ Conventions:
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from sqlalchemy import (
-    Boolean, Date, DateTime, Float, ForeignKey, Index, JSON, String, Text,
+    Boolean, Date, DateTime, Float, ForeignKey, Index, JSON, Numeric, String, Text,
     UniqueConstraint, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -533,3 +534,161 @@ class MoodleNotification(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+# ---- Finance / Plaid (M7) -------------------------------------------------
+class FinanceItem(Base):
+    """One linked Plaid Item (a bank/Coinbase connection). access_token is
+    server-side only, never serialized. cursor is the /transactions/sync
+    cursor; products drives the per-Item sync branch (transactions/investments)."""
+
+    __tablename__ = "finance_items"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_finance_items_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'plaid'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # Plaid item_id
+    access_token: Mapped[str | None] = mapped_column(Text)             # server-side only
+    institution_id: Mapped[str] = mapped_column(String(64), default="")
+    institution_name: Mapped[str] = mapped_column(String(255), default="")
+    products: Mapped[list] = mapped_column(JSONField, default=list)    # ['transactions']/['investments']
+    status: Mapped[str] = mapped_column(String(16), default="active")  # 'active' | 'needs_reauth'
+    cursor: Mapped[str | None] = mapped_column(Text)                   # /transactions/sync cursor
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FinanceAccount(Base):
+    """A Plaid account within an Item. type/subtype drive net-worth bucketing."""
+
+    __tablename__ = "finance_accounts"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_finance_accounts_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'plaid'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # Plaid account_id
+    item_id: Mapped[str] = mapped_column(String(128), index=True)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    official_name: Mapped[str | None] = mapped_column(String(255))
+    mask: Mapped[str | None] = mapped_column(String(16))
+    type: Mapped[str] = mapped_column(String(32), default="")          # depository|investment|credit|loan
+    subtype: Mapped[str | None] = mapped_column(String(48))
+    current_balance: Mapped[Decimal | None] = mapped_column(Numeric(16, 2))
+    available_balance: Mapped[Decimal | None] = mapped_column(Numeric(16, 2))
+    iso_currency: Mapped[str] = mapped_column(String(8), default="USD")
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class FinanceTransaction(Base):
+    """A Plaid transaction. amount sign is Plaid's: + = outflow / money leaving."""
+
+    __tablename__ = "finance_transactions"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_finance_transactions_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'plaid'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # Plaid transaction_id
+    account_id: Mapped[str] = mapped_column(String(128), index=True)
+    item_id: Mapped[str] = mapped_column(String(128), index=True)
+    name: Mapped[str] = mapped_column(Text, default="")
+    merchant_name: Mapped[str | None] = mapped_column(String(255))
+    amount: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    iso_currency: Mapped[str] = mapped_column(String(8), default="USD")
+    date: Mapped[date] = mapped_column(Date, index=True)
+    authorized_date: Mapped[date | None] = mapped_column(Date)
+    pending: Mapped[bool] = mapped_column(Boolean, default=False)
+    category_primary: Mapped[str] = mapped_column(String(64), default="")
+    category_detailed: Mapped[str] = mapped_column(String(128), default="")
+    payment_channel: Mapped[str] = mapped_column(String(32), default="")
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class FinanceSecurity(Base):
+    """A security referenced by holdings. type='cryptocurrency' for Coinbase coins."""
+
+    __tablename__ = "finance_securities"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_finance_securities_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'plaid'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # Plaid security_id
+    name: Mapped[str] = mapped_column(String(255), default="")
+    ticker_symbol: Mapped[str | None] = mapped_column(String(32))
+    type: Mapped[str] = mapped_column(String(48), default="")          # equity|etf|cryptocurrency|...
+    close_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    iso_currency: Mapped[str] = mapped_column(String(8), default="USD")
+    is_cash_equivalent: Mapped[bool] = mapped_column(Boolean, default=False)
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class FinanceHolding(Base):
+    """An investment position (account x security). Keyed (owner, account_id,
+    security_id) — Plaid gives holdings no id of their own."""
+
+    __tablename__ = "finance_holdings"
+    __table_args__ = (
+        UniqueConstraint("owner", "account_id", "security_id",
+                         name="uq_finance_holdings_owner_account_security"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), default="plaid", index=True)
+    item_id: Mapped[str] = mapped_column(String(128), index=True)
+    account_id: Mapped[str] = mapped_column(String(128), index=True)
+    security_id: Mapped[str] = mapped_column(String(128), index=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), default=0)
+    cost_basis: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    institution_value: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    institution_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    iso_currency: Mapped[str] = mapped_column(String(8), default="USD")
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class FinanceBudget(Base):
+    """A local, user-editable monthly budget limit per category. NOT from Plaid
+    — spend is derived from finance_transactions at read time."""
+
+    __tablename__ = "finance_budgets"
+    __table_args__ = (
+        UniqueConstraint("owner", "category", "month",
+                         name="uq_finance_budgets_owner_category_month"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    category: Mapped[str] = mapped_column(String(48), index=True)      # a fixed bucket name
+    month: Mapped[str] = mapped_column(String(7), index=True)          # 'YYYY-MM'
+    limit_amount: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)

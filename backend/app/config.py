@@ -102,5 +102,21 @@ class Settings(BaseSettings):
     moodle_sync_seconds: int = 900              # 15 min; gentle (mobile-app cadence)
     moodle_backfill_days_ahead: int = 60        # deadline-timeline horizon
 
+    # ---- M7 Finance (Plaid) ----
+    # Plaid REST lives at {sandbox|production}.plaid.com. Credentials come from
+    # the Plaid dashboard (Production keys once the use-case is approved); the
+    # per-Item access_tokens live in the finance_items table, never here. The
+    # connect flow is Hosted Link (a Plaid-hosted page), so no redirect URI is
+    # registered and no public callback is needed. Read-only — we never move money.
+    plaid_client_id: str = ""
+    plaid_secret: str = ""
+    plaid_env: str = "production"                 # "sandbox" | "production"
+    plaid_country_codes: list[str] = ["US"]
+
+    # Background finance-sync (mirrors moodle_sync_enabled / moodle_sync_seconds).
+    finance_sync_enabled: bool = True
+    finance_sync_seconds: int = 1800              # 30 min
+    plaid_backfill_days: int = 90                 # first-sync transaction history window
+
 
 settings = Settings()

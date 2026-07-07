@@ -1,147 +1,235 @@
-/* Scuffed OS — Finance tracker */
-import { Card, Stat, Badge, ProgressBar, IconButton, Button } from '../components/ui.jsx'
+/* Scuffed OS — Finance (live, synced with the user's real accounts via Plaid).
+   Owns its own state (App.jsx renders <FinanceScreen /> with no props),
+   mirroring School/Email. /api/finance/status drives the connection ladder; the
+   reads (summary, accounts, transactions, holdings, budgets) come straight from
+   the finance_* tables server-side (never a live Plaid call), so the screen
+   works while a sync is mid-flight or Plaid is down. Connect is Hosted Link:
+   a button opens Plaid's hosted page in a new tab; after the user finishes
+   there, "Finish linking" completes the exchange. Access tokens never reach the
+   client. Read-only against Plaid — budgets are the only edit, and they're
+   local. Holdings/Subscriptions/Bills day-change is out of slice 1. */
+import React from 'react'
+import { Card, Stat, Badge, ProgressBar, Button, IconButton } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
+import { api } from '../lib/api.js'
+
+// Slice-2 sample panels (kept visible, clearly labeled).
+const SAMPLE_SUBS = [
+  { name: 'Netflix', price: '$15.49', cycle: 'monthly', renews: 'Jun 12', color: 'var(--clay-600)', letter: 'N' },
+  { name: 'Spotify', price: '$11.99', cycle: 'monthly', renews: 'Jun 18', color: 'var(--green-600)', letter: 'S' },
+  { name: 'iCloud+', price: '$2.99', cycle: 'monthly', renews: 'Jun 24', color: 'var(--sky-600)', letter: 'i' },
+]
+const SAMPLE_BILLS = [
+  { name: 'Rent', sub: 'Oak St. Realty', amt: '$1,450', due: 'Due Jul 1', auto: true, icon: 'house', tint: 'honey' },
+  { name: 'Internet', sub: 'Verizon Fios', amt: '$70', due: 'Due Jun 16', auto: true, icon: 'wifi', tint: 'sky' },
+]
+const money = (n) => (n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD' }))
 
 export function FinanceScreen() {
-  const cats = [
-    { name: 'Groceries', spent: 320, budget: 400, color: 'clay' },
-    { name: 'Rent & bills', spent: 1450, budget: 1450, color: 'honey' },
-    { name: 'Dining out', spent: 186, budget: 250, color: 'plum' },
-    { name: 'Transport', spent: 64, budget: 150, color: 'sky' },
-    { name: 'Savings', spent: 600, budget: 600, color: 'green' },
-  ]
-  const txns = [
-    { title: 'Acme Inc', sub: 'Salary · Jun 1', amt: '+$3,200.00', cat: 'var(--green-600)', pos: true },
-    { title: 'Whole Foods', sub: 'Groceries · Jun 8', amt: '-$64.20', cat: 'var(--clay-600)' },
-    { title: 'Oak St. Realty', sub: 'Rent · Jun 3', amt: '-$1,450.00', cat: 'var(--honey-600)' },
-    { title: 'Vanguard', sub: 'Auto-invest · Jun 5', amt: '-$500.00', cat: 'var(--sky-600)' },
-  ]
-  // net worth breakdown
-  const nw = [
-    { name: 'Investments', val: 86200, color: 'var(--green-600)' },
-    { name: 'Retirement', val: 21400, color: 'var(--sky-600)' },
-    { name: 'Cash', val: 18050, color: 'var(--honey-600)' },
-    { name: 'Crypto', val: 3400, color: 'var(--plum-600)' },
-  ]
-  const nwTotal = nw.reduce((s, x) => s + x.val, 0)
-  const holdings = [
-    { sym: 'VTI', name: 'Total Market ETF', val: '$48,200', chg: '+1.2%', up: true, tint: 'green' },
-    { sym: 'AAPL', name: 'Apple Inc.', val: '$22,640', chg: '+0.6%', up: true, tint: 'sky' },
-    { sym: '401k', name: 'Retirement', val: '$21,400', chg: '+0.9%', up: true, tint: 'honey' },
-    { sym: 'BTC', name: 'Bitcoin', val: '$3,400', chg: '−2.4%', up: false, tint: 'plum' },
-  ]
-  const subs = [
-    { name: 'Netflix', price: '$15.49', cycle: 'monthly', renews: 'Jun 12', soon: true, color: 'var(--clay-600)', letter: 'N' },
-    { name: 'Spotify', price: '$11.99', cycle: 'monthly', renews: 'Jun 18', color: 'var(--green-600)', letter: 'S' },
-    { name: 'iCloud+', price: '$2.99', cycle: 'monthly', renews: 'Jun 24', color: 'var(--sky-600)', letter: 'i' },
-    { name: 'Notion', price: '$96.00', cycle: 'yearly', renews: 'Jul 2', soon: true, color: 'var(--plum-600)', letter: 'N' },
-    { name: 'ChatGPT', price: '$20.00', cycle: 'monthly', renews: 'Jun 28', color: 'var(--honey-600)', letter: 'G' },
-  ]
-  const bills = [
-    { name: 'Rent', sub: 'Oak St. Realty', amt: '$1,450', due: 'Due Jul 1', auto: true, icon: 'house', tint: 'honey' },
-    { name: 'Electric', sub: 'ConEd', amt: '$82', due: 'Due Jun 14', auto: true, icon: 'zap', tint: 'clay' },
-    { name: 'Internet', sub: 'Verizon Fios', amt: '$70', due: 'Due Jun 16', auto: true, icon: 'wifi', tint: 'sky' },
-    { name: 'Phone', sub: 'Mint Mobile', amt: '$30', due: 'Due Jun 20', auto: false, icon: 'smartphone', tint: 'plum' },
-  ]
+  const [status, setStatus] = React.useState(null)
+  const [summary, setSummary] = React.useState(null)
+  const [accounts, setAccounts] = React.useState(null)
+  const [txns, setTxns] = React.useState(null)
+  const [holdings, setHoldings] = React.useState(null)
+  const [budgets, setBudgets] = React.useState(null)
+  const [pendingLink, setPendingLink] = React.useState(null)   // {link_token} after a connect button
+  const [linkMsg, setLinkMsg] = React.useState('')
+  const [edits, setEdits] = React.useState({})                 // category -> edited limit string
+
+  const refresh = React.useCallback(() => {
+    api.financeStatus().then((s) => { if (s) setStatus(s) }).catch(() => {})
+    api.financeSummary().then((s) => { if (s) setSummary(s) }).catch(() => {})
+    api.financeAccounts().then((a) => { if (a) setAccounts(a) }).catch(() => {})
+    api.financeTransactions().then((t) => { if (t) setTxns(t) }).catch(() => {})
+    api.financeHoldings().then((h) => { if (h) setHoldings(h) }).catch(() => {})
+    api.financeBudgets().then((b) => { if (b) setBudgets(b) }).catch(() => {})
+  }, [])
+  React.useEffect(() => { refresh() }, [refresh])
+
+  const items = status?.items || []
+  const connected = items.length > 0
+  const needsReauth = items.filter((i) => i.status === 'needs_reauth')
+
+  const startLink = (kind) => {
+    setLinkMsg('')
+    api.financeLinkStart(kind).then((r) => {
+      if (r?.hosted_link_url) {
+        window.open(r.hosted_link_url, '_blank', 'noopener')
+        setPendingLink({ link_token: r.link_token })
+        setLinkMsg('Finish linking in the Plaid tab, then click "Finish linking" below.')
+      }
+    }).catch(() => setLinkMsg('Could not start the link flow. Try again.'))
+  }
+  const finishLink = () => {
+    if (!pendingLink) return
+    api.financeLinkComplete(pendingLink.link_token)
+      .then(() => { setPendingLink(null); setLinkMsg(''); refresh() })
+      .catch((e) => setLinkMsg(e?.status === 409
+        ? 'Still waiting — finish in the Plaid tab, then try again.'
+        : 'Linking failed. Try connecting again.'))
+  }
+  const sync = () => { api.financeSync().then(() => refresh()).catch(() => {}) }
+  const disconnect = (itemId) => { api.financeDisconnect(itemId).then(() => refresh()).catch(() => {}) }
+  const saveBudgets = () => {
+    const month = summary?.month
+    const payload = (budgets || []).map((b) => ({
+      category: b.category,
+      limit_amount: edits[b.category] != null ? Number(edits[b.category]) : b.limit_amount,
+    }))
+    api.financeSaveBudgets(month, payload).then((b) => { if (b) { setBudgets(b); setEdits({}) } }).catch(() => {})
+  }
+
+  const ConnectButtons = (
+    <div className="kit-inline" style={{ gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+      <Button variant="primary" iconLeft={<Icon name="building-2" />} onClick={() => startLink('bank')}>Connect a bank</Button>
+      <Button variant="secondary" iconLeft={<Icon name="bitcoin" />} onClick={() => startLink('investments')}>Connect Coinbase or brokerage</Button>
+    </div>
+  )
+  const FinishLink = pendingLink && (
+    <div className="kit-stack" style={{ gap: 8, marginTop: 14, alignItems: 'center' }}>
+      <Button variant="primary" size="sm" iconLeft={<Icon name="check" />} onClick={finishLink}>Finish linking</Button>
+      {linkMsg && <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>{linkMsg}</p>}
+    </div>
+  )
+
+  // —— not connected: connect card ——
+  if (status && !connected) {
+    return (
+      <Card variant="flat" style={{ maxWidth: 560, margin: '0 auto', padding: '40px 28px', textAlign: 'center' }}>
+        <div style={{ display: 'inline-flex', width: 56, height: 56, borderRadius: 'var(--radius-lg)', background: 'var(--accent-soft)', color: 'var(--accent-text)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
+          <Icon name="wallet" />
+        </div>
+        <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--text-xl)', color: 'var(--text-strong)', margin: '0 0 6px' }}>Connect your money</h3>
+        <p className="kit-muted" style={{ maxWidth: 420, margin: '0 auto 18px' }}>Link a bank for balances, transactions and budgets, or Coinbase/a brokerage for holdings. Read-only — Plaid handles your login and we never move money.</p>
+        {ConnectButtons}
+        {FinishLink}
+        {!pendingLink && linkMsg && <p className="kit-muted" style={{ color: 'var(--clay-600)', marginTop: 12 }}>{linkMsg}</p>}
+      </Card>
+    )
+  }
+
+  const nw = accounts?.networth
   return (
     <div className="kit-stack" style={{ gap: 'var(--gutter)' }}>
+      {/* header: linked institutions + sync + add */}
+      <div className="kit-inline" style={{ flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        {items.map((it) => (
+          <span key={it.item_id} className="kit-inline" style={{ gap: 6, alignItems: 'center', padding: '4px 10px', borderRadius: 999, border: '1px solid var(--paper-300)' }}>
+            <span className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>{it.institution_name}</span>
+            {it.status === 'needs_reauth' && <Badge color="clay">Reconnect</Badge>}
+            <IconButton label="Disconnect" size="sm" onClick={() => disconnect(it.item_id)}><Icon name="x" /></IconButton>
+          </span>
+        ))}
+        <span className="kit-inline" style={{ marginLeft: 'auto', gap: 8 }}>
+          <Button variant="soft" size="sm" iconLeft={<Icon name="plus" />} onClick={() => startLink('bank')}>Add</Button>
+          <Button variant="soft" size="sm" iconLeft={<Icon name="refresh-cw" />} onClick={sync}>Sync</Button>
+        </span>
+      </div>
+      {pendingLink && <Card variant="flat" style={{ textAlign: 'center', padding: '14px' }}>{FinishLink}</Card>}
+      {needsReauth.length > 0 && (
+        <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <span className="kit-statline__ico" style={{ background: 'var(--clay-100)', color: 'var(--clay-600)' }}><Icon name="alert-triangle" /></span>
+          <div style={{ flex: 1 }}>
+            <p className="kit-row__title">Reconnect {needsReauth.map((i) => i.institution_name).join(', ')}</p>
+            <p className="kit-muted">A bank login expired. Reconnect to resume syncing.</p>
+          </div>
+          <Button variant="primary" size="sm" onClick={() => startLink('bank')}>Reconnect</Button>
+        </Card>
+      )}
+
+      {/* summary */}
       <div className="kit-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-        <Card><Stat label="Balance" value="$4,820" unit=".50" delta="+3.2%" trend="up" icon={<Icon name="wallet" />} /></Card>
-        <Card><Stat label="Income · June" value="$3,200" delta="on track" trend="flat" icon={<Icon name="arrow-down-left" />} /></Card>
-        <Card><Stat label="Spent · June" value="$1,840" delta="−12% vs May" trend="down" icon={<Icon name="arrow-up-right" />} /></Card>
+        <Card><Stat label="Balance" value={money(summary?.balance)} icon={<Icon name="wallet" />} /></Card>
+        <Card><Stat label={`Income · ${summary?.month || ''}`} value={money(summary?.income_month)} icon={<Icon name="arrow-down-left" />} /></Card>
+        <Card><Stat label={`Spent · ${summary?.month || ''}`} value={money(summary?.spent_month)}
+          delta={summary?.spent_delta != null ? `${summary.spent_delta >= 0 ? '+' : '−'}${money(Math.abs(summary.spent_delta))} vs last mo` : undefined}
+          trend={summary?.spent_delta > 0 ? 'up' : 'down'} icon={<Icon name="arrow-up-right" />} /></Card>
       </div>
 
-      {/* Net worth + investments */}
+      {/* net worth + holdings */}
       <div className="kit-grid" style={{ gridTemplateColumns: '1.15fr 1fr' }}>
-        <Card eyebrow="Net worth" title="$129,050" action={<Badge color="green" dot>+2.1% this month</Badge>}>
+        <Card eyebrow="Net worth" title={money(nw?.total)}>
           <div className="kit-nwbar" style={{ marginTop: 4 }}>
-            {nw.map((s, i) => <i key={i} style={{ width: (s.val / nwTotal * 100) + '%', background: s.color }} />)}
+            {(nw?.buckets || []).filter((b) => b.value > 0).map((b, i) => {
+              const pos = (nw?.buckets || []).filter((x) => x.value > 0).reduce((s, x) => s + x.value, 0) || 1
+              return <i key={i} style={{ width: (b.value / pos * 100) + '%', background: `var(--${b.color}-600)` }} />
+            })}
           </div>
           <div className="kit-nwleg" style={{ marginTop: 14 }}>
-            {nw.map((s, i) => (
+            {(nw?.buckets || []).map((b, i) => (
               <div className="kit-nwleg__item" key={i}>
-                <span className="kit-nwleg__dot" style={{ background: s.color }} />
-                <span className="kit-muted" style={{ color: 'var(--text-body)' }}>{s.name}</span>
-                <span className="kit-nwleg__val">${(s.val / 1000).toFixed(1)}k</span>
+                <span className="kit-nwleg__dot" style={{ background: `var(--${b.color}-600)` }} />
+                <span className="kit-muted" style={{ color: 'var(--text-body)' }}>{b.name}</span>
+                <span className="kit-nwleg__val">{money(b.value)}</span>
               </div>
             ))}
           </div>
         </Card>
-        <Card title="Investments" action={<Stat label="Today" value="+$640" trend="up" delta="+0.5%" />}>
-          {holdings.map((h, i) => (
-            <div className="kit-hold" key={i}>
-              <span className="kit-hold__sym" style={{ background: `var(--${h.tint}-100)`, color: `var(--${h.tint}-600)` }}>{h.sym.length > 3 ? h.sym.slice(0, 3) : h.sym}</span>
+        <Card title="Holdings">
+          {(holdings || []).length === 0 && <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>No holdings — connect Coinbase or a brokerage.</p>}
+          {(holdings || []).map((h) => (
+            <div className="kit-hold" key={h.id}>
+              <span className="kit-hold__sym" style={{ background: h.is_crypto ? 'var(--plum-100)' : 'var(--green-100)', color: h.is_crypto ? 'var(--plum-600)' : 'var(--green-600)' }}>{(h.ticker || h.name || '?').slice(0, 3)}</span>
               <div className="kit-row__main">
                 <p className="kit-row__title">{h.name}</p>
-                <p className="kit-row__sub">{h.sym}</p>
+                <p className="kit-row__sub">{h.ticker || h.type}</p>
               </div>
-              <div style={{ textAlign: 'right' }}>
-                <div className="kit-row__amt">{h.val}</div>
-                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: h.up ? 'var(--green-600)' : 'var(--clay-600)' }}>{h.chg}</div>
-              </div>
+              <div className="kit-row__amt">{money(h.value)}</div>
             </div>
           ))}
         </Card>
       </div>
 
-      {/* Budgets + recent */}
+      {/* budgets + transactions */}
       <div className="kit-grid" style={{ gridTemplateColumns: '1fr 1.2fr' }}>
-        <Card title="Budgets" eyebrow="June" action={<IconButton label="Edit budgets" size="sm"><Icon name="sliders-horizontal" /></IconButton>}>
-          <div className="kit-stack" style={{ marginTop: 4 }}>
-            {cats.map((c, i) => (
-              <ProgressBar key={i} label={c.name} value={c.spent} max={c.budget} color={c.color}
-                meta={`$${c.spent.toLocaleString()} / $${c.budget.toLocaleString()}`} />
+        <Card title="Budgets" eyebrow={summary?.month}
+          action={<Button variant="soft" size="sm" onClick={saveBudgets} disabled={Object.keys(edits).length === 0}>Save</Button>}>
+          <div className="kit-stack" style={{ marginTop: 4, gap: 10 }}>
+            {(budgets || []).map((c) => (
+              <div key={c.category}>
+                <ProgressBar label={c.category} value={c.spent} max={Math.max(c.limit_amount, 1)} color={c.color}
+                  meta={`${money(c.spent)} / ${money(c.limit_amount)}`} />
+                <input type="number" className="kit-input" defaultValue={c.limit_amount}
+                  onChange={(e) => setEdits((prev) => ({ ...prev, [c.category]: e.target.value }))}
+                  style={{ width: 90, marginTop: 4, padding: '4px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--paper-300)', fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }} />
+              </div>
             ))}
           </div>
-          <div className="kit-insight" style={{ marginTop: 18 }}>
-            <div className="kit-insight__icon"><Icon name="trending-up" /></div>
-            <p>You're <strong>$120 under</strong> your dining budget. Roll it into savings?</p>
-          </div>
         </Card>
-
-        <Card title="Recent transactions" action={<Button variant="ghost" size="sm" iconRight={<Icon name="arrow-right" />}>All</Button>}>
-          {txns.map((t, i) => (
-            <div className="kit-row" key={i}>
-              <span className="kit-cat" style={{ background: t.cat }} />
+        <Card title="Recent transactions">
+          {(txns || []).length === 0 && <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>No transactions yet — they land after the first sync.</p>}
+          {(txns || []).slice(0, 12).map((t) => (
+            <div className="kit-row" key={t.id}>
+              <span className="kit-cat" style={{ background: 'var(--paper-300)' }} />
               <div className="kit-row__main">
-                <p className="kit-row__title">{t.title}</p>
-                <p className="kit-row__sub">{t.sub}</p>
+                <p className="kit-row__title">{t.merchant_name || t.name}</p>
+                <p className="kit-row__sub">{t.category} · {t.when}</p>
               </div>
-              <span className={`kit-row__amt ${t.pos ? 'kit-amt--pos' : 'kit-amt--neg'}`}>{t.amt}</span>
+              <span className={`kit-row__amt ${t.positive ? 'kit-amt--pos' : 'kit-amt--neg'}`}>
+                {t.positive ? '+' : '−'}{money(Math.abs(t.amount))}
+              </span>
             </div>
           ))}
         </Card>
       </div>
 
-      {/* Subscriptions + Bills */}
+      {/* slice-2 sample panels (clearly labeled) */}
       <div className="kit-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        <Card title="Subscriptions" eyebrow="$58 / mo · $96 / yr" action={<Badge color="honey" dot>2 renew soon</Badge>}>
-          {subs.map((s, i) => (
+        <Card title="Subscriptions" action={<Badge color="neutral">Sample · slice 2</Badge>}>
+          {SAMPLE_SUBS.map((s, i) => (
             <div className="kit-sub" key={i}>
               <span className="kit-sub__logo" style={{ background: s.color }}>{s.letter}</span>
-              <div className="kit-sub__main">
-                <p className="kit-row__title">{s.name}</p>
-                <p className="kit-row__sub">{s.price} · {s.cycle}</p>
-              </div>
-              {s.soon
-                ? <Badge color="honey" icon={<Icon name="bell" />}>Renews {s.renews}</Badge>
-                : <span className="kit-row__sub" style={{ fontFamily: 'var(--font-mono)' }}>Renews {s.renews}</span>}
+              <div className="kit-sub__main"><p className="kit-row__title">{s.name}</p><p className="kit-row__sub">{s.price} · {s.cycle}</p></div>
+              <span className="kit-row__sub" style={{ fontFamily: 'var(--font-mono)' }}>Renews {s.renews}</span>
             </div>
           ))}
         </Card>
-
-        <Card title="Bills & recurring" eyebrow="June" action={<span className="kit-muted">$1,632 due</span>}>
-          {bills.map((b, i) => (
+        <Card title="Bills & recurring" action={<Badge color="neutral">Sample · slice 2</Badge>}>
+          {SAMPLE_BILLS.map((b, i) => (
             <div className="kit-sub" key={i}>
               <span className="kit-workout__ico" style={{ width: 38, height: 38, background: `var(--${b.tint}-100)`, color: `var(--${b.tint}-600)` }}><Icon name={b.icon} /></span>
-              <div className="kit-sub__main">
-                <p className="kit-row__title">{b.name}</p>
-                <p className="kit-row__sub">{b.sub} · {b.due}</p>
-              </div>
-              <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-                <span className="kit-row__amt">{b.amt}</span>
-                {b.auto ? <Badge color="green">Autopay</Badge> : <Badge color="clay">Manual</Badge>}
-              </div>
+              <div className="kit-sub__main"><p className="kit-row__title">{b.name}</p><p className="kit-row__sub">{b.sub} · {b.due}</p></div>
+              <span className="kit-row__amt">{b.amt}</span>
             </div>
           ))}
         </Card>

@@ -211,6 +211,30 @@ export const api = {
   moodleSync: () => request('/api/moodle/sync', { method: 'POST' }),
   moodleConnect: (payload) => request('/api/moodle/connect', { method: 'POST', body: JSON.stringify(payload) }),
 
+  // Finance / Plaid (M7) — every read comes straight from the finance_* tables
+  // server-side (a read never triggers a live Plaid call), so the screen works
+  // while a sync is mid-flight or Plaid is down. Only linkStart/linkComplete
+  // (Hosted Link) and sync reach Plaid. Access tokens never cross this boundary.
+  financeStatus: () => request('/api/finance/status'),
+  financeLinkStart: (kind) => request('/api/finance/link/start', { method: 'POST', body: JSON.stringify({ kind }) }),
+  financeLinkComplete: (linkToken) => request('/api/finance/link/complete', { method: 'POST', body: JSON.stringify({ link_token: linkToken }) }),
+  financeSummary: (month) => request(`/api/finance/summary${month ? `?month=${month}` : ''}`),
+  financeAccounts: () => request('/api/finance/accounts'),
+  financeTransactions: ({ days, accountId, category } = {}) => {
+    const q = new URLSearchParams()
+    if (days != null) q.set('days', days)
+    if (accountId) q.set('account_id', accountId)
+    if (category) q.set('category', category)
+    const qs = q.toString()
+    return request(`/api/finance/transactions${qs ? `?${qs}` : ''}`)
+  },
+  financeHoldings: () => request('/api/finance/holdings'),
+  financeBudgets: (month) => request(`/api/finance/budgets${month ? `?month=${month}` : ''}`),
+  financeSaveBudgets: (month, budgets) => request('/api/finance/budgets', { method: 'PUT', body: JSON.stringify({ month, budgets }) }),
+  financeReallocate: (payload) => request('/api/finance/budgets/reallocate', { method: 'POST', body: JSON.stringify(payload) }),
+  financeDisconnect: (itemId) => request(`/api/finance/items/${itemId}/disconnect`, { method: 'POST' }),
+  financeSync: () => request('/api/finance/sync', { method: 'POST' }),
+
   // Second-brain memories.
   listMemories: () => request('/api/memory'),
   createMemory: (text, extras) => request('/api/memory', {

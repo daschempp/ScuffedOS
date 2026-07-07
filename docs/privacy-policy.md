@@ -1,10 +1,10 @@
 # ScuffedOS Privacy Policy
 
-**Effective date:** July 4, 2026
+**Effective date:** July 5, 2026
 
 ScuffedOS is a personal assistant application operated by Dylan Schempp ("we," "us"). It combines tasks, calendar, habits, nutrition, notes, and connected health data behind a single AI assistant. ScuffedOS is a self-hosted application: in the current deployment, the operator and the sole user are the same person, and there are no third-party user accounts.
 
-This policy describes what data ScuffedOS stores, how it is used, and which service providers process it. It applies to the ScuffedOS application and any data obtained through connected services such as WHOOP, Gmail, and Moodle.
+This policy describes what data ScuffedOS stores, how it is used, and which service providers process it. It applies to the ScuffedOS application and any data obtained through connected services such as WHOOP, Gmail, Moodle, and Plaid.
 
 ## 1. Information we collect
 
@@ -12,7 +12,7 @@ This policy describes what data ScuffedOS stores, how it is used, and which serv
 
 **Derived information.** After each assistant conversation, the app may extract short factual "memories" (for example, a stated preference or goal) and store them, along with vector embeddings of that text, so the assistant can recall relevant context later. Conversation history with the assistant is also stored so conversations can resume.
 
-**Connected service data (with your consent).** If you connect a WHOOP account, ScuffedOS retrieves your WHOOP data via the official WHOOP API after you authorize access through WHOOP's OAuth flow. Depending on the scopes you grant, this may include basic profile information, recovery scores, sleep data, strain and workout data, and related physiological measurements such as heart rate. If you connect a Gmail account, ScuffedOS reads your inbox messages via the Gmail API after you authorize access through Google's OAuth flow (read plus the modify/send scopes); it stores email metadata (sender, subject, snippet, and an AI-derived category and summary) but never the message bodies. Beyond reading, ScuffedOS acts on your mailbox only when you take an explicit action — sending, replying, forwarding, moving a message to Trash, starring, marking read/unread, or applying a label. If you connect a Moodle (school learning-management) account, ScuffedOS reads your course information read-only via the Moodle web-services API after you paste in an access token you obtain from your school's Moodle site; it stores course names, assignment due dates, assignment and grade metadata, and short announcement and notification summaries — never assignment files or the full text of course content. See Section 4 for how WHOOP, Gmail, and Moodle data are handled.
+**Connected service data (with your consent).** If you connect a WHOOP account, ScuffedOS retrieves your WHOOP data via the official WHOOP API after you authorize access through WHOOP's OAuth flow. Depending on the scopes you grant, this may include basic profile information, recovery scores, sleep data, strain and workout data, and related physiological measurements such as heart rate. If you connect a Gmail account, ScuffedOS reads your inbox messages via the Gmail API after you authorize access through Google's OAuth flow (read plus the modify/send scopes); it stores email metadata (sender, subject, snippet, and an AI-derived category and summary) but never the message bodies. Beyond reading, ScuffedOS acts on your mailbox only when you take an explicit action — sending, replying, forwarding, moving a message to Trash, starring, marking read/unread, or applying a label. If you connect a Moodle (school learning-management) account, ScuffedOS reads your course information read-only via the Moodle web-services API after you paste in an access token you obtain from your school's Moodle site; it stores course names, assignment due dates, assignment and grade metadata, and short announcement and notification summaries — never assignment files or the full text of course content. If you connect a bank or Coinbase account, ScuffedOS retrieves your financial data read-only through **Plaid** after you authorize each institution through Plaid's own hosted link flow; it stores account names/masks/types, balances, transaction metadata, and investment holdings (including crypto) — never your bank/Coinbase credentials. See Section 4 for how WHOOP, Gmail, Moodle, and Plaid data are handled.
 
 **What we do not collect.** ScuffedOS contains no advertising, no third-party analytics, and no tracking technologies. We do not collect data about anyone other than the user of the app.
 
@@ -38,6 +38,7 @@ ScuffedOS sends data to a small set of service providers, each for a specific fu
 | **WHOOP** | Health data source (only if you connect it) | OAuth authorization; ScuffedOS receives data from WHOOP, not the reverse |
 | **Google (Gmail)** | Email source — read and user-initiated actions (only if you connect it) | OAuth authorization; ScuffedOS reads your Gmail messages via the Gmail API. Message content is retrieved to display it and (subject + a bounded body excerpt) is sent to Anthropic for triage or, when you ask for an AI draft, to generate one — see Section 4. Actions you take (send, reply, forward, trash, star, read/unread, labels) are carried out via the Gmail API using your own account; sent mail is delivered through Gmail and appears in your Sent folder |
 | **Moodle** (school LMS, e.g. NC State WolfWare) | School source, read-only (only if you connect it) | A `wstoken` you provide; ScuffedOS reads your courses, deadlines, grades, and announcements via the Moodle web-services API to display them. Course data may be included in assistant context sent to Anthropic only when you ask the assistant about school — see Section 4 |
+| **Plaid** | Bank and Coinbase data source, read-only (only if you connect an institution) | OAuth-style authorization through Plaid's hosted link flow; ScuffedOS receives access to the financial account data you authorize (balances, transactions, investment holdings) via the Plaid API — Plaid never receives data from ScuffedOS beyond the link setup. Financial figures may be included in assistant context sent to Anthropic only when you ask the assistant about your money — see Section 4 |
 | **USDA FoodData Central** | Food nutrition lookup | Only the food search text you enter (e.g., "chicken wrap") |
 
 Anthropic and OpenAI process API data under their published API data-usage policies, which (as of the effective date) state that API inputs and outputs are not used to train their models.
@@ -46,7 +47,7 @@ If you use voice dictation, audio is processed by your browser's built-in speech
 
 File attachments and the memory change-history database are stored locally on the machine running the app, not with any cloud provider. Notifications are generated locally on-device.
 
-## 4. WHOOP, Gmail, and Moodle data
+## 4. WHOOP, Gmail, Moodle, and Plaid data
 
 If you choose to connect WHOOP:
 
@@ -81,6 +82,32 @@ If you choose to connect Moodle:
 
 ScuffedOS is an independent application and is not affiliated with, endorsed by, or sponsored by Moodle, Moodle Pty Ltd, or North Carolina State University.
 
+### If you choose to connect a bank or Coinbase (Plaid)
+
+Scuffed OS can link your financial institutions through **Plaid** so the Finance
+screen shows real balances, transactions, net worth, and investment holdings
+(including Coinbase crypto). This is **read-only**: the app **never moves money,
+initiates a transfer, or writes anything back to your bank or Coinbase.**
+
+- **How it connects.** You link an institution through Plaid's own hosted flow.
+  **Plaid handles your bank/Coinbase login — Scuffed OS never sees your
+  credentials.** Plaid returns an access token that lets us read your data; that
+  token is stored **server-side only** and never sent to the browser.
+- **What is stored:** institution and account names/masks/types, balances,
+  transaction metadata (date, amount, merchant, Plaid category), and investment
+  holdings + securities (including crypto). Budgets you set are **local** and
+  never leave the app; net worth is computed locally.
+- **What is not stored:** your bank/Coinbase credentials (Plaid holds those),
+  and full statements/documents.
+- **Anthropic.** No financial data is sent to Anthropic **except** when you ask
+  the assistant about your money — then the relevant figures transit to generate
+  the reply and are not stored beyond it. The assistant can edit **local budget
+  limits** on your instruction; it can **never** move money.
+- **Disconnect.** Disconnecting an institution removes it at Plaid and deletes
+  all of its data from Scuffed OS within 30 days.
+
+Scuffed OS is not affiliated with Plaid, Coinbase, or your bank.
+
 ## 5. Data storage and security
 
 - App data is stored in a Postgres database hosted by Supabase; attachments and the memory history file are stored on the operator's machine.
@@ -92,7 +119,7 @@ No system is perfectly secure, but as a single-user, self-hosted application, Sc
 
 ## 6. Data retention and deletion
 
-Data is retained until you delete it. ScuffedOS provides in-app deletion for every domain (tasks, events, habits, logs, memories, conversations), and the operator can delete any record — or all data — directly from the database at any time. Disconnecting WHOOP triggers deletion of synced WHOOP data and tokens as described in Section 4; disconnecting Gmail likewise deletes stored email metadata and Google OAuth tokens; disconnecting Moodle likewise deletes all stored Moodle data (courses, deadlines, assignments, grades, announcements, notifications) and your Moodle access token. For any deletion request, contact us at the address below and it will be honored within 30 days.
+Data is retained until you delete it. ScuffedOS provides in-app deletion for every domain (tasks, events, habits, logs, memories, conversations), and the operator can delete any record — or all data — directly from the database at any time. Disconnecting WHOOP triggers deletion of synced WHOOP data and tokens as described in Section 4; disconnecting Gmail likewise deletes stored email metadata and Google OAuth tokens; disconnecting Moodle likewise deletes all stored Moodle data (courses, deadlines, assignments, grades, announcements, notifications) and your Moodle access token. Connected-institution data is deleted within 30 days of disconnecting a bank or Coinbase account linked through Plaid. For any deletion request, contact us at the address below and it will be honored within 30 days.
 
 ## 7. Your rights and choices
 

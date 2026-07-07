@@ -14,6 +14,7 @@ from __future__ import annotations
 import functools
 import logging
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 
 from sqlalchemy import case, select
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +38,12 @@ from .models import (
     DailySnapshot,
     Email,
     Event,
+    FinanceAccount,
+    FinanceBudget,
+    FinanceHolding,
+    FinanceItem,
+    FinanceSecurity,
+    FinanceTransaction,
     Habit,
     HabitCompletion,
     Meal,
@@ -56,17 +63,49 @@ from .models import (
     utcnow,
 )
 from .providers.base import (
+    NormalizedAccount,
     NormalizedAnnouncement,
     NormalizedAssignment,
     NormalizedCourse,
     NormalizedDeadline,
     NormalizedEmail,
     NormalizedGrade,
+    NormalizedHolding,
+    NormalizedItem,
     NormalizedNotification,
+    NormalizedSecurity,
     NormalizedSnapshot,
+    NormalizedTransaction,
     NormalizedWorkout,
     Tokens,
+    TransactionsDelta,
 )
+
+# ---- finance budget categories (fixed set, slice 1) ----
+BUDGET_CATEGORIES = ["Groceries", "Rent & bills", "Dining out", "Transport", "Savings", "Other"]
+_BUDGET_COLORS = {
+    "Groceries": "clay", "Rent & bills": "honey", "Dining out": "plum",
+    "Transport": "sky", "Savings": "green", "Other": "slate",
+}
+
+
+def budget_bucket(primary: str, detailed: str = "") -> str:
+    """Map a Plaid personal_finance_category to one of the six budget buckets.
+    [confirm-against-live] — real PFC values verified at the live gate."""
+    primary = (primary or "").upper()
+    detailed = (detailed or "").upper()
+    if "GROCERIES" in detailed:
+        return "Groceries"
+    if primary == "FOOD_AND_DRINK":
+        return "Dining out"
+    if primary in ("RENT_AND_UTILITIES", "LOAN_PAYMENTS", "HOME_IMPROVEMENT"):
+        return "Rent & bills"
+    if primary in ("TRANSPORTATION", "TRAVEL"):
+        return "Transport"
+    if primary == "TRANSFER_OUT" and ("SAVINGS" in detailed or "INVESTMENT" in detailed):
+        return "Savings"
+    return "Other"
+
 
 _TASK_FIELDS = {
     "label", "done", "group", "deadline", "prio", "list", "description",
@@ -469,6 +508,56 @@ def _moodle_deadline_dict(d: MoodleDeadline) -> dict:
         # Derived display string (never stored) — reuse the calendar
         # "Up next" formatter; a deadline is a point in time, so start==end.
         "when": event_when_display(due, due, "", None),
+    }
+
+
+def _dec_to_float(x) -> float | None:
+    return float(x) if x is not None else None
+
+
+def _finance_account_dict(a: FinanceAccount) -> dict:
+    return {
+        "id": a.id,
+        "source_id": a.source_id,
+        "item_id": a.item_id,
+        "name": a.name,
+        "official_name": a.official_name,
+        "mask": a.mask,
+        "type": a.type,
+        "subtype": a.subtype,
+        "current_balance": _dec_to_float(a.current_balance),
+        "available_balance": _dec_to_float(a.available_balance),
+        "iso_currency": a.iso_currency,
+    }
+
+
+def _finance_transaction_dict(t: FinanceTransaction) -> dict:
+    return {
+        "id": t.id,
+        "source_id": t.source_id,
+        "account_id": t.account_id,
+        "name": t.name,
+        "merchant_name": t.merchant_name,
+        "amount": _dec_to_float(t.amount),
+        "positive": (t.amount is not None and t.amount < 0),   # inflow
+        "iso_currency": t.iso_currency,
+        "date": t.date.isoformat() if t.date else None,
+        "pending": t.pending,
+        "category": t.category_primary,
+        "when": relative_when(_to_utc(datetime(t.date.year, t.date.month, t.date.day)))
+                if t.date else "",
+    }
+
+
+def _finance_item_dict(row: FinanceItem) -> dict:
+    """Client-safe Item view — NO access_token, NO cursor."""
+    return {
+        "item_id": row.source_id,
+        "institution_name": row.institution_name,
+        "status": row.status,
+        "products": list(row.products or []),
+        "connected_at": aware_utc(row.connected_at),
+        "last_sync_at": aware_utc(row.last_sync_at),
     }
 
 
@@ -1852,6 +1941,467 @@ class Store:
                     s.delete(row)
                     deleted = True
         return deleted
+
+    # ---- finance ----
+    def _finance_item_row(self, s: Session, item_id: str) -> FinanceItem | None:
+        from .config import settings
+        return s.scalars(
+            select(FinanceItem)
+            .where(FinanceItem.owner == settings.owner)
+            .where(FinanceItem.source == "plaid")
+            .where(FinanceItem.source_id == item_id)
+        ).first()
+
+    @_retry_integrity
+    def upsert_finance_item(self, item: NormalizedItem, access_token: str) -> dict:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = self._finance_item_row(s, item.item_id)
+            if row is None:
+                row = FinanceItem(owner=settings.owner, source="plaid",
+                                  source_id=item.item_id)
+                s.add(row)
+            row.access_token = access_token
+            row.institution_id = item.institution_id
+            row.institution_name = item.institution_name
+            row.products = list(item.products or [])
+            row.status = "active"
+            s.flush()
+            return _finance_item_dict(row)
+
+    def list_finance_items(self) -> list[dict]:
+        from .config import settings
+        with self._session() as s:
+            rows = s.scalars(
+                select(FinanceItem)
+                .where(FinanceItem.owner == settings.owner)
+                .order_by(FinanceItem.id)
+            ).all()
+            return [_finance_item_dict(r) for r in rows]
+
+    def get_finance_item(self, item_id: str) -> dict | None:
+        with self._session() as s:
+            row = self._finance_item_row(s, item_id)
+            return _finance_item_dict(row) if row else None
+
+    def get_finance_item_token(self, item_id: str) -> str | None:
+        """Server-side only — the access_token for one Item (used by the sync)."""
+        with self._session() as s:
+            row = self._finance_item_row(s, item_id)
+            return row.access_token if row else None
+
+    def set_finance_item_status(self, item_id: str, status: str) -> None:
+        with self._session() as s, s.begin():
+            row = self._finance_item_row(s, item_id)
+            if row is not None:
+                row.status = status
+
+    def set_finance_item_cursor(self, item_id: str, cursor: str | None) -> None:
+        with self._session() as s, s.begin():
+            row = self._finance_item_row(s, item_id)
+            if row is not None:
+                row.cursor = cursor
+
+    def set_finance_item_synced(self, item_id: str, when: datetime | None = None) -> None:
+        with self._session() as s, s.begin():
+            row = self._finance_item_row(s, item_id)
+            if row is not None:
+                row.last_sync_at = _to_utc(when) if when else utcnow()
+
+    def get_finance_item_cursor(self, item_id: str) -> str | None:
+        """Server-side only — the /transactions/sync cursor for one Item."""
+        with self._session() as s:
+            row = self._finance_item_row(s, item_id)
+            return row.cursor if row else None
+
+    def delete_finance_item(self, item_id: str) -> bool:
+        """Disconnect one Item: delete it + its accounts/transactions/holdings,
+        then prune securities no surviving holding references. Returns True iff
+        the Item existed."""
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = self._finance_item_row(s, item_id)
+            if row is None:
+                return False
+            s.delete(row)
+            for model in (FinanceAccount, FinanceTransaction, FinanceHolding):
+                for r in s.scalars(
+                    select(model)
+                    .where(model.owner == settings.owner)
+                    .where(model.item_id == item_id)
+                ):
+                    s.delete(r)
+            # Prune orphan securities (no holding references them any more).
+            live_sec_ids = set(s.scalars(
+                select(FinanceHolding.security_id)
+                .where(FinanceHolding.owner == settings.owner)
+            ).all())
+            for sec in s.scalars(
+                select(FinanceSecurity).where(FinanceSecurity.owner == settings.owner)
+            ):
+                if sec.source_id not in live_sec_ids:
+                    s.delete(sec)
+            return True
+
+    def finance_status(self) -> dict:
+        items = self.list_finance_items()
+        return {"connected": len(items) > 0, "items": items}
+
+    def _finance_account_row(self, s: Session, source_id: str) -> FinanceAccount | None:
+        from .config import settings
+        return s.scalars(
+            select(FinanceAccount)
+            .where(FinanceAccount.owner == settings.owner)
+            .where(FinanceAccount.source == "plaid")
+            .where(FinanceAccount.source_id == source_id)
+        ).first()
+
+    @_retry_integrity
+    def upsert_finance_account(self, a: NormalizedAccount) -> dict:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = self._finance_account_row(s, a.source_id)
+            if row is None:
+                row = FinanceAccount(owner=settings.owner, source="plaid",
+                                     source_id=a.source_id)
+                s.add(row)
+            row.item_id = a.item_id
+            row.name = a.name
+            row.official_name = a.official_name
+            row.mask = a.mask
+            row.type = a.type
+            row.subtype = a.subtype
+            row.current_balance = a.current_balance
+            row.available_balance = a.available_balance
+            row.iso_currency = a.iso_currency
+            s.flush()
+            return _finance_account_dict(row)
+
+    def list_finance_accounts(self) -> list[dict]:
+        from .config import settings
+        with self._session() as s:
+            rows = s.scalars(
+                select(FinanceAccount)
+                .where(FinanceAccount.owner == settings.owner)
+                .order_by(FinanceAccount.id)
+            ).all()
+            return [_finance_account_dict(a) for a in rows]
+
+    @_retry_integrity
+    def upsert_finance_transaction(self, t: NormalizedTransaction) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceTransaction)
+                .where(FinanceTransaction.owner == settings.owner)
+                .where(FinanceTransaction.source == "plaid")
+                .where(FinanceTransaction.source_id == t.source_id)
+            ).first()
+            if row is None:
+                row = FinanceTransaction(owner=settings.owner, source="plaid",
+                                         source_id=t.source_id)
+                s.add(row)
+            row.account_id = t.account_id
+            row.item_id = t.item_id
+            row.name = t.name
+            row.merchant_name = t.merchant_name
+            row.amount = t.amount
+            row.iso_currency = t.iso_currency
+            row.date = t.date
+            row.authorized_date = t.authorized_date
+            row.pending = t.pending
+            row.category_primary = t.category_primary
+            row.category_detailed = t.category_detailed
+            row.payment_channel = t.payment_channel
+
+    def apply_transaction_delta(self, delta: TransactionsDelta) -> int:
+        """Apply one /transactions/sync page: upsert added+modified by
+        transaction_id, delete removed. Returns rows added+modified."""
+        from .config import settings
+        for t in delta.added:
+            self.upsert_finance_transaction(t)
+        for t in delta.modified:
+            self.upsert_finance_transaction(t)
+        if delta.removed:
+            with self._session() as s, s.begin():
+                for tid in delta.removed:
+                    row = s.scalars(
+                        select(FinanceTransaction)
+                        .where(FinanceTransaction.owner == settings.owner)
+                        .where(FinanceTransaction.source == "plaid")
+                        .where(FinanceTransaction.source_id == tid)
+                    ).first()
+                    if row is not None:
+                        s.delete(row)
+        return len(delta.added) + len(delta.modified)
+
+    def finance_transactions(self, days: int | None = None, account_id: str | None = None,
+                             category: str | None = None) -> list[dict]:
+        from .config import settings
+        with self._session() as s:
+            q = (
+                select(FinanceTransaction)
+                .where(FinanceTransaction.owner == settings.owner)
+                .order_by(FinanceTransaction.date.desc(), FinanceTransaction.id.desc())
+            )
+            if days is not None:
+                cutoff = (utcnow() - timedelta(days=days)).date()
+                q = q.where(FinanceTransaction.date >= cutoff)
+            if account_id is not None:
+                q = q.where(FinanceTransaction.account_id == account_id)
+            if category is not None:
+                q = q.where(FinanceTransaction.category_primary == category)
+            return [_finance_transaction_dict(t) for t in s.scalars(q).all()]
+
+    @_retry_integrity
+    def upsert_finance_security(self, sec: NormalizedSecurity) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceSecurity)
+                .where(FinanceSecurity.owner == settings.owner)
+                .where(FinanceSecurity.source == "plaid")
+                .where(FinanceSecurity.source_id == sec.source_id)
+            ).first()
+            if row is None:
+                row = FinanceSecurity(owner=settings.owner, source="plaid",
+                                      source_id=sec.source_id)
+                s.add(row)
+            row.name = sec.name
+            row.ticker_symbol = sec.ticker_symbol
+            row.type = sec.type
+            row.close_price = sec.close_price
+            row.iso_currency = sec.iso_currency
+            row.is_cash_equivalent = sec.is_cash_equivalent
+
+    @_retry_integrity
+    def upsert_finance_holding(self, h: NormalizedHolding) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceHolding)
+                .where(FinanceHolding.owner == settings.owner)
+                .where(FinanceHolding.account_id == h.account_id)
+                .where(FinanceHolding.security_id == h.security_id)
+            ).first()
+            if row is None:
+                row = FinanceHolding(owner=settings.owner, account_id=h.account_id,
+                                     security_id=h.security_id)
+                s.add(row)
+            row.item_id = h.item_id
+            row.quantity = h.quantity
+            row.cost_basis = h.cost_basis
+            row.institution_value = h.institution_value
+            row.institution_price = h.institution_price
+            row.iso_currency = h.iso_currency
+
+    def finance_holdings(self) -> list[dict]:
+        """Holdings joined to their securities, ordered by value desc."""
+        from .config import settings
+        with self._session() as s:
+            secs = {
+                x.source_id: x for x in s.scalars(
+                    select(FinanceSecurity).where(FinanceSecurity.owner == settings.owner)
+                ).all()
+            }
+            rows = s.scalars(
+                select(FinanceHolding)
+                .where(FinanceHolding.owner == settings.owner)
+                .order_by(FinanceHolding.institution_value.desc())
+            ).all()
+            out = []
+            for h in rows:
+                sec = secs.get(h.security_id)
+                out.append({
+                    "id": h.id,
+                    "account_id": h.account_id,
+                    "security_id": h.security_id,
+                    "name": sec.name if sec else h.security_id,
+                    "ticker": (sec.ticker_symbol if sec else None),
+                    "type": (sec.type if sec else ""),
+                    "is_crypto": bool(sec and sec.type == "cryptocurrency"),
+                    "quantity": _dec_to_float(h.quantity),
+                    "value": _dec_to_float(h.institution_value),
+                    "price": _dec_to_float(h.institution_price),
+                    "currency": h.iso_currency,
+                })
+            return out
+
+    def finance_budgets(self, month: str) -> list[dict]:
+        """All six budget categories for `month` (YYYY-MM), each with its local
+        limit and derived spend (Σ outflow amounts mapped to that bucket)."""
+        from .config import settings
+        with self._session() as s:
+            limits = {
+                b.category: b.limit_amount for b in s.scalars(
+                    select(FinanceBudget)
+                    .where(FinanceBudget.owner == settings.owner)
+                    .where(FinanceBudget.month == month)
+                ).all()
+            }
+            txns = s.scalars(
+                select(FinanceTransaction)
+                .where(FinanceTransaction.owner == settings.owner)
+            ).all()
+        spent = {c: Decimal("0") for c in BUDGET_CATEGORIES}
+        for t in txns:
+            if t.date is None or t.date.strftime("%Y-%m") != month:
+                continue
+            if t.amount is None or t.amount <= 0:        # only outflows are "spend"
+                continue
+            spent[budget_bucket(t.category_primary, t.category_detailed)] += t.amount
+        return [
+            {
+                "category": c,
+                "limit_amount": _dec_to_float(limits.get(c, Decimal("0"))),
+                "spent": float(spent[c]),
+                "color": _BUDGET_COLORS[c],
+            }
+            for c in BUDGET_CATEGORIES
+        ]
+
+    @_retry_integrity
+    def _upsert_one_budget(self, month: str, category: str, limit_amount) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceBudget)
+                .where(FinanceBudget.owner == settings.owner)
+                .where(FinanceBudget.category == category)
+                .where(FinanceBudget.month == month)
+            ).first()
+            if row is None:
+                row = FinanceBudget(owner=settings.owner, category=category, month=month)
+                s.add(row)
+            row.limit_amount = Decimal(str(limit_amount))
+
+    def upsert_budgets(self, month: str, budgets: list[dict]) -> list[dict]:
+        for b in budgets:
+            category = b["category"]
+            if category not in BUDGET_CATEGORIES:        # ignore unknown buckets
+                continue
+            self._upsert_one_budget(month, category, b["limit_amount"])
+        return self.finance_budgets(month)
+
+    def reallocate_budget(self, month: str, from_category: str, to_category: str,
+                          amount: float) -> list[dict]:
+        """Logical move: subtract `amount` from from_category's limit, add it to
+        to_category's. Local only — never touches a bank."""
+        current = {b["category"]: b["limit_amount"] for b in self.finance_budgets(month)}
+        amt = Decimal(str(amount))
+        self._upsert_one_budget(month, from_category,
+                                Decimal(str(current.get(from_category, 0))) - amt)
+        self._upsert_one_budget(month, to_category,
+                                Decimal(str(current.get(to_category, 0))) + amt)
+        return self.finance_budgets(month)
+
+    _RETIREMENT_SUBTYPES = frozenset({
+        "ira", "roth", "roth 401k", "401k", "401a", "403b", "457b", "pension",
+        "retirement", "sep ira", "simple ira", "sarsep", "tsp",
+    })
+
+    def _month_sums(self, s: Session, month: str) -> tuple[Decimal, Decimal]:
+        """(income, spent) for `month` (YYYY-MM), excluding internal transfers."""
+        from .config import settings
+        income = Decimal("0")
+        spent = Decimal("0")
+        for t in s.scalars(
+            select(FinanceTransaction).where(FinanceTransaction.owner == settings.owner)
+        ):
+            if t.date is None or t.date.strftime("%Y-%m") != month or t.amount is None:
+                continue
+            primary = (t.category_primary or "").upper()
+            if t.amount < 0:
+                if primary != "TRANSFER_IN":
+                    income += -t.amount
+            elif t.amount > 0:
+                if primary != "TRANSFER_OUT":
+                    spent += t.amount
+        return income, spent
+
+    def finance_summary(self, month: str | None = None) -> dict:
+        from .config import settings
+        month = month or utcnow().strftime("%Y-%m")
+        y, m = int(month[:4]), int(month[5:7])
+        prev = f"{y - 1:04d}-12" if m == 1 else f"{y:04d}-{m - 1:02d}"
+        with self._session() as s:
+            balance = Decimal("0")
+            for a in s.scalars(
+                select(FinanceAccount)
+                .where(FinanceAccount.owner == settings.owner)
+                .where(FinanceAccount.type == "depository")
+            ):
+                bal = a.available_balance if a.available_balance is not None else a.current_balance
+                if bal is not None:
+                    balance += bal
+            income, spent = self._month_sums(s, month)
+            prev_income, prev_spent = self._month_sums(s, prev)
+        return {
+            "month": month,
+            "balance": float(balance),
+            "income_month": float(income),
+            "spent_month": float(spent),
+            "income_delta": float(income - prev_income),
+            "spent_delta": float(spent - prev_spent),
+        }
+
+    def finance_networth(self) -> dict:
+        from .config import settings
+        with self._session() as s:
+            accounts = s.scalars(
+                select(FinanceAccount).where(FinanceAccount.owner == settings.owner)
+            ).all()
+            crypto_ids = {
+                x.source_id for x in s.scalars(
+                    select(FinanceSecurity)
+                    .where(FinanceSecurity.owner == settings.owner)
+                    .where(FinanceSecurity.type == "cryptocurrency")
+                ).all()
+            }
+            holdings = s.scalars(
+                select(FinanceHolding).where(FinanceHolding.owner == settings.owner)
+            ).all()
+        cash = Decimal("0")
+        credit_loans = Decimal("0")
+        for a in accounts:
+            bal = a.current_balance if a.current_balance is not None else Decimal("0")
+            if a.type == "depository":
+                cash += (a.available_balance if a.available_balance is not None else bal)
+            elif a.type in ("credit", "loan"):
+                credit_loans += bal
+        crypto = Decimal("0")
+        investments = Decimal("0")
+        retirement = Decimal("0")
+        acct_subtype = {a.source_id: (a.subtype or "").lower() for a in accounts}
+        for h in holdings:
+            value = h.institution_value or Decimal("0")
+            if h.security_id in crypto_ids:
+                crypto += value
+            elif acct_subtype.get(h.account_id, "") in self._RETIREMENT_SUBTYPES:
+                retirement += value
+            else:
+                investments += value
+        # Un-itemized investment accounts (no holdings — e.g. some IRAs Plaid
+        # can't itemize) contribute their account balance, classified by subtype.
+        # Accounts WITH holdings are already counted via the holdings loop above,
+        # so this never double-counts.
+        accounts_with_holdings = {h.account_id for h in holdings}
+        for a in accounts:
+            if a.type == "investment" and a.source_id not in accounts_with_holdings:
+                value = a.current_balance or Decimal("0")
+                if (a.subtype or "").lower() in self._RETIREMENT_SUBTYPES:
+                    retirement += value
+                else:
+                    investments += value
+        buckets = [
+            {"name": "Cash", "value": float(cash), "color": "honey"},
+            {"name": "Investments", "value": float(investments), "color": "green"},
+            {"name": "Retirement", "value": float(retirement), "color": "sky"},
+            {"name": "Crypto", "value": float(crypto), "color": "plum"},
+            {"name": "Credit/Loans", "value": float(-credit_loans), "color": "clay"},
+        ]
+        total = cash + investments + retirement + crypto - credit_loans
+        return {"buckets": buckets, "total": float(total)}
 
     # ---- snapshots (derive-on-read) ----
     @_retry_integrity

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal, Protocol, runtime_checkable
 
 
@@ -207,3 +208,98 @@ class MoodleProvider(OAuthProvider, Protocol):
     (mirrors email_sync's hasattr(p,'fetch_messages'))."""
     def get_site_info(self, token: str) -> dict: ...                 # connect-time validation
     def fetch_school_snapshot(self, since: datetime | None) -> MoodleSnapshot: ...
+
+
+# ---- Finance / Plaid (M7) ------------------------------------------------
+@dataclass
+class NormalizedItem:
+    item_id: str                          # Plaid item_id
+    institution_id: str
+    institution_name: str
+    products: list[str] = field(default_factory=list)   # ['transactions'] / ['investments']
+
+
+@dataclass
+class NormalizedAccount:
+    source: str                           # 'plaid'
+    source_id: str                        # Plaid account_id
+    item_id: str
+    name: str
+    official_name: str | None
+    mask: str | None
+    type: str                             # depository | investment | credit | loan
+    subtype: str | None                   # checking | savings | ira | 401k | brokerage | ...
+    current_balance: Decimal | None = None
+    available_balance: Decimal | None = None
+    iso_currency: str = "USD"
+
+
+@dataclass
+class NormalizedTransaction:
+    source: str                           # 'plaid'
+    source_id: str                        # Plaid transaction_id
+    account_id: str
+    item_id: str
+    name: str
+    merchant_name: str | None
+    amount: Decimal                       # Plaid sign: + = outflow (money leaving)
+    iso_currency: str
+    date: date                            # posted date
+    authorized_date: date | None = None
+    pending: bool = False
+    category_primary: str = ""            # personal_finance_category.primary
+    category_detailed: str = ""
+    payment_channel: str = ""
+
+
+@dataclass
+class NormalizedSecurity:
+    source: str                           # 'plaid'
+    source_id: str                        # Plaid security_id
+    name: str
+    ticker_symbol: str | None
+    type: str                             # equity | etf | mutual fund | cryptocurrency | ...
+    close_price: Decimal | None = None
+    iso_currency: str = "USD"
+    is_cash_equivalent: bool = False
+
+
+@dataclass
+class NormalizedHolding:
+    source: str                           # 'plaid'
+    item_id: str
+    account_id: str
+    security_id: str
+    quantity: Decimal
+    cost_basis: Decimal | None = None
+    institution_value: Decimal = Decimal("0")
+    institution_price: Decimal | None = None
+    iso_currency: str = "USD"
+
+
+@dataclass
+class TransactionsDelta:                   # one /transactions/sync page
+    added: list[NormalizedTransaction] = field(default_factory=list)
+    modified: list[NormalizedTransaction] = field(default_factory=list)
+    removed: list[str] = field(default_factory=list)   # transaction_ids
+    next_cursor: str = ""
+    has_more: bool = False
+
+
+@runtime_checkable
+class PlaidProvider(Protocol):
+    """Read-only Plaid REST adapter. NOT an OAuthProvider (Hosted Link is a
+    token exchange, not a redirect code flow). Distinguishing method
+    get_accounts. Multi-Item: every data method takes an item's access_token."""
+    name: str                             # 'plaid'
+
+    def create_link_token(self, kind: str) -> dict: ...          # {'link_token','hosted_link_url',...}
+    def get_link_public_token(self, link_token: str) -> str | None: ...
+    def exchange_public_token(self, public_token: str) -> tuple[str, str]: ...  # (access_token, item_id)
+    def get_item(self, access_token: str) -> NormalizedItem: ...
+    def get_accounts(self, access_token: str) -> list[NormalizedAccount]: ...
+    def sync_transactions(self, access_token: str, cursor: str | None) -> TransactionsDelta: ...
+    def get_holdings(self, access_token: str) -> tuple[list[NormalizedAccount],
+                                                       list[NormalizedSecurity],
+                                                       list[NormalizedHolding]]: ...
+    def remove_item(self, access_token: str) -> None: ...
