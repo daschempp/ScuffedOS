@@ -21,3 +21,5 @@ backend/data/attachments/
 # Design bundle working artifacts (extracted reference kept in design-system/)
 design_download/
 build/
+src-tauri/target/
+src-tauri/gen/

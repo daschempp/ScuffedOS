@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ScuffedOS",
+  "version": "0.1.0",
+  "identifier": "com.scuffedos.app",
+  "build": {
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "ScuffedOS",
+        "width": 1280,
+        "height": 832,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.icns"],
+    "externalBin": ["binaries/scuffedos-backend"],
+    "resources": {
+      "../build/py": "py",
+      "../build/pgsql": "pgsql",
+      "../backend": "backend",
+      "../frontend/dist": "dist"
+    }
+  },
+  "plugins": {}
+}
