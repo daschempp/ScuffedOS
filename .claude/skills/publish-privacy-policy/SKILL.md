@@ -27,7 +27,10 @@ Both targets are PUBLIC and outward-facing. **Show the diff and get the user's g
 | Gist | id `439cee7cba3ac9077da6a5b81f83527c`, file `privacy-policy.md` (owner `daschempp`, desc "ScuffedOS Privacy Policy") | scripted (`gh api PATCH`) |
 | Corp site | `/Users/dylanschempp/PycharmProjects/scuffed-corporation/privacy/index.html`, branch `main` (sibling of the ScuffedOS repo — adjust if moved) | hand-mirror |
 
-Preconditions: `docs/privacy-policy.md` already reflects the intended changes; `gh` authenticated as `daschempp`; corp repo present and clean.
+Preconditions:
+
+- **Be on the branch/ref that holds the LATEST canonical.** The policy edit is usually made on an unmerged feature branch (each milestone's privacy "wave"), NOT `main`. If you publish from `main` (or another stale branch) you will ship an old policy. Before Step 1, confirm the effective date is the one you intend: `grep -m1 -i 'effective date' docs/privacy-policy.md`, and cross-check the branches (`for r in main <feature-branch>; do echo "$r:"; git show "$r:docs/privacy-policy.md" | grep -m1 -i 'effective date'; done`). `git switch` to whichever ref has the current canonical.
+- `gh` authenticated as `daschempp`; corp repo present and clean.
 
 ## Step 1 — Diff (know exactly what changed)
 
@@ -97,3 +100,4 @@ git push origin main
 | Opening a PR for the corp change | Convention is a direct commit to `main`. |
 | Reusing the app's "Wave N" in the corp commit | The corp repo has its **own** wave sequence — use the next number from its git log. |
 | Publishing before showing the diff | Both copies are PUBLIC. Summarize the diff and confirm with the user first. |
+| Publishing from `main` when the latest policy is on an unmerged feature branch | You'll ship a stale policy. Check the effective date first and `git switch` to the branch that holds the current canonical (see Preconditions). |
