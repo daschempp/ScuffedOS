@@ -2,7 +2,7 @@ use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
+use tauri::{Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -126,7 +126,6 @@ pub fn run() {
                 if wait_for_health(port) {
                     if let Some(win) = show_handle.get_webview_window("main") {
                         let _ = win.show();
-                        let _ = show_handle.emit("api-port", port);
                     }
                 } else {
                     eprintln!("[shell] health-gate timed out on :{port}; backend did not become ready");

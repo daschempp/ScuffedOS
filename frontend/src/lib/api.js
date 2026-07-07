@@ -5,13 +5,10 @@
    gracefully (the UI falls back to local behavior when the backend is down). */
 /* Base URL for backend calls. Precedence:
    1. VITE_API_URL — explicit build/deploy override.
-   2. window.__TAURI_API_BASE__ — set by main.jsx from the Tauri api_port
-      command before first render, in the packaged .app.
-   3. '' — dev: relative '/api' paths hit the Vite proxy (vite.config.js). */
-let BASE =
-  import.meta.env.VITE_API_URL ||
-  (typeof window !== 'undefined' && window.__TAURI_API_BASE__) ||
-  ''
+   2. '' — dev, and the initial value in the packaged .app: relative '/api'
+      paths hit the Vite proxy in dev; in the .app, main.jsx calls
+      setApiBase() with the resolved 127.0.0.1:<port> before first render. */
+let BASE = import.meta.env.VITE_API_URL || ''
 
 /* Allow the Tauri bootstrap (main.jsx) to inject the resolved 127.0.0.1:<port>
    base before the first fetch. No trailing slash — paths already begin '/api'. */
