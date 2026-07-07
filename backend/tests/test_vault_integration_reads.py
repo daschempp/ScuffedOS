@@ -42,36 +42,87 @@ def test_llm_consumer_reads_vault_anthropic_key(seeded, monkeypatch):
 
 
 def test_food_db_consumer_reads_vault_fdc_key(seeded, monkeypatch):
-    # END-TO-END through the real food_db module: seed the vault, resolve into
-    # global settings, and assert food_db reads the same field the seam filled.
+    # END-TO-END through the real food_db.search() request-building code: the
+    # configure(fake) seam used elsewhere short-circuits BEFORE the
+    # settings.fdc_api_key read (it returns fake.search() directly), so it
+    # can't catch a typo at food_db.py:67. Instead leave the module in its
+    # real "unset" (network) mode and intercept at the httpx.get() boundary —
+    # the actual line that reads settings.fdc_api_key — so a rename there
+    # (e.g. fdc_api_key -> fdc_api_ky) raises AttributeError and fails this test.
     import app.food_db as food_db
     from app.config import settings as global_settings
 
     monkeypatch.setattr(global_settings, "fdc_api_key", "DEMO_KEY")
     resolve_secrets_from_vault(global_settings)
-    # food_db.search() reads settings.fdc_api_key at request time; assert the
-    # module sees the vault value via its own settings import.
-    assert food_db.settings.fdc_api_key == "fdc-vault"
+    assert global_settings.fdc_api_key == "fdc-vault"
+
+    captured = {}
+
+    class FakeGetResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"foods": []}
+
+    def fake_get(url, params=None, timeout=None):
+        captured["params"] = params
+        return FakeGetResponse()
+
+    monkeypatch.setattr("httpx.get", fake_get)
+    food_db.configure("unset")  # force the real settings-backed request path
+    result = food_db.search("chicken wrap", limit=3)
+    assert result == []
+    # The real request builder read settings.fdc_api_key and put it on the wire.
+    assert captured["params"]["api_key"] == "fdc-vault"
 
 
 def test_plaid_consumer_reads_vault_credentials(seeded, monkeypatch):
+    # END-TO-END through the real PlaidProvider._call() POST-body builder
+    # (plaid.py:133): use the same FakePlaidHTTP transport seam the provider's
+    # own tests use, drive a real provider method through it, and assert the
+    # vault-seeded credentials landed in the POST body the fake transport
+    # received — a rename of plaid_client_id/plaid_secret at that line would
+    # leave the body's client_id/secret missing or wrong and fail this test.
     import app.providers.plaid as plaid_mod
     from app.config import settings as global_settings
+    from tests.fakes import FakePlaidHTTP
 
     monkeypatch.setattr(global_settings, "plaid_client_id", "")
     monkeypatch.setattr(global_settings, "plaid_secret", "")
     resolve_secrets_from_vault(global_settings)
-    assert plaid_mod.settings.plaid_client_id == "plaid-id-vault"
-    assert plaid_mod.settings.plaid_secret == "plaid-secret-vault"
+    assert global_settings.plaid_client_id == "plaid-id-vault"
+    assert global_settings.plaid_secret == "plaid-secret-vault"
+
+    http = FakePlaidHTTP(responses={"/link/token/create": {
+        "link_token": "link-1", "hosted_link_url": "https://plaid/hl"}})
+    p = plaid_mod.PlaidProvider()
+    p.configure(fake_http=http)
+    p.create_link_token("bank")
+    url, body = http.posts[0]
+    assert url.endswith("/link/token/create")
+    # The real _call() request builder read settings.plaid_client_id/plaid_secret.
+    assert body["client_id"] == "plaid-id-vault"
+    assert body["secret"] == "plaid-secret-vault"
 
 
 def test_google_consumer_reads_vault_client_id(seeded, monkeypatch):
+    # END-TO-END through the real GoogleProvider.authorize_url() builder
+    # (google.py:202) — a pure, no-network URL builder, so we call it
+    # directly: a rename of google_client_id at that line would leave
+    # client_id out of the URL (or raise AttributeError) and fail this test.
     import app.providers.google as google_mod
     from app.config import settings as global_settings
+    from urllib.parse import parse_qs, urlparse
 
     monkeypatch.setattr(global_settings, "google_client_id", "")
     resolve_secrets_from_vault(global_settings)
-    assert google_mod.settings.google_client_id == "google-id-vault"
+    assert global_settings.google_client_id == "google-id-vault"
+
+    p = google_mod.GoogleProvider()
+    url = p.authorize_url("state123")
+    q = parse_qs(urlparse(url).query)
+    assert q["client_id"] == ["google-id-vault"]
 
 
 def test_env_value_still_beats_vault_for_consumers(seeded, monkeypatch):
