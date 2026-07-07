@@ -259,4 +259,12 @@ export const api = {
   }),
   updateMemory: (id, patch) => request(`/api/memory/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteMemory: (id) => request(`/api/memory/${id}`, { method: 'DELETE' }),
+
+  // Settings — integration secrets. GET returns masked presence only; PUT
+  // writes new values into the machine-bound vault (never echoes secrets).
+  settingsGetSecrets: () => request('/api/settings/secrets'),
+  settingsPutSecrets: (values) => request('/api/settings/secrets', {
+    method: 'PUT',
+    body: JSON.stringify({ values }),
+  }),
 }
