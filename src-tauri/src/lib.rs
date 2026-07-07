@@ -154,8 +154,18 @@ pub fn run() {
                 let maybe_child = state.child.lock().unwrap().take();
                 if let Some(child) = maybe_child {
                     let pid = child.pid();
-                    let _ = child.kill(); // polite: lets the Python atexit run pg_ctl stop
-                    kill_process_tree(pid); // backstop: reap any orphaned postgres
+                    // SIGTERM the whole tree (Python + its still-parented postgres)
+                    // first, so Python's atexit/SIGTERM handler can run `pg_ctl
+                    // stop -m fast` and shut Postgres down cleanly; survivors get
+                    // SIGKILL after a grace period. Do NOT call child.kill() here:
+                    // that sends an uncatchable SIGKILL that would (a) skip the
+                    // Python handler entirely and (b) let Postgres re-parent to
+                    // launchd before we've captured it in the process-tree
+                    // snapshot below. CommandChild has no custom Drop impl (it
+                    // just holds an Arc<SharedChild> + a pipe writer), so letting
+                    // `child` drop after the tree-kill is a no-op — it does not
+                    // send any signal.
+                    kill_process_tree(pid);
                 }
             }
         });
