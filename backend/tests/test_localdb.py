@@ -30,6 +30,41 @@ def test_socket_dsn_shape(tmp_path):
     assert normalize_database_url(dsn) == dsn
 
 
+def test_socket_dsn_with_spaced_run_dir_is_valid_for_raw_psycopg_consumers(tmp_path, monkeypatch):
+    """The default App Support run-dir contains a space
+    (~/Library/Application Support/ScuffedOS/run). SQLAlchemy's make_url
+    tolerates an unencoded space in the query string, but mem0's
+    memory_engine hands the DSN to psycopg as a RAW connection string (see
+    memory_engine._connection_string, which just strips the +psycopg
+    dialect suffix via str.replace — no SQLAlchemy URL parsing at all). An
+    unencoded space in that raw string is rejected by libpq/psycopg. This
+    test mirrors that exact raw-string derivation and asserts psycopg can
+    parse the result."""
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict
+
+    spaced_root = tmp_path / "Library" / "Application Support" / "ScuffedOS"
+    spaced_root.mkdir(parents=True)
+    paths = localdb.resolve_paths(str(spaced_root))
+
+    dsn = localdb.socket_dsn(paths, "scuffedos", "scuffedos")
+
+    # Mirror memory_engine._connection_string(): strip the SQLAlchemy driver
+    # suffix via plain string replace, nothing more.
+    raw_conninfo = dsn.replace("postgresql+psycopg://", "postgresql://")
+
+    # Must not blow up on an unencoded space in the host path.
+    parsed = conninfo_to_dict(raw_conninfo)
+    assert parsed["host"] == str(paths.run_dir)
+
+    # And SQLAlchemy's make_url must still decode it back to the literal
+    # (unencoded) host path, so the store engine + alembic keep working.
+    from app.db import normalize_database_url
+    from sqlalchemy.engine import make_url
+    normalized = normalize_database_url(dsn)
+    assert make_url(normalized).query["host"] == str(paths.run_dir)
+
+
 def test_pg_bin_path(tmp_path):
     paths = localdb.resolve_paths(str(tmp_path))
     assert localdb.pg_bin(paths, "pg_ctl") == paths.pgsql_dir / "bin" / "pg_ctl"

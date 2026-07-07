@@ -7,8 +7,18 @@ external DATABASE_URL path is completely unaffected.
 The Python process owns the Postgres lifecycle: copy the vendored tree into
 App Support on first run, initdb, pg_ctl start over a Unix socket, alembic
 upgrade head, serve, and pg_ctl stop -m fast on shutdown. The socket DSN
-`postgresql+psycopg://<user>@/<db>?host=<run-dir>` flows through app.db and
-alembic with no code change (psycopg 3 reads host=<dir> as a socket dir).
+`postgresql+psycopg://<user>@/<db>?host=<run-dir>` has THREE consumers:
+  1. app.db's SQLAlchemy store engine — parsed via SQLAlchemy's `make_url`,
+     which percent-decodes the query string, so `host=` may be percent-encoded.
+  2. alembic — also goes through SQLAlchemy's URL machinery (same as above).
+  3. app.memory_engine's mem0/pgvector vector store — this one hands the DSN
+     to psycopg as a RAW connection string (no SQLAlchemy involved), so it
+     needs a libpq-legal string as-is.
+The default App Support dir (`~/Library/Application Support/ScuffedOS/run`)
+contains a space, which raw libpq/psycopg rejects unencoded. `socket_dsn()`
+therefore percent-encodes the host path; SQLAlchemy's `make_url` decodes
+`%20` back to a literal space for consumers 1-2, and psycopg's own DSN parser
+(consumer 3) accepts the percent-encoded form directly.
 """
 
 from __future__ import annotations
@@ -19,6 +29,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 from alembic import command
 from alembic.config import Config
@@ -50,7 +61,11 @@ def resolve_paths(app_support_dir: str) -> Paths:
 
 
 def socket_dsn(paths: Paths, user: str, dbname: str) -> str:
-    return f"postgresql+psycopg://{user}@/{dbname}?host={paths.run_dir}"
+    # Percent-encode the host path: the default App Support dir contains a
+    # space, which SQLAlchemy's make_url tolerates (and decodes back) but
+    # raw psycopg/libpq (the mem0/memory_engine consumer) rejects unencoded.
+    host = quote(str(paths.run_dir), safe="/")
+    return f"postgresql+psycopg://{user}@/{dbname}?host={host}"
 
 
 def pg_bin(paths: Paths, name: str) -> Path:
