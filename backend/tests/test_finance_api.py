@@ -108,7 +108,7 @@ def test_holdings_read(client):
 
 def test_budgets_get_put_and_reallocate(client):
     got = client.get("/api/finance/budgets?month=2026-06").json()
-    assert len(got) == 6                                    # all six categories present
+    assert len(got) == 10                                   # all ten categories present
     client.put("/api/finance/budgets", json={"month": "2026-06", "budgets": [
         {"category": "Dining out", "limit_amount": 250},
         {"category": "Savings", "limit_amount": 600}]})
@@ -138,3 +138,43 @@ def test_sync_endpoint(client):
     client.post("/api/finance/link/complete", json={"link_token": "l"})
     res = client.post("/api/finance/sync")
     assert res.status_code == 200 and "itm1" in res.json()["items"]
+
+
+def test_subscriptions_bills_investment_endpoints(client):
+    from datetime import date
+    from app.providers.base import (
+        NormalizedRecurringStream, NormalizedLiability, NormalizedSecurity,
+        NormalizedInvestmentTransaction,
+    )
+    store.upsert_finance_recurring(NormalizedRecurringStream(
+        source="plaid", source_id="sub1", item_id="itm1", account_id="a1", stream_type="outflow",
+        description="Netflix", merchant_name="Netflix", category_primary="ENTERTAINMENT",
+        average_amount=Decimal("15.49"), frequency="MONTHLY", predicted_next_date=date(2026, 7, 12)))
+    store.upsert_finance_liability(NormalizedLiability(
+        source="plaid", source_id="cc1", item_id="itm1", account_id="cc1", liability_type="credit",
+        minimum_payment=Decimal("35"), next_payment_due_date=date(2026, 7, 15)))
+    store.upsert_finance_security(NormalizedSecurity(
+        source="plaid", source_id="s1", name="Bitcoin", ticker_symbol="BTC", type="cryptocurrency"))
+    store.upsert_finance_investment_transaction(NormalizedInvestmentTransaction(
+        source="plaid", source_id="it1", item_id="itm1", account_id="brk", security_id="s1",
+        type="buy", name="BUY BTC", quantity=Decimal("0.01"), amount=Decimal("600"),
+        date=date(2026, 6, 10)))
+    assert client.get("/api/finance/subscriptions").json()[0]["name"] == "Netflix"
+    assert any(b["kind"] == "liability" for b in client.get("/api/finance/bills").json())
+    itx = client.get("/api/finance/investment-transactions").json()
+    assert itx[0]["ticker"] == "BTC" and itx[0]["type"] == "buy"
+
+
+def test_reauth_start_and_complete(client):
+    from tests.fakes import FakePlaidProvider
+    p = FakePlaidProvider(item=NormalizedItem(item_id="itm1", institution_id="ins_1",
+                                              institution_name="Chase", products=["transactions"]))
+    providers.configure([p])
+    client.post("/api/finance/link/complete", json={"link_token": "l"})
+    store.set_finance_item_status("itm1", "needs_reauth")
+    start = client.post("/api/finance/items/itm1/reauth/start")
+    assert start.status_code == 200 and start.json()["hosted_link_url"] == "https://plaid/hl"
+    done = client.post("/api/finance/items/itm1/reauth/complete")
+    assert done.status_code == 200
+    assert store.get_finance_item("itm1")["status"] == "active"     # flipped back
+    assert client.post("/api/finance/items/nope/reauth/start").status_code == 404

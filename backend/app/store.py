@@ -41,7 +41,10 @@ from .models import (
     FinanceAccount,
     FinanceBudget,
     FinanceHolding,
+    FinanceInvestmentTransaction,
     FinanceItem,
+    FinanceLiability,
+    FinanceRecurring,
     FinanceSecurity,
     FinanceTransaction,
     Habit,
@@ -81,16 +84,19 @@ from .providers.base import (
     TransactionsDelta,
 )
 
-# ---- finance budget categories (fixed set, slice 1) ----
-BUDGET_CATEGORIES = ["Groceries", "Rent & bills", "Dining out", "Transport", "Savings", "Other"]
+# ---- finance budget categories (expanded fixed set, slice 2) ----
+BUDGET_CATEGORIES = ["Groceries", "Dining out", "Rent & bills", "Transport",
+                     "Shopping", "Entertainment", "Health", "Travel", "Savings", "Other"]
+# kit.css defines only clay/honey/plum/sky/green (-600) + slate; colors repeat by design.
 _BUDGET_COLORS = {
-    "Groceries": "clay", "Rent & bills": "honey", "Dining out": "plum",
-    "Transport": "sky", "Savings": "green", "Other": "slate",
+    "Groceries": "clay", "Dining out": "plum", "Rent & bills": "honey",
+    "Transport": "sky", "Shopping": "plum", "Entertainment": "sky",
+    "Health": "green", "Travel": "honey", "Savings": "green", "Other": "slate",
 }
 
 
 def budget_bucket(primary: str, detailed: str = "") -> str:
-    """Map a Plaid personal_finance_category to one of the six budget buckets.
+    """Map a Plaid personal_finance_category to one of the ten budget buckets.
     [confirm-against-live] — real PFC values verified at the live gate."""
     primary = (primary or "").upper()
     detailed = (detailed or "").upper()
@@ -100,11 +106,30 @@ def budget_bucket(primary: str, detailed: str = "") -> str:
         return "Dining out"
     if primary in ("RENT_AND_UTILITIES", "LOAN_PAYMENTS", "HOME_IMPROVEMENT"):
         return "Rent & bills"
-    if primary in ("TRANSPORTATION", "TRAVEL"):
+    if primary in ("TRANSPORTATION",):
         return "Transport"
+    if primary == "TRAVEL":
+        return "Travel"
+    if primary in ("GENERAL_MERCHANDISE",):
+        return "Shopping"
+    if primary in ("ENTERTAINMENT",):
+        return "Entertainment"
+    if primary in ("MEDICAL", "PERSONAL_CARE"):
+        return "Health"
     if primary == "TRANSFER_OUT" and ("SAVINGS" in detailed or "INVESTMENT" in detailed):
         return "Savings"
     return "Other"
+
+
+def recurring_kind(primary: str, detailed: str = "") -> str:
+    """Split a recurring OUTFLOW stream into 'subscription' vs 'bill' by Plaid PFC.
+    [confirm-against-live] — real PFC values verified at the live gate."""
+    primary = (primary or "").upper()
+    if primary in ("RENT_AND_UTILITIES", "LOAN_PAYMENTS", "INSURANCE"):
+        return "bill"
+    if primary in ("ENTERTAINMENT", "GENERAL_SERVICES"):
+        return "subscription"
+    return "other"
 
 
 _TASK_FIELDS = {
@@ -1038,6 +1063,7 @@ class Store:
         for e in rows:
             out.extend(_event_occurrences(e, window_start, window_end))
         out.extend(self.moodle_calendar_events(window_start, window_end))
+        out.extend(self.finance_calendar_events(window_start, window_end))
         out.sort(key=lambda o: o["start"])
         return out
 
@@ -2024,17 +2050,25 @@ class Store:
             if row is None:
                 return False
             s.delete(row)
-            for model in (FinanceAccount, FinanceTransaction, FinanceHolding):
+            for model in (FinanceAccount, FinanceTransaction, FinanceHolding,
+                          FinanceRecurring, FinanceLiability, FinanceInvestmentTransaction):
                 for r in s.scalars(
                     select(model)
                     .where(model.owner == settings.owner)
                     .where(model.item_id == item_id)
                 ):
                     s.delete(r)
-            # Prune orphan securities (no holding references them any more).
+            # Prune orphan securities (nothing references them any more). A
+            # security can be referenced by a surviving holding OR by a surviving
+            # item's investment transaction — union both so we never prune a
+            # security still in use by a DIFFERENT item.
             live_sec_ids = set(s.scalars(
                 select(FinanceHolding.security_id)
                 .where(FinanceHolding.owner == settings.owner)
+            ).all())
+            live_sec_ids |= set(s.scalars(
+                select(FinanceInvestmentTransaction.security_id)
+                .where(FinanceInvestmentTransaction.owner == settings.owner)
             ).all())
             for sec in s.scalars(
                 select(FinanceSecurity).where(FinanceSecurity.owner == settings.owner)
@@ -2195,6 +2229,87 @@ class Store:
             row.institution_price = h.institution_price
             row.iso_currency = h.iso_currency
 
+    @_retry_integrity
+    def upsert_finance_recurring(self, r) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceRecurring)
+                .where(FinanceRecurring.owner == settings.owner)
+                .where(FinanceRecurring.source == "plaid")
+                .where(FinanceRecurring.source_id == r.source_id)
+            ).first()
+            if row is None:
+                row = FinanceRecurring(owner=settings.owner, source="plaid", source_id=r.source_id)
+                s.add(row)
+            row.item_id = r.item_id
+            row.account_id = r.account_id
+            row.stream_type = r.stream_type
+            row.description = r.description
+            row.merchant_name = r.merchant_name
+            row.category_primary = r.category_primary
+            row.category_detailed = r.category_detailed
+            row.average_amount = r.average_amount
+            row.last_amount = r.last_amount
+            row.frequency = r.frequency
+            row.first_date = r.first_date
+            row.last_date = r.last_date
+            row.predicted_next_date = r.predicted_next_date
+            row.is_active = r.is_active
+            row.status = r.status
+            row.iso_currency = r.iso_currency
+
+    @_retry_integrity
+    def upsert_finance_liability(self, l) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceLiability)
+                .where(FinanceLiability.owner == settings.owner)
+                .where(FinanceLiability.source == "plaid")
+                .where(FinanceLiability.source_id == l.source_id)
+            ).first()
+            if row is None:
+                row = FinanceLiability(owner=settings.owner, source="plaid", source_id=l.source_id)
+                s.add(row)
+            row.item_id = l.item_id
+            row.account_id = l.account_id
+            row.liability_type = l.liability_type
+            row.last_statement_balance = l.last_statement_balance
+            row.minimum_payment = l.minimum_payment
+            row.next_payment_due_date = l.next_payment_due_date
+            row.last_payment_amount = l.last_payment_amount
+            row.last_payment_date = l.last_payment_date
+            row.apr_percentage = l.apr_percentage
+            row.iso_currency = l.iso_currency
+
+    @_retry_integrity
+    def upsert_finance_investment_transaction(self, it) -> None:
+        from .config import settings
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(FinanceInvestmentTransaction)
+                .where(FinanceInvestmentTransaction.owner == settings.owner)
+                .where(FinanceInvestmentTransaction.source == "plaid")
+                .where(FinanceInvestmentTransaction.source_id == it.source_id)
+            ).first()
+            if row is None:
+                row = FinanceInvestmentTransaction(owner=settings.owner, source="plaid",
+                                                   source_id=it.source_id)
+                s.add(row)
+            row.item_id = it.item_id
+            row.account_id = it.account_id
+            row.security_id = it.security_id
+            row.type = it.type
+            row.subtype = it.subtype
+            row.name = it.name
+            row.quantity = it.quantity
+            row.amount = it.amount
+            row.price = it.price
+            row.fees = it.fees
+            row.date = it.date
+            row.iso_currency = it.iso_currency
+
     def finance_holdings(self) -> list[dict]:
         """Holdings joined to their securities, ordered by value desc."""
         from .config import settings
@@ -2226,6 +2341,145 @@ class Store:
                     "currency": h.iso_currency,
                 })
             return out
+
+    def finance_investment_transactions(self, days: int | None = None) -> list[dict]:
+        """Investment buys/sells/dividends joined to securities, newest first."""
+        from .config import settings
+        with self._session() as s:
+            secs = {
+                x.source_id: x for x in s.scalars(
+                    select(FinanceSecurity).where(FinanceSecurity.owner == settings.owner)
+                ).all()
+            }
+            q = (
+                select(FinanceInvestmentTransaction)
+                .where(FinanceInvestmentTransaction.owner == settings.owner)
+                .order_by(FinanceInvestmentTransaction.date.desc(),
+                          FinanceInvestmentTransaction.id.desc())
+            )
+            if days is not None:
+                cutoff = (utcnow() - timedelta(days=days)).date()
+                q = q.where(FinanceInvestmentTransaction.date >= cutoff)
+            rows = s.scalars(q).all()
+        out = []
+        for t in rows:
+            sec = secs.get(t.security_id)
+            out.append({
+                "type": t.type,
+                "name": t.name or (sec.name if sec else t.security_id),
+                "ticker": (sec.ticker_symbol if sec else None),
+                "quantity": _dec_to_float(t.quantity),
+                "amount": _dec_to_float(t.amount),
+                "price": _dec_to_float(t.price),
+                "date": t.date.isoformat() if t.date else None,
+                "currency": t.iso_currency,
+            })
+        return out
+
+    def finance_subscriptions(self) -> list[dict]:
+        """Active recurring OUTFLOW streams classified 'subscription', by next date."""
+        from .config import settings
+        with self._session() as s:
+            rows = s.scalars(
+                select(FinanceRecurring)
+                .where(FinanceRecurring.owner == settings.owner)
+                .where(FinanceRecurring.stream_type == "outflow")
+                .where(FinanceRecurring.is_active.is_(True))
+            ).all()
+        out = []
+        for r in rows:
+            if recurring_kind(r.category_primary, r.category_detailed) != "subscription":
+                continue
+            out.append({
+                "name": r.merchant_name or r.description,
+                "merchant_name": r.merchant_name,
+                "amount": _dec_to_float(r.average_amount),
+                "frequency": r.frequency,
+                "next_date": r.predicted_next_date.isoformat() if r.predicted_next_date else None,
+                "category": r.category_primary,
+            })
+        out.sort(key=lambda x: (x["next_date"] or "9999-12-31"))
+        return out
+
+    def finance_bills(self) -> list[dict]:
+        """Recurring 'bill' streams merged with liabilities (statement/due), by due date."""
+        from .config import settings
+        with self._session() as s:
+            streams = s.scalars(
+                select(FinanceRecurring)
+                .where(FinanceRecurring.owner == settings.owner)
+                .where(FinanceRecurring.stream_type == "outflow")
+                .where(FinanceRecurring.is_active.is_(True))
+            ).all()
+            liabs = s.scalars(
+                select(FinanceLiability).where(FinanceLiability.owner == settings.owner)
+            ).all()
+            accts = {
+                a.source_id: a for a in s.scalars(
+                    select(FinanceAccount).where(FinanceAccount.owner == settings.owner)
+                ).all()
+            }
+        out = []
+        for r in streams:
+            if recurring_kind(r.category_primary, r.category_detailed) != "bill":
+                continue
+            out.append({
+                "name": r.merchant_name or r.description,
+                "sub": r.description,
+                "amount": _dec_to_float(r.average_amount),
+                "due_date": r.predicted_next_date.isoformat() if r.predicted_next_date else None,
+                "kind": "recurring",
+                "auto": True,
+            })
+        for l in liabs:
+            acct = accts.get(l.account_id)
+            out.append({
+                "name": (acct.name or acct.official_name or acct.mask if acct else None)
+                        or l.account_id,
+                "sub": l.liability_type,
+                "amount": _dec_to_float(l.minimum_payment),
+                "due_date": l.next_payment_due_date.isoformat() if l.next_payment_due_date else None,
+                "kind": "liability",
+                "auto": False,
+            })
+        out.sort(key=lambda x: (x["due_date"] or "9999-12-31"))
+        return out
+
+    def finance_calendar_events(self, window_start, window_end) -> list[dict]:
+        """Read-time projection (mirrors moodle_calendar_events): bill due dates +
+        subscription renewals in the window as read-only 'finance:<id>' occurrences.
+        NOT rows in the events table — events_between appends these at read time."""
+        out: list[dict] = []
+
+        def _push(source_id: str, title: str, iso_date: str | None):
+            if not iso_date:
+                return
+            d = date.fromisoformat(iso_date)
+            start = datetime(d.year, d.month, d.day, 9, 0, tzinfo=timezone.utc)
+            if not (window_start <= start < window_end):
+                return
+            out.append({
+                "id": f"finance:{source_id}",
+                "title": title,
+                "start": start,
+                "end": start + timedelta(hours=1),
+                "tint": "honey",
+                "location": "",
+                "description": "",
+                "recurring": False,
+                "recurrence_label": None,
+                "at": clock(start),
+                "source": "finance",
+                "editable": False,
+            })
+
+        for b in self.finance_bills():
+            amt = f" · ${b['amount']:,.0f}" if b.get("amount") is not None else ""
+            _push(f"bill:{b['name']}", f"{b['name']}{amt} due", b.get("due_date"))
+        for sub in self.finance_subscriptions():
+            amt = f" · ${sub['amount']:,.2f}" if sub.get("amount") is not None else ""
+            _push(f"sub:{sub['name']}", f"{sub['name']}{amt} renews", sub.get("next_date"))
+        return out
 
     def finance_budgets(self, month: str) -> list[dict]:
         """All six budget categories for `month` (YYYY-MM), each with its local
@@ -2289,10 +2543,14 @@ class Store:
         to_category's. Local only — never touches a bank."""
         current = {b["category"]: b["limit_amount"] for b in self.finance_budgets(month)}
         amt = Decimal(str(amount))
-        self._upsert_one_budget(month, from_category,
-                                Decimal(str(current.get(from_category, 0))) - amt)
-        self._upsert_one_budget(month, to_category,
-                                Decimal(str(current.get(to_category, 0))) + amt)
+        from_limit = max(Decimal("0"), Decimal(str(current.get(from_category, 0))))
+        to_limit = Decimal(str(current.get(to_category, 0)))
+        # Conserve: transfer at most what the source holds — never manufacture money.
+        moved = min(max(Decimal("0"), amt), from_limit)
+        new_from = from_limit - moved
+        new_to = to_limit + moved
+        self._upsert_one_budget(month, from_category, new_from)
+        self._upsert_one_budget(month, to_category, new_to)
         return self.finance_budgets(month)
 
     _RETIREMENT_SUBTYPES = frozenset({

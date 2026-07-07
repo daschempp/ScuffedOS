@@ -29,7 +29,7 @@ def test_create_link_token_bank_requests_transactions(monkeypatch):
     url, body = http.posts[0]
     assert url.endswith("/link/token/create")
     assert body["products"] == ["transactions"]
-    assert body["additional_consented_products"] == ["investments"]
+    assert body["additional_consented_products"] == ["investments", "liabilities"]
     assert "hosted_link" in body
     assert body["client_id"] == "cid" and body["secret"] == "sek"
 
@@ -41,6 +41,17 @@ def test_create_link_token_investments_requests_investments():
     _, body = http.posts[0]
     assert body["products"] == ["investments"]
     assert "additional_consented_products" not in body
+
+
+def test_create_link_token_update_mode_omits_products():
+    http = FakePlaidHTTP(responses={"/link/token/create": {"link_token": "l", "hosted_link_url": "u"}})
+    p = _provider(http)
+    p.create_link_token("bank", access_token="acc-tok")
+    _, body = http.posts[0]
+    assert body["access_token"] == "acc-tok"
+    assert "products" not in body
+    assert "additional_consented_products" not in body
+    assert "hosted_link" in body
 
 
 def test_exchange_public_token():
@@ -156,6 +167,111 @@ def test_remove_item_posts_access_token():
     assert url.endswith("/item/remove") and body["access_token"] == "tok"
 
 
+def test_get_recurring_parses_inflow_and_outflow():
+    http = FakePlaidHTTP(responses={"/transactions/recurring/get": {
+        "inflow_streams": [{"stream_id": "in1", "account_id": "a1", "description": "Payroll",
+                            "merchant_name": "Acme", "frequency": "BIWEEKLY",
+                            "personal_finance_category": {"primary": "INCOME", "detailed": "INCOME_WAGES"},
+                            "average_amount": {"amount": 2500, "iso_currency_code": "USD"},
+                            "last_amount": {"amount": 2500, "iso_currency_code": "USD"},
+                            "last_date": "2026-06-15", "predicted_next_date": "2026-06-29",
+                            "is_active": True, "status": "MATURE"}],
+        "outflow_streams": [{"stream_id": "out1", "account_id": "a1", "description": "Netflix",
+                             "merchant_name": "Netflix", "frequency": "MONTHLY",
+                             "personal_finance_category": {"primary": "ENTERTAINMENT",
+                                                           "detailed": "ENTERTAINMENT_STREAMING"},
+                             "average_amount": {"amount": 15.49, "iso_currency_code": "USD"},
+                             "last_amount": {"amount": 15.49, "iso_currency_code": "USD"},
+                             "last_date": "2026-06-12", "predicted_next_date": "2026-07-12",
+                             "is_active": True, "status": "MATURE"}]}})
+    p = _provider(http)
+    streams = p.get_recurring("tok")
+    by_id = {s.source_id: s for s in streams}
+    assert by_id["in1"].stream_type == "inflow"
+    assert by_id["out1"].stream_type == "outflow"
+    assert by_id["out1"].average_amount == Decimal("15.49")
+    assert by_id["out1"].category_primary == "ENTERTAINMENT"
+    assert by_id["out1"].predicted_next_date.isoformat() == "2026-07-12"
+    _, body = http.posts[0]
+    assert body["access_token"] == "tok"
+
+
+def test_get_liabilities_flattens_types():
+    http = FakePlaidHTTP(responses={"/liabilities/get": {"liabilities": {
+        "credit": [{"account_id": "cc1", "last_statement_balance": 1250.0,
+                    "minimum_payment_amount": 35.0, "next_payment_due_date": "2026-07-15",
+                    "last_payment_amount": 200.0, "last_payment_date": "2026-06-10",
+                    "aprs": [{"apr_percentage": 19.99, "apr_type": "purchase_apr"}]}],
+        "mortgage": [{"account_id": "mg1", "next_monthly_payment": 1800.0,
+                      "next_payment_due_date": "2026-07-01"}],
+        "student": []}}})
+    p = _provider(http)
+    liabs = {l.account_id: l for l in p.get_liabilities("tok")}
+    assert liabs["cc1"].liability_type == "credit"
+    assert liabs["cc1"].minimum_payment == Decimal("35")
+    assert liabs["cc1"].apr_percentage == Decimal("19.99")
+    assert liabs["mg1"].liability_type == "mortgage"
+
+
+def test_get_liabilities_feature_absent_returns_empty():
+    http = FakePlaidHTTP(
+        responses={"/liabilities/get": {"error_code": "PRODUCTS_NOT_SUPPORTED",
+                                        "error_message": "no liabilities"}},
+        status={"/liabilities/get": 400})
+    p = _provider(http)
+    assert p.get_liabilities("tok") == []
+
+
+def test_get_liabilities_auth_error_still_raises():
+    http = FakePlaidHTTP(
+        responses={"/liabilities/get": {"error_code": "ITEM_LOGIN_REQUIRED", "error_message": "reauth"}},
+        status={"/liabilities/get": 400})
+    p = _provider(http)
+    with pytest.raises(PlaidAuthError):
+        p.get_liabilities("tok")
+
+
+def test_get_recurring_feature_absent_returns_empty():
+    http = FakePlaidHTTP(
+        responses={"/transactions/recurring/get": {"error_code": "PRODUCT_NOT_READY",
+                                                   "error_message": "still indexing"}},
+        status={"/transactions/recurring/get": 400})
+    p = _provider(http)
+    assert p.get_recurring("tok") == []
+
+
+def test_get_recurring_auth_error_still_raises():
+    http = FakePlaidHTTP(
+        responses={"/transactions/recurring/get": {"error_code": "ITEM_LOGIN_REQUIRED",
+                                                   "error_message": "reauth"}},
+        status={"/transactions/recurring/get": 400})
+    p = _provider(http)
+    with pytest.raises(PlaidAuthError):
+        p.get_recurring("tok")
+
+
+def test_get_investment_transactions_feature_absent_returns_empty():
+    from datetime import date
+    http = FakePlaidHTTP(
+        responses={"/investments/transactions/get": {"error_code": "PRODUCTS_NOT_SUPPORTED",
+                                                     "error_message": "no investments"}},
+        status={"/investments/transactions/get": 400})
+    p = _provider(http)
+    accts, secs, txns = p.get_investment_transactions("tok", date(2026, 6, 1), date(2026, 6, 30))
+    assert accts == [] and secs == [] and txns == []
+
+
+def test_get_investment_transactions_auth_error_still_raises():
+    from datetime import date
+    http = FakePlaidHTTP(
+        responses={"/investments/transactions/get": {"error_code": "ITEM_LOGIN_REQUIRED",
+                                                     "error_message": "reauth"}},
+        status={"/investments/transactions/get": 400})
+    p = _provider(http)
+    with pytest.raises(PlaidAuthError):
+        p.get_investment_transactions("tok", date(2026, 6, 1), date(2026, 6, 30))
+
+
 def test_plaid_registered_in_real_registry():
     from app import providers
     providers.configure("unset")            # real registry
@@ -164,3 +280,34 @@ def test_plaid_registered_in_real_registry():
         assert p is not None and p.name == "plaid"
     finally:
         providers.configure([])             # restore test isolation
+
+
+def test_get_investment_transactions_pages_and_parses():
+    from datetime import date
+    page1 = {"accounts": [{"account_id": "brk", "name": "Coinbase", "type": "investment",
+                           "subtype": "crypto", "balances": {"current": 3000.0, "iso_currency_code": "USD"}}],
+             "securities": [{"security_id": "s1", "name": "Bitcoin", "ticker_symbol": "BTC",
+                             "type": "cryptocurrency", "iso_currency_code": "USD"}],
+             "investment_transactions": [{"investment_transaction_id": "it1", "account_id": "brk",
+                                          "security_id": "s1", "date": "2026-06-10", "name": "BUY BTC",
+                                          "quantity": 0.01, "amount": 600.0, "price": 60000.0,
+                                          "fees": 1.5, "type": "buy", "subtype": "buy",
+                                          "iso_currency_code": "USD"}],
+             "total_investment_transactions": 2}
+    page2 = {"accounts": [], "securities": [],
+             "investment_transactions": [{"investment_transaction_id": "it2", "account_id": "brk",
+                                          "security_id": "s1", "date": "2026-06-11", "name": "SELL BTC",
+                                          "quantity": -0.005, "amount": -300.0, "price": 60000.0,
+                                          "type": "sell", "subtype": "sell", "iso_currency_code": "USD"}],
+             "total_investment_transactions": 2}
+    http = FakePlaidHTTP(responses={"/investments/transactions/get": seq(page1, page2)})
+    p = _provider(http)
+    accts, secs, txns = p.get_investment_transactions("tok", date(2026, 6, 1), date(2026, 6, 30))
+    ids = {t.source_id for t in txns}
+    assert ids == {"it1", "it2"}
+    it1 = next(t for t in txns if t.source_id == "it1")
+    assert it1.type == "buy" and it1.quantity == Decimal("0.01") and it1.amount == Decimal("600")
+    assert secs[0].ticker_symbol == "BTC" and accts[0].source_id == "brk"
+    _, body = http.posts[0]
+    assert body["start_date"] == "2026-06-01" and body["end_date"] == "2026-06-30"
+    assert body["options"]["offset"] == 0

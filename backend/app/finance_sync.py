@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import providers
 from .config import settings
@@ -61,6 +61,14 @@ def _sync_item(provider, item: dict, now: datetime) -> int:
             store.set_finance_item_cursor(item_id, cursor)
             if not delta.has_more:
                 break
+        for rec in provider.get_recurring(access_token):
+            rec.item_id = item_id
+            store.upsert_finance_recurring(rec)
+            count += 1
+        for liab in provider.get_liabilities(access_token):
+            liab.item_id = item_id
+            store.upsert_finance_liability(liab)
+            count += 1
     if "investments" in products:
         accts, secs, holds = provider.get_holdings(access_token)
         for a in accts:
@@ -71,6 +79,19 @@ def _sync_item(provider, item: dict, now: datetime) -> int:
             count += 1
         for h in holds:
             store.upsert_finance_holding(h)
+            count += 1
+        end = now.date()
+        start = end - timedelta(days=settings.plaid_backfill_days)
+        itx_accts, itx_secs, itxns = provider.get_investment_transactions(access_token, start, end)
+        for a in itx_accts:
+            store.upsert_finance_account(a)
+            count += 1
+        for sec in itx_secs:
+            store.upsert_finance_security(sec)
+            count += 1
+        for it in itxns:
+            it.item_id = item_id
+            store.upsert_finance_investment_transaction(it)
             count += 1
     store.set_finance_item_synced(item_id, now)
     return count

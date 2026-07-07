@@ -13,16 +13,6 @@ import { Card, Stat, Badge, ProgressBar, Button, IconButton } from '../component
 import { Icon } from '../lib/Icon.jsx'
 import { api } from '../lib/api.js'
 
-// Slice-2 sample panels (kept visible, clearly labeled).
-const SAMPLE_SUBS = [
-  { name: 'Netflix', price: '$15.49', cycle: 'monthly', renews: 'Jun 12', color: 'var(--clay-600)', letter: 'N' },
-  { name: 'Spotify', price: '$11.99', cycle: 'monthly', renews: 'Jun 18', color: 'var(--green-600)', letter: 'S' },
-  { name: 'iCloud+', price: '$2.99', cycle: 'monthly', renews: 'Jun 24', color: 'var(--sky-600)', letter: 'i' },
-]
-const SAMPLE_BILLS = [
-  { name: 'Rent', sub: 'Oak St. Realty', amt: '$1,450', due: 'Due Jul 1', auto: true, icon: 'house', tint: 'honey' },
-  { name: 'Internet', sub: 'Verizon Fios', amt: '$70', due: 'Due Jun 16', auto: true, icon: 'wifi', tint: 'sky' },
-]
 const money = (n) => (n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD' }))
 
 export function FinanceScreen() {
@@ -32,6 +22,9 @@ export function FinanceScreen() {
   const [txns, setTxns] = React.useState(null)
   const [holdings, setHoldings] = React.useState(null)
   const [budgets, setBudgets] = React.useState(null)
+  const [subs, setSubs] = React.useState(null)
+  const [bills, setBills] = React.useState(null)
+  const [invTxns, setInvTxns] = React.useState(null)
   const [pendingLink, setPendingLink] = React.useState(null)   // {link_token} after a connect button
   const [linkMsg, setLinkMsg] = React.useState('')
   const [edits, setEdits] = React.useState({})                 // category -> edited limit string
@@ -43,6 +36,9 @@ export function FinanceScreen() {
     api.financeTransactions().then((t) => { if (t) setTxns(t) }).catch(() => {})
     api.financeHoldings().then((h) => { if (h) setHoldings(h) }).catch(() => {})
     api.financeBudgets().then((b) => { if (b) setBudgets(b) }).catch(() => {})
+    api.financeSubscriptions().then((s) => { if (s) setSubs(s) }).catch(() => {})
+    api.financeBills().then((b) => { if (b) setBills(b) }).catch(() => {})
+    api.financeInvestmentTransactions().then((t) => { if (t) setInvTxns(t) }).catch(() => {})
   }, [])
   React.useEffect(() => { refresh() }, [refresh])
 
@@ -60,13 +56,24 @@ export function FinanceScreen() {
       }
     }).catch(() => setLinkMsg('Could not start the link flow. Try again.'))
   }
+  const reauth = (itemId) => {
+    api.financeReauthStart(itemId).then((r) => {
+      if (r?.hosted_link_url) {
+        window.open(r.hosted_link_url, '_blank', 'noopener')
+        setPendingLink({ reauthItemId: itemId })
+        setLinkMsg('Finish reconnecting in the Plaid tab, then click "Finish linking".')
+      }
+    }).catch(() => setLinkMsg('Could not start reconnect. Try again.'))
+  }
   const finishLink = () => {
     if (!pendingLink) return
-    api.financeLinkComplete(pendingLink.link_token)
-      .then(() => { setPendingLink(null); setLinkMsg(''); refresh() })
+    const done = pendingLink.reauthItemId
+      ? api.financeReauthComplete(pendingLink.reauthItemId)
+      : api.financeLinkComplete(pendingLink.link_token)
+    done.then(() => { setPendingLink(null); setLinkMsg(''); refresh() })
       .catch((e) => setLinkMsg(e?.status === 409
         ? 'Still waiting — finish in the Plaid tab, then try again.'
-        : 'Linking failed. Try connecting again.'))
+        : 'Linking failed. Try again.'))
   }
   const sync = () => { api.financeSync().then(() => refresh()).catch(() => {}) }
   const disconnect = (itemId) => { api.financeDisconnect(itemId).then(() => refresh()).catch(() => {}) }
@@ -116,7 +123,7 @@ export function FinanceScreen() {
         {items.map((it) => (
           <span key={it.item_id} className="kit-inline" style={{ gap: 6, alignItems: 'center', padding: '4px 10px', borderRadius: 999, border: '1px solid var(--paper-300)' }}>
             <span className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>{it.institution_name}</span>
-            {it.status === 'needs_reauth' && <Badge color="clay">Reconnect</Badge>}
+            {it.status === 'needs_reauth' && <Badge color="clay" style={{ cursor: 'pointer' }} onClick={() => reauth(it.item_id)}>Reconnect</Badge>}
             <IconButton label="Disconnect" size="sm" onClick={() => disconnect(it.item_id)}><Icon name="x" /></IconButton>
           </span>
         ))}
@@ -133,7 +140,7 @@ export function FinanceScreen() {
             <p className="kit-row__title">Reconnect {needsReauth.map((i) => i.institution_name).join(', ')}</p>
             <p className="kit-muted">A bank login expired. Reconnect to resume syncing.</p>
           </div>
-          <Button variant="primary" size="sm" onClick={() => startLink('bank')}>Reconnect</Button>
+          <Button variant="primary" size="sm" onClick={() => reauth(needsReauth[0].item_id)}>Reconnect</Button>
         </Card>
       )}
 
@@ -180,6 +187,23 @@ export function FinanceScreen() {
         </Card>
       </div>
 
+      {/* investment activity ledger */}
+      <Card title="Investment activity">
+        {(invTxns || []).length === 0 && <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>No investment activity — connect Coinbase or a brokerage.</p>}
+        {(invTxns || []).slice(0, 12).map((t, i) => (
+          <div className="kit-row" key={i}>
+            <span className="kit-cat" style={{ background: 'var(--paper-300)' }} />
+            <div className="kit-row__main">
+              <p className="kit-row__title">{t.name}</p>
+              <p className="kit-row__sub">{t.type} · {t.ticker || ''} · {t.date}</p>
+            </div>
+            <span className={`kit-row__amt ${t.amount < 0 ? 'kit-amt--pos' : 'kit-amt--neg'}`}>
+              {t.amount < 0 ? '+' : '−'}{money(Math.abs(t.amount))}
+            </span>
+          </div>
+        ))}
+      </Card>
+
       {/* budgets + transactions */}
       <div className="kit-grid" style={{ gridTemplateColumns: '1fr 1.2fr' }}>
         <Card title="Budgets" eyebrow={summary?.month}
@@ -213,23 +237,25 @@ export function FinanceScreen() {
         </Card>
       </div>
 
-      {/* slice-2 sample panels (clearly labeled) */}
+      {/* subscriptions + bills (live) */}
       <div className="kit-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-        <Card title="Subscriptions" action={<Badge color="neutral">Sample · slice 2</Badge>}>
-          {SAMPLE_SUBS.map((s, i) => (
+        <Card title="Subscriptions">
+          {(subs || []).length === 0 && <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>No subscriptions detected yet — they appear after a few weeks of transactions.</p>}
+          {(subs || []).map((s, i) => (
             <div className="kit-sub" key={i}>
-              <span className="kit-sub__logo" style={{ background: s.color }}>{s.letter}</span>
-              <div className="kit-sub__main"><p className="kit-row__title">{s.name}</p><p className="kit-row__sub">{s.price} · {s.cycle}</p></div>
-              <span className="kit-row__sub" style={{ fontFamily: 'var(--font-mono)' }}>Renews {s.renews}</span>
+              <span className="kit-sub__logo" style={{ background: 'var(--plum-600)' }}>{(s.name || '?').slice(0, 1)}</span>
+              <div className="kit-sub__main"><p className="kit-row__title">{s.name}</p><p className="kit-row__sub">{money(s.amount)} · {(s.frequency || '').toLowerCase()}</p></div>
+              <span className="kit-row__sub" style={{ fontFamily: 'var(--font-mono)' }}>{s.next_date ? `Renews ${s.next_date}` : ''}</span>
             </div>
           ))}
         </Card>
-        <Card title="Bills & recurring" action={<Badge color="neutral">Sample · slice 2</Badge>}>
-          {SAMPLE_BILLS.map((b, i) => (
+        <Card title="Bills & recurring">
+          {(bills || []).length === 0 && <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>No bills detected yet — connect a bank with recurring payments.</p>}
+          {(bills || []).map((b, i) => (
             <div className="kit-sub" key={i}>
-              <span className="kit-workout__ico" style={{ width: 38, height: 38, background: `var(--${b.tint}-100)`, color: `var(--${b.tint}-600)` }}><Icon name={b.icon} /></span>
-              <div className="kit-sub__main"><p className="kit-row__title">{b.name}</p><p className="kit-row__sub">{b.sub} · {b.due}</p></div>
-              <span className="kit-row__amt">{b.amt}</span>
+              <span className="kit-workout__ico" style={{ width: 38, height: 38, background: 'var(--honey-100)', color: 'var(--honey-600)' }}><Icon name={b.kind === 'liability' ? 'building-2' : 'wifi'} /></span>
+              <div className="kit-sub__main"><p className="kit-row__title">{b.name}</p><p className="kit-row__sub">{b.sub}{b.due_date ? ` · Due ${b.due_date}` : ''}</p></div>
+              <span className="kit-row__amt">{money(b.amount)}</span>
             </div>
           ))}
         </Card>

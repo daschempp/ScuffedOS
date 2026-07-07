@@ -692,3 +692,99 @@ class FinanceBudget(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class FinanceRecurring(Base):
+    """A Plaid recurring stream (/transactions/recurring/get). stream_type splits
+    inflow (income) vs outflow (subscriptions/bills). NOT a bank write source."""
+
+    __tablename__ = "finance_recurring"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_finance_recurring_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'plaid'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # Plaid stream_id
+    item_id: Mapped[str] = mapped_column(String(128), index=True)
+    account_id: Mapped[str] = mapped_column(String(128), index=True)
+    stream_type: Mapped[str] = mapped_column(String(16), default="outflow")  # inflow|outflow
+    description: Mapped[str] = mapped_column(String(255), default="")
+    merchant_name: Mapped[str | None] = mapped_column(String(255))
+    category_primary: Mapped[str] = mapped_column(String(64), default="")
+    category_detailed: Mapped[str] = mapped_column(String(128), default="")
+    average_amount: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    last_amount: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    frequency: Mapped[str] = mapped_column(String(24), default="")
+    first_date: Mapped[date | None] = mapped_column(Date)
+    last_date: Mapped[date | None] = mapped_column(Date)
+    predicted_next_date: Mapped[date | None] = mapped_column(Date)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(24), default="")
+    iso_currency: Mapped[str] = mapped_column(String(8), default="USD")
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class FinanceLiability(Base):
+    """Loan/credit-card terms (/liabilities/get). Keyed by the account it describes."""
+
+    __tablename__ = "finance_liabilities"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_finance_liabilities_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'plaid'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # = account_id
+    item_id: Mapped[str] = mapped_column(String(128), index=True)
+    account_id: Mapped[str] = mapped_column(String(128), index=True)
+    liability_type: Mapped[str] = mapped_column(String(16), default="credit")  # credit|mortgage|student
+    last_statement_balance: Mapped[Decimal | None] = mapped_column(Numeric(16, 2))
+    minimum_payment: Mapped[Decimal | None] = mapped_column(Numeric(16, 2))
+    next_payment_due_date: Mapped[date | None] = mapped_column(Date)
+    last_payment_amount: Mapped[Decimal | None] = mapped_column(Numeric(16, 2))
+    last_payment_date: Mapped[date | None] = mapped_column(Date)
+    apr_percentage: Mapped[Decimal | None] = mapped_column(Numeric(8, 4))
+    iso_currency: Mapped[str] = mapped_column(String(8), default="USD")
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class FinanceInvestmentTransaction(Base):
+    """An investment buy/sell/dividend/fee (/investments/transactions/get)."""
+
+    __tablename__ = "finance_investment_transactions"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_finance_investment_transactions_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'plaid'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # investment_transaction_id
+    item_id: Mapped[str] = mapped_column(String(128), index=True)
+    account_id: Mapped[str] = mapped_column(String(128), index=True)
+    security_id: Mapped[str] = mapped_column(String(128), index=True, default="")
+    type: Mapped[str] = mapped_column(String(32), default="")
+    subtype: Mapped[str] = mapped_column(String(48), default="")
+    name: Mapped[str] = mapped_column(Text, default="")
+    quantity: Mapped[Decimal] = mapped_column(Numeric(24, 8), default=0)
+    amount: Mapped[Decimal] = mapped_column(Numeric(16, 2), default=0)
+    price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
+    fees: Mapped[Decimal | None] = mapped_column(Numeric(16, 2))
+    date: Mapped[date] = mapped_column(Date, index=True)
+    iso_currency: Mapped[str] = mapped_column(String(8), default="USD")
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow)

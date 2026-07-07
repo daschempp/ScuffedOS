@@ -234,6 +234,11 @@ export const api = {
   financeReallocate: (payload) => request('/api/finance/budgets/reallocate', { method: 'POST', body: JSON.stringify(payload) }),
   financeDisconnect: (itemId) => request(`/api/finance/items/${itemId}/disconnect`, { method: 'POST' }),
   financeSync: () => request('/api/finance/sync', { method: 'POST' }),
+  financeSubscriptions: () => request('/api/finance/subscriptions'),
+  financeBills: () => request('/api/finance/bills'),
+  financeInvestmentTransactions: (days) => request(`/api/finance/investment-transactions${days ? `?days=${days}` : ''}`),
+  financeReauthStart: (itemId) => request(`/api/finance/items/${itemId}/reauth/start`, { method: 'POST' }),
+  financeReauthComplete: (itemId) => request(`/api/finance/items/${itemId}/reauth/complete`, { method: 'POST' }),
 
   // Second-brain memories.
   listMemories: () => request('/api/memory'),

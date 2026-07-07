@@ -546,6 +546,7 @@ class FakePlaidProvider:
     name = "plaid"
 
     def __init__(self, *, item=None, accounts=None, delta=None, holdings=None,
+                 recurring=None, liabilities=None, investment_txns=None,
                  public_token="pub-1", access_token="acc-tok", item_id="itm1",
                  raise_auth=False):
         from app.providers.base import NormalizedItem, TransactionsDelta
@@ -555,6 +556,9 @@ class FakePlaidProvider:
         self.accounts = accounts or []
         self.delta = delta or TransactionsDelta(next_cursor="C1", has_more=False)
         self.holdings = holdings or ([], [], [])
+        self.recurring = recurring or []
+        self.liabilities = liabilities or []
+        self.investment_txns = investment_txns or ([], [], [])
         self.public_token = public_token
         self.access_token = access_token
         self.item_id = item_id
@@ -563,7 +567,7 @@ class FakePlaidProvider:
         self.removed: list[str] = []
         self.synced_cursors: list = []
 
-    def create_link_token(self, kind: str) -> dict:
+    def create_link_token(self, kind: str, access_token=None) -> dict:
         self.link_kinds.append(kind)
         return {"link_token": "link-1", "hosted_link_url": "https://plaid/hl"}
 
@@ -588,6 +592,15 @@ class FakePlaidProvider:
 
     def get_holdings(self, access_token: str):
         return self.holdings
+
+    def get_recurring(self, access_token: str):
+        return list(self.recurring)
+
+    def get_liabilities(self, access_token: str):
+        return list(self.liabilities)
+
+    def get_investment_transactions(self, access_token: str, start=None, end=None):
+        return self.investment_txns
 
     def remove_item(self, access_token: str) -> None:
         self.removed.append(access_token)

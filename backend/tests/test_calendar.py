@@ -236,3 +236,11 @@ def test_rescheduling_a_series_shifts_its_exdates(client):
     shifted_third = third + timedelta(hours=1)
     assert _parse(shifted_third.isoformat()) not in [_parse(s) for s in starts]
     assert len(starts) == 3  # days 1, 2, 4 of the window — not 4
+
+
+def test_finance_calendar_occurrence_not_mutable_via_http(client):
+    # A 'finance:<id>' occurrence id is not an int, so the int-typed events routes reject it.
+    res = client.patch("/api/calendar/events/finance:bill:cc1", json={"title": "x"})
+    assert res.status_code in (404, 422)
+    res2 = client.delete("/api/calendar/events/finance:bill:cc1")
+    assert res2.status_code in (404, 422)
