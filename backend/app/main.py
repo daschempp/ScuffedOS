@@ -33,6 +33,7 @@ from .routers import (
     moodle,
     nutrition,
     oauth,
+    settings as settings_router,
     tasks,
 )
 
@@ -140,6 +141,7 @@ app.include_router(oauth.auth_router)
 app.include_router(email.router)
 app.include_router(moodle.router)
 app.include_router(finance.router)
+app.include_router(settings_router.router)
 
 
 @app.get("/api/health", tags=["meta"])
