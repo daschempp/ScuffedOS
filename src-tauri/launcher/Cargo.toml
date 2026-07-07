@@ -1,0 +1,12 @@
+[package]
+name = "scuffedos-backend"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "scuffedos-backend"
+path = "launcher.rs"
+
+[profile.release]
+opt-level = "s"
+strip = true
