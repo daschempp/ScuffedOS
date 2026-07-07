@@ -118,5 +118,16 @@ class Settings(BaseSettings):
     finance_sync_seconds: int = 1800              # 30 min
     plaid_backfill_days: int = 90                 # first-sync transaction history window
 
+    # ---- M8 Ship / Tauri — managed local Postgres (packaged app only) ----
+    # OFF by default: dev, CI, and the test suite are unchanged and use the
+    # external DATABASE_URL exactly as today. The packaged .app sets this to 1,
+    # which makes app/localdb.py boot a vendored Postgres under app_support_dir
+    # and inject the socket DSN into database_url before the first DB call.
+    scuffedos_managed_pg: bool = False           # env SCUFFEDOS_MANAGED_PG
+    # Per-user state root; ~ is expanded by app/localdb.py, never here.
+    app_support_dir: str = "~/Library/Application Support/ScuffedOS"
+    managed_pg_superuser: str = "scuffedos"      # initdb -U role + DSN user
+    managed_pg_dbname: str = "scuffedos"         # created DB + DSN dbname
+
 
 settings = Settings()
