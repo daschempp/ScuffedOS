@@ -30,3 +30,6 @@ src-tauri/launcher/target/
 # the committed icon.png source tracked.
 src-tauri/binaries/scuffedos-backend-*
 src-tauri/icons/icon.icns
+
+# graphify knowledge-graph output (local tooling, regenerable)
+graphify-out/
