@@ -25,6 +25,15 @@ reminders, list, priority, deadline, recurrence, real file attachments) · Habit
 (sample) · Second Brain (live, semantic memory) — plus a launchable **Assistant**
 chat panel (live Claude) that reads and writes all of it.
 
+### Desktop app (M8)
+ScuffedOS also ships as a **double-clickable, unsigned macOS app** (Apple-Silicon
+only) built with Tauri: it bundles its own Python runtime, PostgreSQL 17 +
+pgvector, and the backend, so the full dashboard runs **offline with no
+terminal**. API keys and OAuth credentials are entered in-app under **Settings**
+and stored in a machine-bound encrypted vault. Build it with `bash
+scripts/build-app.sh`; see [`docs/ship.md`](docs/ship.md) for the build, the
+one-time right-click▸Open (quarantine) step, and the acceptance smoke.
+
 ## Prerequisites
 - **Node** 18+ (built with Node 25)
 - **Python** 3.10+ (built with 3.14)

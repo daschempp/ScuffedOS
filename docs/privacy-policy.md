@@ -1,6 +1,6 @@
 # ScuffedOS Privacy Policy
 
-**Effective date:** July 6, 2026
+**Effective date:** July 7, 2026
 
 ScuffedOS is a personal assistant application operated by Dylan Schempp ("we," "us"). It combines tasks, calendar, habits, nutrition, notes, and connected health data behind a single AI assistant. ScuffedOS is a self-hosted application: in the current deployment, the operator and the sole user are the same person, and there are no third-party user accounts.
 
@@ -117,6 +117,7 @@ Scuffed OS is not affiliated with Plaid, Coinbase, or your bank.
 - App data is stored in a Postgres database hosted by Supabase; attachments and the memory history file are stored on the operator's machine.
 - Data is encrypted in transit (TLS) between the app, the database, and all service providers.
 - API credentials and OAuth tokens are stored server-side, never in the client. Static API keys come from server-side configuration; OAuth tokens obtained when you connect a service (such as WHOOP) are stored in the server-side database and are never exposed to the client.
+- In the packaged desktop app, API keys and OAuth tokens are stored on your Mac in a machine-bound, AES-256-GCM encrypted vault (`secrets.enc`) rather than in a database; the encryption key is derived from your machine's hardware identifier and wrapped in the macOS Keychain. These secrets never leave your machine.
 - Access to the database and the machine running the app is limited to the operator.
 
 No system is perfectly secure, but as a single-user, self-hosted application, ScuffedOS's exposure surface is intentionally small.

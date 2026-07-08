@@ -66,6 +66,13 @@ If you move the app to different hardware, the vault can no longer decrypt
 (the hardware UUID changed). Settings detects this and shows a
 **re-authenticate** flow — re-paste your keys to repair the vault.
 
+### Publishing privacy-policy changes
+`docs/privacy-policy.md` is the **canonical** copy. When it changes (e.g. the M8
+vault disclosure), its two public mirrors — the GitHub gist and the
+scuffed-corporation website `/privacy/` — go stale until you run the
+`publish-privacy-policy` skill. After merging any privacy-policy change, run that
+skill to sync both mirrors and bump the live effective date.
+
 ## Acceptance smoke (a fresh app on a clean machine)
 
 1. `rm -rf ~/Library/Application\ Support/ScuffedOS` (fresh first-run state).
