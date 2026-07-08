@@ -177,6 +177,10 @@ export const api = {
   oauthConnect: (provider) => request(`/api/oauth/connect/${provider}`),
   oauthDisconnect: (provider) => request(`/api/oauth/disconnect/${provider}`, { method: 'POST' }),
 
+  // M9 Connectors — unified read model for Settings › Connectors. One card per
+  // connector (google/whoop/moodle/plaid) with status + configured + Plaid items.
+  getConnectors: () => request('/api/connectors'),
+
   // Fitness (M4) — normalized reads/writes. Reads never touch a live WHOOP
   // call; they come straight from the normalized tables, so the screen works
   // while sync is mid-flight or WHOOP is down.
