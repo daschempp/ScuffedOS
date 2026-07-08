@@ -161,7 +161,10 @@ def test_delete_moodle_data_removes_all_six_tables():
 
 
 def test_moodle_deadlines_days_ahead_horizon_filter():
-    now = datetime(2026, 7, 3, 12, tzinfo=UTC)
+    # Relative to the real clock: the store filters on utcnow() at call time,
+    # so a hardcoded `now` becomes a time bomb once the wall clock passes it
+    # (this test started failing 2026-07-08 with its old now=2026-07-03).
+    now = datetime.now(UTC)
     soon = now + timedelta(days=5)
     far = now + timedelta(days=45)
     store.upsert_moodle_deadline(_deadline("soon", soon, name="Soon due"))
