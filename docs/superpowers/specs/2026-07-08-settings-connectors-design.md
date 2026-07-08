@@ -1,10 +1,10 @@
 # Settings › Connectors — unified sign-in surface + packaged-app OAuth (M9)
 
-**Date:** 2026-07-08 · **Status:** approved design (brainstormed with user)
-**Branch:** `m9-connectors-design` off `m8-ship-tauri-slice2` (53cea3b — requires M8 slice-2's
-Settings screen + secrets vault). **Execution prerequisite:** merge M8 to main first (one
-combined M8 PR), then rebase/cut the real M9 branches from main — do not stack three deep
-(the M7 stacked-PR lesson).
+**Date:** 2026-07-08 · **Status:** approved design (brainstormed with user; 4-lens adversarial
+spec review applied — 21 confirmed findings folded in)
+**Branch:** `m9-connectors-design` off `m8-ship-tauri-slice2` (requires M8 slice-2's Settings
+screen + secrets vault). **Execution prerequisite:** M8 merged to main first (PR #11), then
+rebase this branch onto main — do not stack three deep (the M7 stacked-PR lesson).
 
 ---
 
@@ -37,7 +37,7 @@ scope: sign-in must work **from the packaged .app**, not just dev — including 
 | Status | `GET /api/oauth/status` (oauth.py:64) | same | same (`_status_dict`, oauth.py:46) | own `GET /api/finance/status` (finance.py:72) |
 | Disconnect | `POST /api/oauth/disconnect/google` (oauth.py:99) — **no UI today** | same, buried IconButton (FitnessScreen.jsx:152) | same — **no UI today** | per-item `POST /api/finance/items/{id}/disconnect` (finance.py:131) |
 | Reauth | re-run connect | re-run connect | re-paste token | update-mode `…/reauth/start` + `…/reauth/complete` (finance.py:147/167) |
-| Token storage | `provider_accounts` (single row, owner+provider; store.py:1411) | same | same (`access_token`, `expires_at` always None) | `finance_items`, **multi-row** per institution (models.py:555) |
+| Token storage | `provider_accounts` (single row, owner+provider; store.py:1411) | same | same (`access_token`, `expires_at` always None) | `finance_items`, **multi-row** per institution |
 | App creds | GOOGLE_CLIENT_ID/SECRET in vault (SECRET_FIELD_MAP, config.py:149) | WHOOP_CLIENT_ID/SECRET in vault | **none** — the pasted token IS the credential | PLAID_CLIENT_ID/SECRET in vault |
 | Connect UI today | EmailScreen.jsx:93/:208/:280 | FitnessScreen.jsx:56/:101/:123 | SchoolScreen.jsx:58/:73/:120 | FinanceScreen.jsx:49-79/:103/:126/:136 |
 
@@ -66,8 +66,8 @@ Shared seams a Connectors surface builds on:
    no StaticFiles in main.py).
 
 Dev works only because uvicorn happens to run on :8000. (Even in dev, the post-consent bounce to
-`/?screen=email` lands on the backend root, not Vite — users navigate back by hand. §9 fixes this
-for both modes.)
+`/?screen=email` lands on the backend root, not Vite — users navigate back by hand. §6a fixes
+this for both modes, in slice 1.)
 
 **Externally verified facts the design rests on** (2026-07-08):
 
@@ -85,7 +85,7 @@ for both modes.)
 
 | Slice | Delivers | Depends on |
 |---|---|---|
-| **1 — Connectors tab** | All four sign-ins managed in Settings › Connectors; dev mechanics unchanged | M8 slice-2 merged |
+| **1 — Connectors tab** | All four sign-ins managed in Settings › Connectors; callback success/error page (§6a); dev mechanics otherwise unchanged | M8 merged (PR #11) |
 | **2 — Packaged sign-in** | Google + Plaid connect from the shipped .app (Moodle already does); works unsigned too | slice 1 |
 | **3 — Sign + WHOOP** | Developer ID signing + notarization; `scuffedos://` deep link; static bounce page; WHOOP connects packaged | slice 2 + user's Apple enrollment |
 
@@ -106,7 +106,7 @@ Response shape (new Pydantic schemas in schemas.py):
 ConnectorInfo:
   name:        "google" | "whoop" | "moodle" | "plaid"
   label:       str                      # human name, e.g. "Google / Gmail"
-  kind:        "oauth" | "token" | "link"
+  auth_kind:   "oauth" | "token" | "link"
   configured:  bool                     # app creds present (vault→env seam); Moodle: always true
   status:      "not_connected" | "connected" | "needs_reauth"
   connected_at: datetime | None
@@ -115,16 +115,38 @@ ConnectorInfo:
   items:       list[ConnectorItem]      # plaid only, else []
 
 ConnectorItem:                          # one per linked institution
-  item_id, institution_name, status ("connected" | "needs_reauth"), last_synced_at
+  item_id, institution_name, status ("connected" | "needs_reauth"), last_sync_at
 ```
 
-Vocabulary mapping: `provider_accounts.status` passes through; `finance_items.status`
-`'active'` → `'connected'`. Plaid's connector-level status derives from its items:
-any `needs_reauth` → `needs_reauth`; else ≥1 item → `connected`; else `not_connected`.
-`configured` reads the already-vault-resolved settings fields (`google_client_id != ""` etc.).
-Tokens/secrets are **never** serialized (same rule as `_provider_account_dict`, store.py:423).
+- `label` and `auth_kind` come from a **static name-keyed dict inside routers/connectors.py**
+  (mirroring `_INTEGRATIONS` in routers/settings.py:27) — *not* from provider attributes
+  (`WhoopProvider.kind` already exists and means something else; hence `auth_kind`, not `kind`).
+- `last_sync_at` matches the codebase-wide naming. Connector-level last-sync is deliberately
+  omitted from the card model (per-item only, where Plaid already tracks it).
+- Vocabulary mapping: `provider_accounts.status` passes through; `finance_items.status`
+  `'active'` → `'connected'`. Plaid's connector-level status derives from its items:
+  any `needs_reauth` → `needs_reauth`; else ≥1 item → `connected`; else `not_connected`.
+- `configured` reads the already-vault-resolved settings fields (`google_client_id != ""` etc.).
+- Tokens/secrets are **never** serialized (same rule as `_provider_account_dict`, store.py:423).
 
 **No new action endpoints.** Connect/disconnect/reauth reuse the five existing flows verbatim.
+
+### 6a. Slice 1 — callback page (replaces the dead 302)
+
+`GET /auth/{provider}/callback` (oauth.py:70) stops 302-ing to a SPA path the backend cannot
+serve. Signature becomes `code: str | None = None, error: str | None = None, state: str = …`;
+it returns minimal inline HTML:
+
+- **Success** — "✓ Connected — you can close this tab and return to ScuffedOS."
+- **Error** — rendered when `error` is present (e.g. Google's `access_denied` redirect carries
+  `error` and **no `code`** — today's required `code` param would 422 before our code runs) or
+  `code` is missing or the state/exchange fails; shows the reason and "start again from
+  Settings › Connectors". The one-time state is still consumed/validated on every path.
+
+Consequence: `success_redirect()` is **deleted** from the `OAuthProvider` protocol and all
+implementations (google.py:302, whoop.py:170, the moodle provider) and fakes, along with its
+string-assert tests. Nothing else consumes it (verified: no frontend `?connected=` handling
+survives §8). This is a strict improvement in dev too (today's bounce lands on a backend 404).
 
 ## 7. Slice 1 — frontend: Settings becomes tabbed **Connectors | API keys**
 
@@ -145,8 +167,8 @@ the vault) with a warning strip: OAuth connects need creds the vault can't curre
     navigate to `authorize_url` (dev mechanics in slice 1; slice 2 swaps the transport).
     Google's card keeps the "Enable email actions" scope-upgrade affordance (can_write_email).
   - **Moodle** — inline paste-token field + Connect → `api.moodleConnect`; needs_reauth shows
-    the same field with "paste a fresh key" copy. (Token acquisition help-text links the
-    WolfWare Security-keys page, as SchoolScreen does today.)
+    the same field with "paste a fresh key" copy. The card reproduces SchoolScreen's existing
+    step-by-step help copy for obtaining the wstoken (no external link — none exists today).
   - **Plaid** — "Link bank account" / "Link investment account" buttons (`link/start` →
     open tab → "Finish linking" poll, the existing 409 loop) + one sub-row per institution
     with its own status chip, Reconnect (update-mode reauth pair) and Disconnect.
@@ -164,16 +186,35 @@ the vault) with a warning strip: OAuth connects need creds the vault can't curre
 
 ## 8. Slice 1 — the four data screens slim down
 
-Email/Fitness/School/Finance **delete** their connect CTAs, paste forms, link launchers, and
-reauth re-connect forms (EmailScreen:208-219/:280-300, FitnessScreen:101-132/:152 disconnect
-IconButton, SchoolScreen:73-146, FinanceScreen:103-145 + startLink/finishLink/reauth/disconnect
-handlers). In their place:
+Each screen keys its empty/needs_reauth state on **its own provider's entry** (its connector in
+`GET /api/connectors`, or its `provider === '<name>'` row in the oauth status) — **never** the
+aggregate `connected` flag. FitnessScreen.jsx:50 keys on the aggregate today and must change.
+
+What is deleted vs preserved, per screen (ranges are the connect-UI blocks only; connected-mode
+data panels, Sync buttons, and derivation code between the cited blocks stay):
+
+- **EmailScreen** — delete the not-connected CTA card (:208-219) and the needs_reauth +
+  enable-write banners (:280-300) plus `connect()` (:93). Add: (a) the empty-state card,
+  (b) the one-line needs_reauth deep-link banner, (c) a third state — when connected and
+  `can_write_email === false`, a one-line "Email actions are read-only — enable in Settings ›
+  Connectors" banner (`onOpenConnectors`), replacing today's in-context upgrade pointer.
+- **FitnessScreen** — delete the not-connected CTA (:101-112), the needs_reauth banner
+  (:123-132), and the disconnect IconButton (:152) + `connect()/disconnect()` handlers
+  (:56-64). Preserve the vitals/rings derivation between those blocks (:114-119).
+- **SchoolScreen** — delete the paste-key form (:73-105) and the double reauth cards
+  (:120-146) + `connect()` (:58).
+- **FinanceScreen** — delete the not-connected connect card (:103-116), the per-item
+  Reconnect/Disconnect chips (:126-127), the pendingLink/finish card + needs_reauth
+  inline-reauth (:135-145), and the `startLink/reauth/finishLink/disconnect` handlers
+  (:49-79 minus `sync()`). **Preserve** `sync()` and the Sync button (:130-133) — the
+  connected view keeps its refresh affordance; per-institution management moves to the tab.
+
+In place of each deleted block:
 
 - **Not connected** → one empty-state card: icon, "Not connected", one line of copy, and a
   "Set up in Settings › Connectors" button (`onOpenConnectors`).
 - **needs_reauth** → one-line banner "Connection needs re-authorizing — fix in Settings ›
   Connectors" (deep-link). No inline re-auth UI.
-- Connected behavior (data panels, Sync buttons) is untouched.
 
 ## 9. Slice 2 — packaged sign-in (Google + Plaid; signed-agnostic)
 
@@ -183,25 +224,40 @@ handlers). In their place:
   API keys tab). *Consequence:* refresh tokens minted under the old Web client die with the
   client_id change — a **one-time Google reconnect** after the switch; the Connectors tab makes
   this a visible, ordinary needs_reauth → Reconnect.
-- The Tauri shell already passes `--port {n}` to the sidecar; it additionally exports
-  `SCUFFEDOS_PORT={n}` when spawning. `config.py` gains `backend_port: int = 8000` (env-fed).
-  `GoogleProvider.authorize_url`/`exchange_code` compute
-  `redirect_uri = http://127.0.0.1:{settings.backend_port}/auth/google/callback` at request
-  time — dev (uvicorn :8000) and packaged (random port) both just work, no registration.
-  An explicitly set `google_redirect_uri` env still wins (back-compat escape hatch).
-- **PKCE** (S256), recommended for native apps: the verifier is stored alongside the provider in
-  the CSRF `_STATES` entry (oauth.py:30) — `_STATES[state] = (provider, verifier)` — and passed
-  to `exchange_code`. Google-only; the other providers ignore it. `[confirm-against-live]`
-  Desktop-client + PKCE token exchange shape.
+- **Port plumbing (exact pairing — a name mismatch here ships a dead flow):** the Tauri shell
+  already passes `--port {n}` and sets sidecar env via `.env()` (lib.rs:207-209); it
+  additionally exports **`SCUFFEDOS_PORT={n}`**. `config.py` gains
+  **`scuffedos_port: int = 8000`** — the field name matches the env var under pydantic's
+  default name↔env binding (`SettingsConfigDict` has no `env_prefix`/aliases, config.py:12;
+  the `scuffedos_managed_pg` ↔ `SCUFFEDOS_MANAGED_PG` precedent). Do **not** name it
+  `backend_port` — that would silently bind to `BACKEND_PORT` and never see the value.
+  §13 tests construct `Settings` from an env dict containing `SCUFFEDOS_PORT`.
+- **Redirect URI:** `google_redirect_uri` default changes to `""`; when empty, GoogleProvider
+  computes `http://127.0.0.1:{settings.scuffedos_port}/auth/google/callback` at request time —
+  dev (uvicorn :8000) and packaged (random port) both just work, no registration. A non-empty
+  env value wins verbatim (defined override semantics; update the default-assert in
+  test_email_config.py:12).
+- **PKCE (S256), both legs specified:** the oauth router owns the flow — at connect time it
+  generates the verifier, derives the S256 challenge, stores
+  `_STATES[state] = (provider, verifier)` (value type changes str → tuple; update the
+  `_STATES.get(state) == "whoop"` assertion, test_oauth.py:41), and calls
+  `authorize_url(state, code_challenge=None)` — a **new optional protocol param**
+  (base.py:174): Google appends `code_challenge` + `code_challenge_method=S256`; the others
+  ignore it. At callback time the verifier rides into
+  `exchange_code(code, verifier: str | None = None)` — a **coordinated protocol-signature
+  change** (base.py:175) across google.py:231, whoop.py:116, moodle.py:402, the three
+  fakes.py providers (:129/:373/:462) and the four inline test fakes
+  (test_provider_registry.py:13/:26, test_providers_base.py:69, test_moodle_provider.py:88,
+  test_fitness_sync.py:33). Only Google *uses* the verifier; every signature must accept it.
+  `[confirm-against-live]` Desktop-client + PKCE token exchange shape.
 - **System browser:** in packaged mode (`isTauri()`), Connect opens `authorize_url` via the
   official **opener plugin** (new capability) instead of navigating the webview; dev keeps
   `window.location`. Consent then happens in the user's real browser with their Google session.
-- **Callback UX:** `/auth/{provider}/callback` stops 302-ing to a SPA path the backend can't
-  serve; it returns a minimal inline-HTML **"✓ Connected — you can close this tab and return to
-  ScuffedOS"** page (error variant shows the failure reason). Strict improvement in both modes
-  (dev currently lands on a backend 404). The Connectors tab **polls** `GET /api/connectors`
-  (~2s, bounded ~2min) from the moment Connect is clicked until status flips — the same UX
-  pattern Plaid's finish-poll already set.
+- **Polling:** from the moment Connect is clicked the Connectors tab polls
+  `GET /api/connectors` (~2s, bounded ~2min), stopping when the connector's
+  **(status, can_write_email, connected_at) tuple changes from its pre-click snapshot** — not
+  "until status flips", which never fires for the scope-upgrade reconnect (status stays
+  `connected`; only `can_write_email` moves).
 
 **Plaid:** the hosted-link tab opens via the opener plugin under `isTauri()` (webview
 `window.open` is unreliable in packaged Tauri); the `link/complete` 409-poll is unchanged.
@@ -228,7 +284,8 @@ Application certificate in the login keychain.
   and forwards the query to `http://127.0.0.1:{port}/auth/{provider}/callback` via the existing
   reqwest dependency; the Connectors tab's poll picks up the flip. Deep links are
   attacker-invokable by any local page — safe here because the one-time CSRF state check
-  (oauth.py:41-43) rejects anything the backend didn't just issue.
+  (consume oauth.py:41-43, reject oauth.py:80-82) rejects anything the backend didn't just
+  issue.
 - **Bounce page:** a **static** HTML page published at
   `https://scuffedcorporation.com/auth/whoop/callback` (already the registered WHOOP redirect
   URI and the config default) that JS-forwards its query string to
@@ -241,21 +298,23 @@ Application certificate in the login keychain.
 
 ## 11. Data model & migrations
 
-None. Slice 1 adds a response schema only. Slice 2 adds `backend_port` (a Settings field, not
-a table) and extends the in-memory `_STATES` value. Slice 3 touches no backend data at all.
+None. Slice 1 adds a response schema and the callback-page rework only. Slice 2 adds
+`scuffedos_port` (a Settings field, not a table), the two protocol-signature extensions
+(§9 PKCE), and the `_STATES` tuple value. Slice 3 touches no backend data at all.
 
 ## 12. Error handling & security
 
 - **Destructive disconnect** — inline confirm naming exactly what synced data is wiped (§7).
 - **Vault locked** (`vault_ok:false`) — Connectors tab reachable with a warning strip; OAuth
   connect buttons disabled (creds unreadable); Moodle paste still works (DB, not vault).
-- **CSRF `_STATES` is in-process** (oauth.py:30) — a sidecar restart mid-consent invalidates
-  the flow; the callback error page says "start again from Settings › Connectors". Accepted
-  (single-user local app); not persisted.
-- **Callback failures** (denied consent, expired state, exchange error) — error variant of the
-  callback page in both modes; the tab's poll times out back to an actionable "Connect failed —
-  try again" state on the card.
-- **Poll bounds** — status polling stops after ~2min or on tab/screen exit; no infinite loops.
+- **CSRF `_STATES` is in-process** (oauth.py:30; consume :41-43, reject :80-82) — a sidecar
+  restart mid-consent invalidates the flow; the callback error page says "start again from
+  Settings › Connectors". Accepted (single-user local app); not persisted.
+- **Callback failures** (denied consent → `error` param with no `code`; expired state;
+  exchange error) — the §6a error page in both modes; the tab's poll times out back to an
+  actionable "Connect failed — try again" state on the card.
+- **Poll bounds** — stops on the §9 tuple-change condition, after ~2min, or on tab/screen
+  exit; no infinite loops.
 - **Secrets never leave the backend** — `GET /api/connectors` carries no tokens; masked
   presence stays the API-keys-tab contract (`GET /api/settings/secrets`).
 - Single-user posture unchanged: loopback bind, no sessions (documented, not "fixed" here).
@@ -268,21 +327,27 @@ autouse fixture, TestClient; zero network.
 - **Slice 1 (backend):** GET /api/connectors returns all four with `not_connected` on an empty
   DB; connected/needs_reauth projection per provider; Plaid items nested + connector-level
   derivation (active→connected mapping); `configured` flips with fake vault/env creds; Moodle
-  always configured; no token material in any response. Frontend: `npm run build` green;
-  SettingsScreen tab behavior (vault-locked keeps Connectors reachable) unit-tested if a
-  component-test seam exists, else covered by the screens' empty-state render paths.
-- **Slice 2:** unit tests assert the runtime redirect_uri embeds `settings.backend_port`;
-  PKCE verifier round-trip through `_STATES` and into the (fake-transport) exchange body;
-  callback returns the success/error HTML page (no more 302-to-SPA); explicit
-  `google_redirect_uri` override still wins.
+  always configured; no token material in any response. Callback page: success HTML on a valid
+  code+state; error HTML on `error=access_denied` with no `code` (must not 422), on a missing
+  code, and on an invalid state; `success_redirect` removal (protocol + impls + fakes + its
+  string tests deleted).
+- **Slice 1 (frontend):** `npm run build` green. There is **no frontend test harness** — the
+  SettingsScreen restructure is verified by a **manual checklist** instead: vault-locked →
+  Connectors tab still reachable with the warning strip; first-run nudge renders inside the
+  API-keys tab; the M8 "Add keys" expand (53cea3b) still works; each data screen shows its
+  empty state off its own provider entry.
+- **Slice 2:** `Settings` constructed from an env dict containing `SCUFFEDOS_PORT` binds
+  `scuffedos_port`; empty `google_redirect_uri` computes the loopback URI embedding
+  `scuffedos_port`, a non-empty value wins verbatim; `authorize_url(state, code_challenge=…)`
+  carries the challenge derived from the stored verifier; the verifier round-trips through
+  `_STATES` into the (fake-transport) exchange body; all provider/fake `exchange_code`
+  signatures accept the optional verifier; test_oauth.py:41 updated for the tuple.
 - **Slice 3:** bounce page is static (visual check + a tiny query-forwarding JS unit if the
   corp repo has any harness); deep-link handler logic unit-tested at the Rust seam where
   practical; the end-to-end is a **manual GUI gate** on the signed bundle (deep links cannot
   fire in dev — verified).
-- **Suite baseline:** 670 passed / 1 skipped / 1 failed at 53cea3b — the failure is the
-  pre-existing `test_moodle_deadlines_days_ahead_horizon_filter` time-bomb (hardcodes
-  now=2026-07-03; also fails on main; fix belongs on main, not this branch). Each slice must
-  not regress the passing set; report counts per house rule.
+- **Suite baseline:** 671 passed / 1 skipped on `m8-ship-tauri-slice2` after the time-bomb fix
+  (f35733e). Each slice must keep the suite green; report counts per house rule.
 
 ## 14. Out of scope
 
@@ -295,6 +360,8 @@ autouse fixture, TestClient; zero network.
 - **Multi-user auth / sessions** — single-user loopback posture unchanged.
 - **New sync behavior** — connect/disconnect semantics (immediate backfill, data wipe) are
   reused, not redesigned.
+- **A frontend test harness** — deliberately not introduced for this milestone (§13 manual
+  checklist instead).
 
 ## 15. Risks
 
@@ -303,18 +370,19 @@ autouse fixture, TestClient; zero network.
 | Notarizing a bundle embedding Python + Postgres (hundreds of Mach-Os) | Known-shipped shape (Postgres.app); sign everything + hardened-runtime entitlements; `[confirm-against-live]` gate |
 | Google Desktop-client switch invalidates stored tokens | Surfaced as ordinary needs_reauth → one-click Reconnect in the tab |
 | Deep link hijack (another app claims `scuffedos://`) | One-time CSRF state check rejects forged callbacks; scheme collision is theoretical on a personal machine |
-| SettingsScreen restructure regresses M8 slice-2 UX (first-run nudge, vault re-auth) | Both early-return states become API-keys-tab states with tests; Connectors tab explicitly tested under vault_ok:false |
+| SettingsScreen restructure regresses M8 slice-2 UX (first-run nudge, vault re-auth) | Both early-return states become API-keys-tab states; §13 manual checklist covers vault-locked reachability, nudge placement, and the M8 Add-keys expand |
+| PKCE protocol change misses a fake → suite breaks late | §9 enumerates every impl + fake + assertion that must change; §13 tests the signatures |
 | Plaid hosted-link tab in packaged app | opener plugin (system browser) — same fix as Google consent |
 
 ## 16. Acceptance criteria
 
 - **Slice 1:** From a fresh DB in dev, all four connectors appear in Settings › Connectors as
-  Not connected; each can be connected, re-authed, and disconnected (with the destructive
-  confirm) entirely from the tab; the four data screens show empty states that deep-link;
-  no data-screen connect UI remains; suite green (minus the pre-existing moodle time-bomb);
-  build green.
+  Not connected; each can be connected (post-consent landing = the §6a page, then return to
+  the app), re-authed, and disconnected (with the destructive confirm) entirely from the tab;
+  the four data screens show empty states keyed on their own provider; no data-screen connect
+  UI remains; suite green; build green.
 - **Slice 2:** In the packaged .app — Google connects end-to-end via system browser +
   loopback callback + poll; Plaid links via system browser + finish-poll; Moodle pastes;
-  callback page renders in both modes.
+  `scuffedos_port` provably reaches the redirect URI (test + live).
 - **Slice 3:** The signed, notarized .app launches with no Gatekeeper bypass; WHOOP connects
   end-to-end via bounce page → deep link → callback; live round-trip confirmed.
