@@ -412,9 +412,6 @@ class MoodleProvider:
         return None
 
     # ---- OAuthProvider connect/disconnect hooks ----
-    def success_redirect(self) -> str:
-        return "/?screen=school&connected=moodle"
-
     def on_connected(self) -> None:
         """Post-connect hook: kick an immediate first sync. Imported lazily so
         this module does not hard-depend on the sync phase; a not-yet-authored

@@ -1,14 +1,10 @@
-"""WhoopProvider gains the three OAuthProvider hooks (M5 refactor).
+"""WhoopProvider gains the on_connected/on_disconnect OAuthProvider hooks (M5 refactor).
 
-success_redirect is a pure string; on_connected kicks the fitness sync;
-on_disconnect deletes WHOOP's normalized data via the store. All exercised
-with monkeypatched collaborators — no network, no DB.
+on_connected kicks the fitness sync; on_disconnect deletes WHOOP's normalized
+data via the store. Both exercised with monkeypatched collaborators — no
+network, no DB.
 """
 from app.providers.whoop import WhoopProvider
-
-
-def test_success_redirect_targets_fitness_screen():
-    assert WhoopProvider().success_redirect() == "/?screen=fitness&connected=whoop"
 
 
 def test_on_connected_kicks_the_fitness_sync(monkeypatch):

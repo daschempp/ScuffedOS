@@ -73,7 +73,6 @@ class _MinimalProvider:
     def fetch_workouts(self, since): return []
     def revoke(self, tokens): return None
     def set_tokens(self, tokens): pass
-    def success_redirect(self): return ""
     def on_connected(self): pass
     def on_disconnect(self): pass
 
