@@ -14,5 +14,10 @@ openai>=1.0
 python-dateutil>=2.9
 python-multipart>=0.0.20
 httpx>=0.27
+# Secrets vault (M8 Slice 2): AES-256-GCM + HKDF via cryptography; keyring
+# wraps the single 32-byte vault key in one OS-keychain item in the packaged
+# app (degrades to a file-only key where no backend exists, e.g. CI).
+cryptography>=43
+keyring>=25
 # Optional, for `uvicorn --reload` + faster event loop (compiled deps):
 #   pip install "uvicorn[standard]"

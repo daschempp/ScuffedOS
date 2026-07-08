@@ -3,7 +3,18 @@
    server on :8000 (see vite.config.js). Set VITE_API_URL to point elsewhere
    (e.g. a deployed backend). Every caller is expected to handle failure
    gracefully (the UI falls back to local behavior when the backend is down). */
-const BASE = import.meta.env.VITE_API_URL || ''
+/* Base URL for backend calls. Precedence:
+   1. VITE_API_URL — explicit build/deploy override.
+   2. '' — dev, and the initial value in the packaged .app: relative '/api'
+      paths hit the Vite proxy in dev; in the .app, main.jsx calls
+      setApiBase() with the resolved 127.0.0.1:<port> before first render. */
+let BASE = import.meta.env.VITE_API_URL || ''
+
+/* Allow the Tauri bootstrap (main.jsx) to inject the resolved 127.0.0.1:<port>
+   base before the first fetch. No trailing slash — paths already begin '/api'. */
+export function setApiBase(base) {
+  BASE = base ? base.replace(/\/$/, '') : ''
+}
 
 /* Thrown for non-2xx API responses (vs. a network-level TypeError when the
    backend is unreachable — callers use that distinction to decide between
@@ -248,4 +259,12 @@ export const api = {
   }),
   updateMemory: (id, patch) => request(`/api/memory/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteMemory: (id) => request(`/api/memory/${id}`, { method: 'DELETE' }),
+
+  // Settings — integration secrets. GET returns masked presence only; PUT
+  // writes new values into the machine-bound vault (never echoes secrets).
+  settingsGetSecrets: () => request('/api/settings/secrets'),
+  settingsPutSecrets: (values) => request('/api/settings/secrets', {
+    method: 'PUT',
+    body: JSON.stringify({ values }),
+  }),
 }

@@ -15,6 +15,7 @@ import { CRMScreen } from './screens/CRMScreen.jsx'
 import { EmailScreen } from './screens/EmailScreen.jsx'
 import { SchoolScreen } from './screens/SchoolScreen.jsx'
 import { MemoryScreen } from './screens/MemoryScreen.jsx'
+import { SettingsScreen } from './screens/SettingsScreen.jsx'
 import { ChatPanel } from './assistant/ChatPanel.jsx'
 import { api } from './lib/api.js'
 import { useTasks } from './lib/useTasks.js'
@@ -122,6 +123,7 @@ export function App() {
   else if (screen === 'people') body = <CRMScreen />
   else if (screen === 'email') body = <EmailScreen />
   else if (screen === 'school') body = <SchoolScreen />
+  else if (screen === 'settings') body = <SettingsScreen />
   else body = <Placeholder icon={{ settings: 'settings' }[screen] || 'sparkles'} name={meta.title} />
 
   return (

@@ -118,5 +118,84 @@ class Settings(BaseSettings):
     finance_sync_seconds: int = 1800              # 30 min
     plaid_backfill_days: int = 90                 # first-sync transaction history window
 
+    # ---- M8 Ship / Tauri — managed local Postgres (packaged app only) ----
+    # OFF by default: dev, CI, and the test suite are unchanged and use the
+    # external DATABASE_URL exactly as today. The packaged .app sets this to 1,
+    # which makes app/localdb.py boot a vendored Postgres under app_support_dir
+    # and inject the socket DSN into database_url before the first DB call.
+    scuffedos_managed_pg: bool = False           # env SCUFFEDOS_MANAGED_PG
+    # Per-user state root; ~ is expanded by app/localdb.py, never here.
+    app_support_dir: str = "~/Library/Application Support/ScuffedOS"
+    managed_pg_superuser: str = "scuffedos"      # initdb -U role + DSN user
+    managed_pg_dbname: str = "scuffedos"         # created DB + DSN dbname
+
 
 settings = Settings()
+
+
+# ---- M8 Ship / Tauri — secrets vault seam (Slice 2) ----
+# Secrets resolve from the machine-bound vault ONLY when the field is empty
+# after env/.env load, so a value in the environment (or a test's direct
+# assignment) always wins and dev/CI are unchanged. A foreign/corrupt vault
+# (machine id changed) is swallowed here and recovered via the Settings
+# re-authenticate flow — startup never crashes on a bad vault.
+import logging as _logging
+
+from .secrets import SecretsVault, VaultDecryptError
+
+_log = _logging.getLogger("scuffed_os.config")
+
+# settings field name -> canonical vault key.
+SECRET_FIELD_MAP: dict[str, str] = {
+    "anthropic_api_key": "ANTHROPIC_API_KEY",
+    "openai_api_key": "OPENAI_API_KEY",
+    "fdc_api_key": "FDC_API_KEY",
+    "whoop_client_id": "WHOOP_CLIENT_ID",
+    "whoop_client_secret": "WHOOP_CLIENT_SECRET",
+    "google_client_id": "GOOGLE_CLIENT_ID",
+    "google_client_secret": "GOOGLE_CLIENT_SECRET",
+    "plaid_client_id": "PLAID_CLIENT_ID",
+    "plaid_secret": "PLAID_SECRET",
+}
+
+# Field values that mean "not really set" and may be replaced by a vault value.
+_UNSET_SENTINELS = {"", "DEMO_KEY"}
+
+_vault: SecretsVault | None = None
+
+
+def get_vault() -> SecretsVault:
+    """Process-wide vault against app_support_dir. use_keyring only in the
+    packaged app (SCUFFEDOS_MANAGED_PG); dev/CI use a file-only key."""
+    global _vault
+    if _vault is None:
+        _vault = SecretsVault(
+            settings.app_support_dir,
+            use_keyring=settings.scuffedos_managed_pg,
+        )
+    return _vault
+
+
+def resolve_secrets_from_vault(target: "Settings" = settings) -> None:
+    """Fill empty/sentinel secret fields from the vault. Env/.env values win.
+    A decrypt failure is logged and swallowed (recovered via Settings re-auth)."""
+    try:
+        stored = get_vault().read_all()
+    except VaultDecryptError:
+        _log.warning("secrets vault failed to decrypt; using env-only secrets "
+                     "(re-authenticate in Settings to repair)")
+        return
+    except Exception as exc:  # defensive: never crash config import/startup
+        _log.warning("secrets vault unavailable (%s); using env-only secrets", exc)
+        return
+    for field_name, vault_key in SECRET_FIELD_MAP.items():
+        current = getattr(target, field_name, "")
+        if current in _UNSET_SENTINELS:
+            val = stored.get(vault_key)
+            if val:
+                setattr(target, field_name, val)
+
+
+# Resolve once at import so lazy consumers (llm/food_db/providers) see vault
+# values. Empty-only override keeps dev/CI/tests byte-for-byte unchanged.
+resolve_secrets_from_vault(settings)
