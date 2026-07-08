@@ -7,7 +7,7 @@ The catch-up is implicit: anything that came due while the laptop slept
 fires on the next tick.
 
 Delivery is `osascript -e 'display notification ...'` — works from a bare
-process, no app bundle needed (the Tauri bundle lands in M7). Same test
+process, no app bundle needed (the Tauri bundle lands in M8). Same test
 seam as llm.py: `configure(fake_notifier)` swaps delivery, `configure(None)`
 disables it.
 """

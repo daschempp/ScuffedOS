@@ -192,7 +192,7 @@ and whether each function is a read-only **mirror** or our own **canonical recor
       real file attachments, recurring tasks — with assistant tools for all.
 - [ ] **Graduate the four integration functions** from React sample data:
       Fitness/Whoop (M4), Email + People (M5), Finance/Plaid (M6); then the Tauri
-      bundle (M7).
+      bundle (M8).
 - [ ] **Auth & multi-user** for external accounts and the future iPhone client.
 
 ## Open questions / future work
