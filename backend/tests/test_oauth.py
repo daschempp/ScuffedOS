@@ -79,7 +79,7 @@ def test_status_reflects_a_connected_account_without_tokens(client):
     assert "access_token" not in p and "refresh_token" not in p
 
 
-def test_callback_exchanges_persists_and_triggers_immediate_sync(client, monkeypatch):
+def test_callback_success_renders_html_and_persists_and_syncs(client, monkeypatch):
     from app import fitness_sync
 
     fake = FakeProvider()
@@ -88,37 +88,30 @@ def test_callback_exchanges_persists_and_triggers_immediate_sync(client, monkeyp
     monkeypatch.setattr(fitness_sync, "tick", lambda now=None: ticks.append(now) or 0)
 
     state = _state_of(client.get("/api/oauth/connect/whoop").json()["authorize_url"])
-    res = client.get(
-        f"/auth/whoop/callback?code=the-code&state={state}",
-        follow_redirects=False,
-    )
-    assert res.status_code in (302, 307)
-    loc = res.headers["location"]
-    assert "screen=fitness" in loc and "connected=whoop" in loc
+    res = client.get(f"/auth/whoop/callback?code=the-code&state={state}", follow_redirects=False)
+    assert res.status_code == 200
+    assert "text/html" in res.headers["content-type"]
+    assert "close this tab" in res.text.lower()
 
     assert fake.exchanged == ["the-code"]
     accounts = store.list_provider_accounts()
     assert [a["provider"] for a in accounts] == ["whoop"]
     assert accounts[0]["status"] == "connected"
     assert accounts[0]["provider_user_id"] == "whoop-user-1"
-    # on_connected() ran WhoopProvider.on_connected → fitness_sync.tick once.
-    assert len(ticks) == 1
+    assert len(ticks) == 1                 # WhoopProvider.on_connected -> fitness_sync.tick
     assert state not in oauth._STATES
 
 
-def test_callback_with_bad_state_is_400_and_persists_nothing(client, monkeypatch):
+def test_callback_with_bad_state_renders_error_html_and_persists_nothing(client, monkeypatch):
     from app import fitness_sync
 
     fake = FakeProvider()
     providers.configure([fake])
     monkeypatch.setattr(fitness_sync, "tick", lambda now=None: 0)
 
-    res = client.get(
-        "/auth/whoop/callback?code=x&state=forged-state",
-        follow_redirects=False,
-    )
+    res = client.get("/auth/whoop/callback?code=x&state=forged-state", follow_redirects=False)
     assert res.status_code == 400
-    assert res.json()["error"]["code"] == "bad_request"
+    assert "text/html" in res.headers["content-type"]
     assert fake.exchanged == []
     assert store.list_provider_accounts() == []
 
@@ -130,9 +123,39 @@ def test_callback_state_is_single_use(client, monkeypatch):
     monkeypatch.setattr(fitness_sync, "tick", lambda now=None: 0)
     state = _state_of(client.get("/api/oauth/connect/whoop").json()["authorize_url"])
     first = client.get(f"/auth/whoop/callback?code=a&state={state}", follow_redirects=False)
-    assert first.status_code in (302, 307)
+    assert first.status_code == 200
     replay = client.get(f"/auth/whoop/callback?code=a&state={state}", follow_redirects=False)
-    assert replay.status_code == 400
+    assert replay.status_code == 400   # state already consumed -> error page
+
+
+def test_callback_access_denied_renders_error_without_422(client, monkeypatch):
+    # Google's access_denied redirect carries error and NO code. The old
+    # required `code` param would 422 before handler code ran; §6a must render
+    # the inline error page instead. State is still consumed.
+    from app import fitness_sync
+
+    fake = FakeProvider()
+    providers.configure([fake])
+    monkeypatch.setattr(fitness_sync, "tick", lambda now=None: 0)
+    state = _state_of(client.get("/api/oauth/connect/whoop").json()["authorize_url"])
+    res = client.get(f"/auth/whoop/callback?error=access_denied&state={state}", follow_redirects=False)
+    assert res.status_code == 400
+    assert "text/html" in res.headers["content-type"]
+    assert fake.exchanged == []
+    assert store.list_provider_accounts() == []
+    assert state not in oauth._STATES        # consumed even on the error path
+
+
+def test_callback_missing_code_renders_error(client, monkeypatch):
+    from app import fitness_sync
+
+    fake = FakeProvider()
+    providers.configure([fake])
+    monkeypatch.setattr(fitness_sync, "tick", lambda now=None: 0)
+    state = _state_of(client.get("/api/oauth/connect/whoop").json()["authorize_url"])
+    res = client.get(f"/auth/whoop/callback?state={state}", follow_redirects=False)
+    assert res.status_code == 400
+    assert fake.exchanged == []
 
 
 def test_disconnect_revokes_then_deletes_and_returns_status(client):
