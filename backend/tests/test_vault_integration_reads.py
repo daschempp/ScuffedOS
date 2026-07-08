@@ -14,6 +14,9 @@ from app.secrets import SecretsVault
 
 @pytest.fixture
 def seeded(tmp_path, monkeypatch):
+    # Isolate the process-global cached vault (cfg._vault) so it can't leak
+    # into/out of this test, mirroring test_config_vault_seam.py's pattern.
+    monkeypatch.setattr(cfg, "_vault", None, raising=False)
     v = SecretsVault(tmp_path, machine_id_override="integ-read-test", use_keyring=False)
     v.write_all({
         "ANTHROPIC_API_KEY": "sk-ant-vault",

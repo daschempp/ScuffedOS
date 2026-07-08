@@ -90,6 +90,16 @@ def test_set_overwrites_and_persists(tmp_path):
     assert _vault(tmp_path).get("K") == "second"
 
 
+def test_update_merges_and_persists(tmp_path):
+    # update() must merge into existing values, not overwrite the whole store.
+    v = _vault(tmp_path)
+    v.update({"ANTHROPIC_API_KEY": "a"})
+    v.update({"OPENAI_API_KEY": "b"})
+    fresh = _vault(tmp_path)
+    assert fresh.get("ANTHROPIC_API_KEY") == "a"
+    assert fresh.get("OPENAI_API_KEY") == "b"
+
+
 def test_salt_is_stable_across_instances(tmp_path):
     _vault(tmp_path).set("K", "v")
     salt1 = (tmp_path / "vault.salt").read_bytes()

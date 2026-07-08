@@ -207,6 +207,10 @@ class SecretsVault:
                     )
                     return file_key
                 return key
+            _log.warning(
+                "keyring vault-key item missing (cleared/locked?); "
+                "creating a new one from the file-derived key"
+            )
             keyring.set_password(_KEYRING_SERVICE, _KEYRING_USER, file_key.hex())
             return file_key
         except Exception:
@@ -260,6 +264,8 @@ class SecretsVault:
 
     # ---- convenience ----
     def get(self, key: str) -> str | None:
+        """Value for key, or None if missing OR stored as an empty string —
+        both mean "not set", matching present()'s truthiness check."""
         return self.read_all().get(key) or None
 
     def set(self, key: str, value: str) -> None:

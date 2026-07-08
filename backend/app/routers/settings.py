@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from .. import config as _cfg
-from ..config import settings
+from ..config import SECRET_FIELD_MAP, settings
 from ..secrets import SECRET_KEYS, VaultDecryptError
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -109,19 +109,21 @@ def put_secrets(body: SecretsUpdateIn) -> SecretsStateOut:
                 status_code=422,
                 detail=f"vault decrypt failed; re-authenticate: {exc}",
             )
+        # Order matters: IOError/OSError must be caught before the catch-all
+        # Exception below, or disk failures would surface as 500 not 503.
         except (IOError, OSError) as exc:
             raise HTTPException(status_code=503, detail=f"vault write failed: {exc}")
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"unexpected vault error: {exc}")
-        # Re-read and verify the write actually persisted. A non-empty value we
-        # just wrote must read back as present; if not, the write silently
-        # failed and we must not report success.
+        # Re-read and verify every written value (including empty-string
+        # blanks) actually persisted; if not, the write silently failed and we
+        # must not report success.
         try:
             reread = _cfg.get_vault().read_all()
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"vault write unverifiable: {exc}")
         for k, v in patch.items():
-            if v and reread.get(k) != v:
+            if reread.get(k) != v:
                 raise HTTPException(
                     status_code=503,
                     detail=f"vault write did not persist key {k}",
@@ -129,13 +131,8 @@ def put_secrets(body: SecretsUpdateIn) -> SecretsStateOut:
         # A PUT can also repair a previously non-empty field; force those keys so
         # the running process reflects the new value even if it was already set.
         for k, v in patch.items():
-            field = next((f for f, vk in _field_map().items() if vk == k), None)
+            field = next((f for f, vk in SECRET_FIELD_MAP.items() if vk == k), None)
             if field is not None:
                 setattr(settings, field, v)
         _cfg.resolve_secrets_from_vault(settings)
     return _state()
-
-
-def _field_map() -> dict[str, str]:
-    from ..config import SECRET_FIELD_MAP
-    return SECRET_FIELD_MAP

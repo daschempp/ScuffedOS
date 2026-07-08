@@ -3,8 +3,6 @@ so env/.env/test values always win and the suite is unaffected. A decrypt
 failure is swallowed (logged), never raised, so a foreign/corrupt vault can't
 crash startup. Uses a tmp vault via an injected machine id — no ioreg, CI-safe."""
 
-import pytest
-
 from app import config as cfg
 from app.config import Settings
 from app.secrets import SecretsVault

@@ -114,6 +114,48 @@ def test_put_revalidates_vault_write(client, tmp_path, monkeypatch):
     assert res.status_code == 503
 
 
+def test_put_ioerror_returns_503(client, tmp_path, monkeypatch):
+    # A disk-level failure (e.g. ENOSPC, permission revoked mid-write) surfaces
+    # as 503, not 500 -- it's a server/environment fault the client can retry.
+    class _Boom:
+        def update(self, patch):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(cfg, "get_vault", lambda: _Boom())
+    res = client.put("/api/settings/secrets",
+                     json={"values": {"ANTHROPIC_API_KEY": "sk"}})
+    assert res.status_code == 503
+
+
+def test_put_generic_error_returns_500(client, tmp_path, monkeypatch):
+    # Any other unexpected error falls through to the catch-all -> 500.
+    class _Boom:
+        def update(self, patch):
+            raise RuntimeError("something unexpected")
+
+    monkeypatch.setattr(cfg, "get_vault", lambda: _Boom())
+    res = client.put("/api/settings/secrets",
+                     json={"values": {"ANTHROPIC_API_KEY": "sk"}})
+    assert res.status_code == 500
+
+
+def test_put_empty_value_write_unverifiable_returns_503(client, tmp_path, monkeypatch):
+    # Blanking a key (PUT "") whose vault write silently fails must 503, not
+    # falsely report success. Before the A1 fix, `if v and ...` skipped
+    # revalidation entirely for empty values.
+    class _Stale:
+        def update(self, patch):
+            return None  # pretend the write succeeded
+
+        def read_all(self):
+            return {"ANTHROPIC_API_KEY": "sk-old-stale-value"}  # never cleared
+
+    monkeypatch.setattr(cfg, "get_vault", lambda: _Stale())
+    res = client.put("/api/settings/secrets",
+                     json={"values": {"ANTHROPIC_API_KEY": ""}})
+    assert res.status_code == 503
+
+
 def test_concurrent_puts_dont_lose_updates(client, tmp_vault):
     # Two simultaneous PUTs of different keys against a real tmp vault must both
     # persist; the write lock serializes the read-modify-write so neither
