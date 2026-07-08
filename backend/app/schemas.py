@@ -413,6 +413,32 @@ class ConnectUrl(BaseModel):
     authorize_url: str
 
 
+# ---- M9 Connectors (Slice 1) — unified read model for Settings › Connectors ----
+class ConnectorItem(BaseModel):
+    """One linked institution (Plaid only). The stored 'active' literal is
+    mapped to the connector-facing 'connected' at projection time."""
+    item_id: str
+    institution_name: str
+    status: Literal["connected", "needs_reauth"]
+    last_sync_at: datetime | None = None
+
+
+class ConnectorInfo(BaseModel):
+    """One connector card. `status` is a 3-member superset of
+    ProviderStatus.status (adds 'not_connected', which a provider_accounts row
+    can never express). Tokens/scopes are NEVER included — same rule as
+    _provider_account_dict."""
+    name: Literal["google", "whoop", "moodle", "plaid"]
+    label: str
+    auth_kind: Literal["oauth", "token", "link"]
+    configured: bool
+    status: Literal["not_connected", "connected", "needs_reauth"]
+    connected_at: datetime | None = None
+    provider_user_id: str | None = None
+    can_write_email: bool | None = None   # google only; None for the others
+    items: List[ConnectorItem] = []
+
+
 # ---- Fitness read/write schemas (M4) ----------------------------------------
 # ProviderStatus / FitnessStatus / ConnectUrl already defined in Task 19.
 FitnessSource = Literal["whoop", "oura", "apple_health", "manual"]
