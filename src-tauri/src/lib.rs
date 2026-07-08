@@ -115,13 +115,20 @@ fn html_escape(s: &str) -> String {
 /// instead of stacking a second identical window.
 ///
 /// Delivery: the HTML is written to a temp file and loaded via a `file:` URL
-/// (`WebviewUrl::External`). A `data:` URL would require the `webview-data-url`
-/// Cargo feature (not enabled), so `WebviewUrl::App("data:…")` / any `data:`
-/// scheme is rejected at runtime by `prepare_webview`
-/// (tauri-2.11.5/src/manager/webview.rs:477-482 →
-/// `Err(InvalidWebviewUrl(..))`). The `file:` scheme reaches no feature gate
-/// there and flows through `WebviewUrl::External` (webview.rs:462-471) to the
-/// success path (`pending.url = url.to_string()`, webview.rs:500).
+/// (`WebviewUrl::External`). `http`, `https`, and `file:` URLs are all accepted
+/// via `WebviewUrl::External` without any feature gate. Only `data:` URLs are
+/// gated behind the `webview-data-url` Cargo feature (not enabled here), so
+/// `WebviewUrl::App("data:…")` / any `data:` scheme is rejected at runtime by
+/// `prepare_webview` (tauri-2.11.5/src/manager/webview.rs:477-482 →
+/// `Err(InvalidWebviewUrl(..))`). The `file:` scheme reaches no such gate and
+/// flows through `WebviewUrl::External` (webview.rs:462-471) to the success
+/// path (`pending.url = url.to_string()`, webview.rs:500).
+///
+/// The temp HTML file is deliberately NOT removed right after `.build()`
+/// returns: the webview loads the `file:` URL asynchronously, so an inline
+/// delete here would race that load and could blank the window. Cleanup
+/// instead happens in the `on_window_event` handler below, keyed off this
+/// window's label, once the diagnostic window actually closes.
 fn show_diagnostic_window(app: &tauri::AppHandle, backend_tail: &str, pg_tail: &str) {
     use tauri::Manager;
     if let Some(existing) = app.get_webview_window("diagnostic") {
@@ -244,8 +251,16 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // On macOS, closing the window does not quit the app by default.
             if let WindowEvent::CloseRequested { .. } = event {
+                // The diagnostic window's HTML is loaded from a temp file (see
+                // show_diagnostic_window); clean it up now that the window is
+                // actually closing, rather than racing the async file: load by
+                // removing it right after .build().
+                if window.label() == "diagnostic" {
+                    let html_path = std::env::temp_dir().join("scuffedos-startup-problem.html");
+                    let _ = std::fs::remove_file(html_path);
+                }
+                // On macOS, closing the window does not quit the app by default.
                 window.app_handle().exit(0);
             }
         })

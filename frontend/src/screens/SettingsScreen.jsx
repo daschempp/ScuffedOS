@@ -24,6 +24,12 @@ export function SettingsScreen() {
 
   React.useEffect(() => { refresh() }, [refresh])
 
+  React.useEffect(() => {
+    if (!saved) return
+    const id = setTimeout(() => setSaved(false), 2500)
+    return () => clearTimeout(id)
+  }, [saved])
+
   const startEdit = (key) => setEdits((p) => ({ ...p, [key]: '' }))
   const cancelEdit = (key) => setEdits((p) => { const n = { ...p }; delete n[key]; return n })
   const setEdit = (key, val) => setEdits((p) => ({ ...p, [key]: val }))
@@ -37,7 +43,6 @@ export function SettingsScreen() {
         setState(s)
         setEdits({})
         setSaved(true)
-        setTimeout(() => setSaved(false), 2500)
       })
       .catch((e) => setError(e?.message || 'Failed to save settings'))
       .finally(() => setSaving(false))
@@ -86,7 +91,13 @@ export function SettingsScreen() {
           this Mac — never uploaded, never shown again.
         </p>
         <Button variant="primary" iconLeft={<Icon name="plus" />}
-          onClick={() => setState({ ...state, __expandAll: true })}>
+          onClick={() => {
+            const all = {}
+            Object.values(state.integrations).forEach((ig) => {
+              ig.keys.forEach((k) => { all[k.key] = '' })
+            })
+            setEdits(all)
+          }}>
           Add keys
         </Button>
       </Card>
