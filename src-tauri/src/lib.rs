@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{Manager, RunEvent, State, WindowEvent};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -237,6 +238,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![api_port, quit_app])
         .setup(|app| {
             let port = free_port();
@@ -256,6 +258,48 @@ pub fn run() {
 
             let child = Arc::new(Mutex::new(Some(child)));
             app.manage(Backend { child: child.clone(), port });
+
+            // Forward WHOOP's scuffedos:// OAuth callback into the loopback
+            // callback the backend serves. The deep-link plugin delivers these
+            // here, including the cold-start launch URL (macOS buffers it and
+            // replays it to on_open_url). WHOOP needs a public https redirect
+            // (its dashboard rejects loopback), so the public bounce page hops
+            // the code back in via this scheme. The backend's one-time CSRF
+            // state check rejects any forged deep link, so firing for any
+            // incoming scuffedos:// URL is safe.
+            let dl_handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                let port = dl_handle.state::<Backend>().port;
+                for url in event.urls() {
+                    match forward_target_url(url.as_str(), port) {
+                        Some(target) => {
+                            let h = dl_handle.clone();
+                            std::thread::spawn(move || {
+                                // Gate on backend health BEFORE the single
+                                // forward: on a cold start the sidecar may not be
+                                // listening yet. The state token is one-time, so
+                                // we must NOT retry the GET itself — wait for
+                                // health, then fire exactly once. reqwest::blocking
+                                // must run off the UI/tokio thread (mirrors the
+                                // health-gate worker at lib.rs:239).
+                                if !wait_for_health(h.state::<Backend>().port) {
+                                    eprintln!("[deep-link] backend not healthy; dropping OAuth callback forward");
+                                    return;
+                                }
+                                let client = reqwest::blocking::Client::builder()
+                                    .timeout(Duration::from_secs(30))
+                                    .build()
+                                    .expect("reqwest client");
+                                match client.get(&target).send() {
+                                    Ok(resp) => eprintln!("[deep-link] forwarded OAuth callback ({})", resp.status()),
+                                    Err(e) => eprintln!("[deep-link] OAuth callback forward failed: {e}"),
+                                }
+                            });
+                        }
+                        None => eprintln!("[deep-link] ignoring unrecognized deep link: {}", url.as_str()),
+                    }
+                }
+            });
 
             // Drain the sidecar's stdout/stderr to the console (app log).
             let app_handle = app.handle().clone();
