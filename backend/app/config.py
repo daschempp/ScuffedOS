@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # local validation needs no tunnel. Tokens live in provider_accounts, never here.
     google_client_id: str = ""
     google_client_secret: str = ""
-    google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+    google_redirect_uri: str = ""   # empty -> GoogleProvider computes http://127.0.0.1:{scuffedos_port}/auth/google/callback at request time (M9 s2); a non-empty env value wins verbatim
 
     # Background email-sync (mirrors fitness_sync_enabled / fitness_sync_seconds).
     email_sync_enabled: bool = True

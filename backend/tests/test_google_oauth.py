@@ -71,6 +71,40 @@ def test_authorize_url_has_all_oauth_params_and_offline_consent():
     assert q["prompt"] == ["consent"]
 
 
+def test_authorize_url_computes_loopback_when_redirect_empty(monkeypatch):
+    monkeypatch.setattr(settings, "google_redirect_uri", "")
+    monkeypatch.setattr(settings, "scuffedos_port", 4300)
+    settings.google_client_id = "gid"
+    url = GoogleProvider().authorize_url("st8")
+    q = parse_qs(urlparse(url).query)
+    assert q["redirect_uri"] == ["http://127.0.0.1:4300/auth/google/callback"]
+
+
+def test_authorize_url_uses_env_redirect_verbatim_when_set(monkeypatch):
+    monkeypatch.setattr(settings, "google_redirect_uri", "https://tunnel.example/auth/google/callback")
+    monkeypatch.setattr(settings, "scuffedos_port", 4300)
+    url = GoogleProvider().authorize_url("st8")
+    q = parse_qs(urlparse(url).query)
+    assert q["redirect_uri"] == ["https://tunnel.example/auth/google/callback"]
+
+
+def test_exchange_code_uses_computed_loopback_when_redirect_empty(monkeypatch):
+    # §9 lock-step: the EXCHANGE leg must embed the SAME computed loopback the
+    # authorize leg does. Guards against exchange_code being left on the raw
+    # settings.google_redirect_uri (which is "" now) instead of _redirect_uri().
+    monkeypatch.setattr(settings, "google_redirect_uri", "")
+    monkeypatch.setattr(settings, "scuffedos_port", 4300)
+    settings.google_client_id = "gid"
+    settings.google_client_secret = "gsecret"
+    p = GoogleProvider()
+    p.configure(fake_http=FakeHttp({
+        GOOGLE_TOKEN_URL: FakeResp(200, {"access_token": "AT", "expires_in": 3600}),
+    }))
+    p.exchange_code("thecode")
+    _, data = p._http.posts[0]
+    assert data["redirect_uri"] == "http://127.0.0.1:4300/auth/google/callback"
+
+
 def test_scopes_include_openid_email_profile_readonly_modify_and_send():
     # The frozen scope string — readonly KEPT (slice-1 URL assertions hold)
     # plus modify (read-state/labels/trash) plus send.

@@ -195,12 +195,19 @@ class GoogleProvider:
         return self._client
 
     # ---- OAuth ----
+    def _redirect_uri(self) -> str:
+        # Empty -> compute the loopback callback from the live port (dev 8000 /
+        # packaged random). A non-empty env value wins verbatim (registered
+        # tunnel etc.). Both OAuth legs MUST use this so redirect_uri matches.
+        return (settings.google_redirect_uri
+                or f"http://127.0.0.1:{settings.scuffedos_port}/auth/google/callback")
+
     def authorize_url(self, state: str) -> str:
         # access_type=offline + prompt=consent guarantee Google issues a
         # refresh_token (without them a re-consent may omit it).
         q = urlencode({
             "client_id": settings.google_client_id,
-            "redirect_uri": settings.google_redirect_uri,
+            "redirect_uri": self._redirect_uri(),
             "response_type": "code",
             "scope": GOOGLE_SCOPES,
             "access_type": "offline",
@@ -232,7 +239,7 @@ class GoogleProvider:
         return self._token_request({
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": settings.google_redirect_uri,
+            "redirect_uri": self._redirect_uri(),
             "client_id": settings.google_client_id,
             "client_secret": settings.google_client_secret,
         })
