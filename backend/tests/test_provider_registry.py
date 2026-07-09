@@ -9,8 +9,8 @@ class FakePull:
     name = "whoop"
     kind = "pull"
 
-    def authorize_url(self, state): return f"https://fake/auth?state={state}"
-    def exchange_code(self, code): return Tokens("a", "r", None)
+    def authorize_url(self, state, code_challenge=None): return f"https://fake/auth?state={state}"
+    def exchange_code(self, code, verifier=None): return Tokens("a", "r", None)
     def refresh(self, tokens): return tokens
     def fetch_recovery(self, since): return []
     def fetch_sleep(self, since): return []
@@ -22,8 +22,8 @@ class FakePush:
     name = "apple_health"
     kind = "push"
 
-    def authorize_url(self, state): return ""
-    def exchange_code(self, code): return Tokens("a", None, None)
+    def authorize_url(self, state, code_challenge=None): return ""
+    def exchange_code(self, code, verifier=None): return Tokens("a", None, None)
     def refresh(self, tokens): return tokens
     def fetch_recovery(self, since): return []
     def fetch_sleep(self, since): return []

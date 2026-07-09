@@ -86,7 +86,7 @@ class WhoopProvider:
         return self._client
 
     # ---- OAuth ----
-    def authorize_url(self, state: str) -> str:
+    def authorize_url(self, state: str, code_challenge: str | None = None) -> str:
         q = urlencode({
             "client_id": settings.whoop_client_id,
             "redirect_uri": settings.whoop_redirect_uri,
@@ -113,7 +113,7 @@ class WhoopProvider:
             scopes=payload.get("scope", "") or "",
         )
 
-    def exchange_code(self, code: str) -> Tokens:
+    def exchange_code(self, code: str, verifier: str | None = None) -> Tokens:
         return self._token_request({
             "grant_type": "authorization_code",
             "code": code,

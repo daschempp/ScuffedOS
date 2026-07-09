@@ -9,7 +9,7 @@ def test_google_and_email_sync_defaults():
     d = Settings.model_fields
     assert d["google_client_id"].default == ""
     assert d["google_client_secret"].default == ""
-    assert d["google_redirect_uri"].default == "http://localhost:8000/auth/google/callback"
+    assert d["google_redirect_uri"].default == ""
     assert d["email_sync_enabled"].default is True
     assert d["email_sync_seconds"].default == 900
     assert d["email_backfill_count"].default == 50

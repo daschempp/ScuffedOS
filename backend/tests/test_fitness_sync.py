@@ -27,10 +27,10 @@ class FakeProvider:
         self.since_seen: list = []
         self.injected_tokens: list = []   # records set_tokens() calls
 
-    def authorize_url(self, state):
+    def authorize_url(self, state, code_challenge=None):
         return f"https://example.test/auth?state={state}"
 
-    def exchange_code(self, code):
+    def exchange_code(self, code, verifier=None):
         return Tokens(access_token="a", refresh_token="r", expires_at=None)
 
     def refresh(self, tokens):

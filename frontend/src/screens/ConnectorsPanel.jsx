@@ -7,6 +7,7 @@ import React from 'react'
 import { Card, Button } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 import { api } from '../lib/api.js'
+import { isTauri } from '@tauri-apps/api/core'
 
 const WIPE_COPY = {
   google: 'all synced emails',
@@ -25,11 +26,16 @@ function StatusChip({ status }) {
   return <span className="kit-muted" style={{ fontSize: 'var(--text-sm)', color }}>{label}</span>
 }
 
-// Open an OAuth/hosted-link URL. Slice 2 swaps this single function for the
-// Tauri system-browser opener under isTauri().
-function openExternal(url, { sameWindow = false } = {}) {
-  if (sameWindow) window.location = url
-  else window.open(url, '_blank', 'noopener')
+// Open an OAuth/hosted-link URL. In the packaged app (isTauri) route through the
+// Tauri opener plugin so consent happens in the user's real system browser with
+// their live session; in dev keep the webview new-tab behavior.
+async function openExternal(url) {
+  if (isTauri()) {
+    const { openUrl } = await import('@tauri-apps/plugin-opener')
+    await openUrl(url)
+    return
+  }
+  window.open(url, '_blank', 'noopener')
 }
 
 export function ConnectorsPanel({ onOpenKeys }) {
@@ -53,10 +59,42 @@ export function ConnectorsPanel({ onOpenKeys }) {
 
   React.useEffect(() => { refresh() }, [refresh])
 
+  const pollRef = React.useRef(null)
+  React.useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  const snapshotOf = (c) => `${c?.status}|${c?.can_write_email}|${c?.connected_at}`
+
+  // From a Connect click, poll the connectors read model (~2s, bounded ~2min) and
+  // stop as soon as THIS connector's (status, can_write_email, connected_at) tuple
+  // changes from its pre-click snapshot — covers both first-connect AND the
+  // scope-upgrade reconnect (status stays 'connected', only can_write_email moves).
+  const startConnectPoll = (name) => {
+    const before = snapshotOf((connectors || []).find((c) => c.name === name))
+    if (pollRef.current) clearInterval(pollRef.current)
+    let ticks = 0
+    pollRef.current = setInterval(() => {
+      ticks += 1
+      api.getConnectors().then((list) => {
+        const now = snapshotOf(list.find((c) => c.name === name))
+        if (now !== before) {
+          clearInterval(pollRef.current); pollRef.current = null
+          setConnectors(list); setError('')
+        } else if (ticks >= 60) {          // ~2 min at 2s
+          clearInterval(pollRef.current); pollRef.current = null
+        }
+      }).catch(() => {})
+    }, 2000)
+  }
+
   const connectOAuth = (name) => {
     setBusy(name)
     api.oauthConnect(name)
-      .then((r) => { openExternal(r.authorize_url); setBusy('') })
+      .then((r) => {
+        setBusy('')
+        openExternal(r.authorize_url)
+          .then(() => startConnectPoll(name))
+          .catch((e) => setError(e?.message || 'Could not open the sign-in page'))
+      })
       .catch((e) => { setError(e?.message || 'Connect failed'); setBusy('') })
   }
 
@@ -85,7 +123,7 @@ export function ConnectorsPanel({ onOpenKeys }) {
     setLinkMsg('')
     api.financeLinkStart(kind).then((r) => {
       if (r?.hosted_link_url) {
-        openExternal(r.hosted_link_url)
+        openExternal(r.hosted_link_url).catch((e) => setError(e?.message || 'Could not open the link page'))
         setPendingLink({ link_token: r.link_token })
         setLinkMsg('Finish linking in the Plaid tab, then click “Finish linking”.')
       }
@@ -95,7 +133,7 @@ export function ConnectorsPanel({ onOpenKeys }) {
     setLinkMsg('')
     api.financeReauthStart(itemId).then((r) => {
       if (r?.hosted_link_url) {
-        openExternal(r.hosted_link_url)
+        openExternal(r.hosted_link_url).catch((e) => setError(e?.message || 'Could not open the link page'))
         setPendingLink({ reauthItemId: itemId })
         setLinkMsg('Finish reconnecting in the Plaid tab, then click “Finish linking”.')
       }
@@ -120,6 +158,7 @@ export function ConnectorsPanel({ onOpenKeys }) {
   }
 
   const connectDisabled = (c) => busy === c.name || (c.auth_kind !== 'token' && (!c.configured || !vaultOk))
+  const packaged = isTauri()
 
   return (
     <div className="kit-stack" style={{ gap: 'var(--gutter)' }}>
@@ -161,17 +200,25 @@ export function ConnectorsPanel({ onOpenKeys }) {
             {/* OAuth connectors: Google / WHOOP */}
             {c.auth_kind === 'oauth' && (
               <div className="kit-inline" style={{ gap: 8 }}>
-                {c.status === 'not_connected' && (
-                  <Button variant="primary" size="sm" disabled={connectDisabled(c)}
-                    onClick={() => connectOAuth(c.name)}>Connect</Button>
-                )}
-                {c.status === 'needs_reauth' && (
-                  <Button variant="primary" size="sm" disabled={connectDisabled(c)}
-                    onClick={() => connectOAuth(c.name)}>Reconnect</Button>
-                )}
-                {c.status === 'connected' && c.name === 'google' && c.can_write_email === false && (
-                  <Button variant="secondary" size="sm" disabled={connectDisabled(c)}
-                    onClick={() => connectOAuth(c.name)}>Enable email actions</Button>
+                {packaged && c.name === 'whoop' && c.status !== 'connected' ? (
+                  <span className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>
+                    WHOOP sign-in requires the signed build (slice 3).
+                  </span>
+                ) : (
+                  <>
+                    {c.status === 'not_connected' && (
+                      <Button variant="primary" size="sm" disabled={connectDisabled(c)}
+                        onClick={() => connectOAuth(c.name)}>Connect</Button>
+                    )}
+                    {c.status === 'needs_reauth' && (
+                      <Button variant="primary" size="sm" disabled={connectDisabled(c)}
+                        onClick={() => connectOAuth(c.name)}>Reconnect</Button>
+                    )}
+                    {c.status === 'connected' && c.name === 'google' && c.can_write_email === false && (
+                      <Button variant="secondary" size="sm" disabled={connectDisabled(c)}
+                        onClick={() => connectOAuth(c.name)}>Enable email actions</Button>
+                    )}
+                  </>
                 )}
                 {c.status !== 'not_connected' && confirming !== c.name && (
                   <Button variant="secondary" size="sm" disabled={busy === c.name}

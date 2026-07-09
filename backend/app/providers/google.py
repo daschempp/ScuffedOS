@@ -195,18 +195,29 @@ class GoogleProvider:
         return self._client
 
     # ---- OAuth ----
-    def authorize_url(self, state: str) -> str:
+    def _redirect_uri(self) -> str:
+        # Empty -> compute the loopback callback from the live port (dev 8000 /
+        # packaged random). A non-empty env value wins verbatim (registered
+        # tunnel etc.). Both OAuth legs MUST use this so redirect_uri matches.
+        return (settings.google_redirect_uri
+                or f"http://127.0.0.1:{settings.scuffedos_port}/auth/google/callback")
+
+    def authorize_url(self, state: str, code_challenge: str | None = None) -> str:
         # access_type=offline + prompt=consent guarantee Google issues a
         # refresh_token (without them a re-consent may omit it).
-        q = urlencode({
+        params = {
             "client_id": settings.google_client_id,
-            "redirect_uri": settings.google_redirect_uri,
+            "redirect_uri": self._redirect_uri(),
             "response_type": "code",
             "scope": GOOGLE_SCOPES,
             "access_type": "offline",
             "prompt": "consent",
             "state": state,
-        })
+        }
+        if code_challenge is not None:
+            params["code_challenge"] = code_challenge
+            params["code_challenge_method"] = "S256"
+        q = urlencode(params)
         return f"{GOOGLE_AUTH_URL}?{q}"
 
     def _token_request(self, data: dict) -> Tokens:
@@ -228,14 +239,17 @@ class GoogleProvider:
             scopes=payload.get("scope", "") or "",
         )
 
-    def exchange_code(self, code: str) -> Tokens:
-        return self._token_request({
+    def exchange_code(self, code: str, verifier: str | None = None) -> Tokens:
+        data = {
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": settings.google_redirect_uri,
+            "redirect_uri": self._redirect_uri(),
             "client_id": settings.google_client_id,
             "client_secret": settings.google_client_secret,
-        })
+        }
+        if verifier is not None:
+            data["code_verifier"] = verifier   # [confirm-against-live] RFC 7636 field name
+        return self._token_request(data)
 
     def refresh(self, tokens: Tokens) -> Tokens:
         if not tokens.refresh_token:

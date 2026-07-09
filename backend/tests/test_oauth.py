@@ -38,9 +38,33 @@ def test_connect_returns_authorize_url_with_client_id_and_state(client):
 def test_connect_stores_a_one_time_state_server_side(client):
     providers.configure([FakeProvider()])
     state = _state_of(client.get("/api/oauth/connect/whoop").json()["authorize_url"])
-    assert oauth._STATES.get(state) == "whoop"
+    stored = oauth._STATES.get(state)
+    assert isinstance(stored, tuple) and stored[0] == "whoop" and isinstance(stored[1], str) and stored[1]
     state2 = _state_of(client.get("/api/oauth/connect/whoop").json()["authorize_url"])
     assert state2 != state
+
+
+def test_connect_derives_s256_challenge_from_the_stored_verifier(client):
+    import base64
+    import hashlib
+
+    class ChallengeSpy(FakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.seen_challenge = "MISSING"
+
+        def authorize_url(self, state, code_challenge=None):
+            self.seen_challenge = code_challenge
+            return super().authorize_url(state)
+
+    spy = ChallengeSpy()
+    providers.configure([spy])
+    state = _state_of(client.get("/api/oauth/connect/whoop").json()["authorize_url"])
+    verifier = oauth._STATES[state][1]
+    expected = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+    assert spy.seen_challenge == expected
 
 
 def test_connect_unknown_provider_is_404(client):
@@ -128,6 +152,25 @@ def test_callback_success_persists_even_when_on_connected_hook_raises(client, mo
     assert accounts[0]["status"] == "connected"
 
 
+def test_callback_passes_stored_verifier_into_exchange(client):
+    class VerifierSpy(FakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.seen_verifier = "MISSING"
+
+        def exchange_code(self, code, verifier=None):
+            self.seen_verifier = verifier
+            return super().exchange_code(code)
+
+    spy = VerifierSpy()
+    providers.configure([spy])
+    state = _state_of(client.get("/api/oauth/connect/whoop").json()["authorize_url"])
+    stored_verifier = oauth._STATES[state][1]
+    res = client.get(f"/auth/whoop/callback?code=the-code&state={state}", follow_redirects=False)
+    assert res.status_code == 200
+    assert spy.seen_verifier == stored_verifier
+
+
 def test_callback_exchange_failure_renders_error_and_persists_nothing(client, monkeypatch):
     """exchange_code raising (network blip, bad code) is a pre-persist failure —
     must render the error page and leave no account row behind. Closes a
@@ -136,7 +179,7 @@ def test_callback_exchange_failure_renders_error_and_persists_nothing(client, mo
     from app import fitness_sync
 
     class ExchangeBoom(FakeProvider):
-        def exchange_code(self, code: str):
+        def exchange_code(self, code, verifier=None):
             raise RuntimeError("token endpoint 500")
 
     fake = ExchangeBoom()

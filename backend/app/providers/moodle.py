@@ -391,7 +391,7 @@ class MoodleProvider:
         )
 
     # ---- OAuth-ish plumbing (Moodle has no code exchange; connect is token-paste) ----
-    def authorize_url(self, state: str) -> str:
+    def authorize_url(self, state: str, code_challenge: str | None = None) -> str:
         """The Moodle mobile launch URL. Not used by the token-paste connect flow;
         present for OAuthProvider/registry symmetry."""
         from urllib.parse import urlencode
@@ -399,7 +399,7 @@ class MoodleProvider:
         q = urlencode({"service": MOODLE_SERVICE, "passport": state})
         return f"{settings.moodle_base_url}{MOODLE_LAUNCH_PATH}?{q}"
 
-    def exchange_code(self, code: str) -> Tokens:
+    def exchange_code(self, code: str, verifier: str | None = None) -> Tokens:
         raise MoodleError("moodle uses token paste, not code exchange")
 
     def refresh(self, tokens: Tokens) -> Tokens:

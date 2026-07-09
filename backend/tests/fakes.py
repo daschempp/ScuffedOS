@@ -120,13 +120,13 @@ class FakeProvider:
         self.revoked: list[Tokens] = []
         self.connected_calls = 0
 
-    def authorize_url(self, state: str) -> str:
+    def authorize_url(self, state: str, code_challenge: str | None = None) -> str:
         return (
             "https://api.prod.whoop.com/oauth/oauth2/auth"
             f"?client_id=fake-client&response_type=code&state={state}"
         )
 
-    def exchange_code(self, code: str) -> Tokens:
+    def exchange_code(self, code: str, verifier: str | None = None) -> Tokens:
         self.exchanged.append(code)
         return self.tokens
 
@@ -362,13 +362,13 @@ class FakeEmailProvider:
     def set_tokens(self, tokens):
         self.injected.append(tokens)
 
-    def authorize_url(self, state: str) -> str:
+    def authorize_url(self, state: str, code_challenge: str | None = None) -> str:
         return (
             "https://accounts.google.com/o/oauth2/v2/auth"
             f"?client_id=fake-google&response_type=code&state={state}"
         )
 
-    def exchange_code(self, code: str) -> Tokens:
+    def exchange_code(self, code: str, verifier: str | None = None) -> Tokens:
         self.exchanged.append(code)
         return self.tokens
 
@@ -464,13 +464,13 @@ class FakeMoodleProvider:
     def set_tokens(self, tokens):
         self.injected.append(tokens)
 
-    def authorize_url(self, state: str) -> str:
+    def authorize_url(self, state: str, code_challenge: str | None = None) -> str:
         return (
             "https://moodle-courses2527.wolfware.ncsu.edu/admin/tool/mobile/launch.php"
             f"?service=moodle_mobile_app&state={state}"
         )
 
-    def exchange_code(self, code: str) -> Tokens:
+    def exchange_code(self, code: str, verifier: str | None = None) -> Tokens:
         self.exchanged.append(code)
         return self.tokens
 

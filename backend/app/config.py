@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # local validation needs no tunnel. Tokens live in provider_accounts, never here.
     google_client_id: str = ""
     google_client_secret: str = ""
-    google_redirect_uri: str = "http://localhost:8000/auth/google/callback"
+    google_redirect_uri: str = ""   # empty -> GoogleProvider computes http://127.0.0.1:{scuffedos_port}/auth/google/callback at request time (M9 s2); a non-empty env value wins verbatim
 
     # Background email-sync (mirrors fitness_sync_enabled / fitness_sync_seconds).
     email_sync_enabled: bool = True
@@ -124,6 +124,11 @@ class Settings(BaseSettings):
     # which makes app/localdb.py boot a vendored Postgres under app_support_dir
     # and inject the socket DSN into database_url before the first DB call.
     scuffedos_managed_pg: bool = False           # env SCUFFEDOS_MANAGED_PG
+    # Loopback port the backend listens on. Dev = uvicorn's 8000; packaged = the
+    # random port the Tauri shell picks and exports as SCUFFEDOS_PORT (lib.rs).
+    # GoogleProvider embeds this in the computed redirect URI when
+    # google_redirect_uri is empty (M9 s2). No env_prefix/alias -> binds SCUFFEDOS_PORT.
+    scuffedos_port: int = 8000                   # env SCUFFEDOS_PORT
     # Per-user state root; ~ is expanded by app/localdb.py, never here.
     app_support_dir: str = "~/Library/Application Support/ScuffedOS"
     managed_pg_superuser: str = "scuffedos"      # initdb -U role + DSN user

@@ -193,6 +193,7 @@ fn quit_app(app: tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![api_port, quit_app])
         .setup(|app| {
             let port = free_port();
@@ -206,6 +207,7 @@ pub fn run() {
                 .sidecar("scuffedos-backend")?
                 .env("SCUFFEDOS_MANAGED_PG", "1")
                 .env("RESOURCES_PGSQL_DIR", pgsql_res.to_string_lossy().to_string())
+                .env("SCUFFEDOS_PORT", port.to_string())
                 .args(["--port", &port.to_string()])
                 .spawn()?;
 

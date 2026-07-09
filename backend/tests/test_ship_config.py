@@ -28,6 +28,16 @@ def test_managed_pg_reads_env(monkeypatch):
     assert fresh.scuffedos_managed_pg is True
 
 
+def test_scuffedos_port_reads_env(monkeypatch):
+    monkeypatch.setenv("SCUFFEDOS_PORT", "4300")
+    fresh = Settings()
+    assert fresh.scuffedos_port == 4300
+
+
+def test_scuffedos_port_defaults_to_8000():
+    assert Settings.model_fields["scuffedos_port"].default == 8000
+
+
 def test_flag_off_leaves_database_url_default_empty():
     # Fresh Settings with no env: default database_url stays empty so the
     # dev/external-DATABASE_URL path is entirely unaffected by the new flag.
