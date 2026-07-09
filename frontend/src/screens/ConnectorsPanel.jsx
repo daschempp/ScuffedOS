@@ -158,7 +158,6 @@ export function ConnectorsPanel({ onOpenKeys }) {
   }
 
   const connectDisabled = (c) => busy === c.name || (c.auth_kind !== 'token' && (!c.configured || !vaultOk))
-  const packaged = isTauri()
 
   return (
     <div className="kit-stack" style={{ gap: 'var(--gutter)' }}>
@@ -200,25 +199,17 @@ export function ConnectorsPanel({ onOpenKeys }) {
             {/* OAuth connectors: Google / WHOOP */}
             {c.auth_kind === 'oauth' && (
               <div className="kit-inline" style={{ gap: 8 }}>
-                {packaged && c.name === 'whoop' && c.status !== 'connected' ? (
-                  <span className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>
-                    WHOOP sign-in requires the signed build (slice 3).
-                  </span>
-                ) : (
-                  <>
-                    {c.status === 'not_connected' && (
-                      <Button variant="primary" size="sm" disabled={connectDisabled(c)}
-                        onClick={() => connectOAuth(c.name)}>Connect</Button>
-                    )}
-                    {c.status === 'needs_reauth' && (
-                      <Button variant="primary" size="sm" disabled={connectDisabled(c)}
-                        onClick={() => connectOAuth(c.name)}>Reconnect</Button>
-                    )}
-                    {c.status === 'connected' && c.name === 'google' && c.can_write_email === false && (
-                      <Button variant="secondary" size="sm" disabled={connectDisabled(c)}
-                        onClick={() => connectOAuth(c.name)}>Enable email actions</Button>
-                    )}
-                  </>
+                {c.status === 'not_connected' && (
+                  <Button variant="primary" size="sm" disabled={connectDisabled(c)}
+                    onClick={() => connectOAuth(c.name)}>Connect</Button>
+                )}
+                {c.status === 'needs_reauth' && (
+                  <Button variant="primary" size="sm" disabled={connectDisabled(c)}
+                    onClick={() => connectOAuth(c.name)}>Reconnect</Button>
+                )}
+                {c.status === 'connected' && c.name === 'google' && c.can_write_email === false && (
+                  <Button variant="secondary" size="sm" disabled={connectDisabled(c)}
+                    onClick={() => connectOAuth(c.name)}>Enable email actions</Button>
                 )}
                 {c.status !== 'not_connected' && confirming !== c.name && (
                   <Button variant="secondary" size="sm" disabled={busy === c.name}
