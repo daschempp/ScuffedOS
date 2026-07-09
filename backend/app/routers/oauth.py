@@ -131,10 +131,15 @@ def oauth_callback(
             if uid is not None:
                 tokens.provider_user_id = uid
         store.upsert_provider_account(provider, tokens)
-        impl.on_connected()   # immediate domain sync/backfill (fresh account → backfill)
-    except Exception as exc:  # noqa: BLE001 — surface exchange failure as the error page
+    except Exception as exc:  # noqa: BLE001 — pre-persist failure surfaces as the error page
         logger.warning("oauth callback exchange failed for %s: %s", provider, exc)
         return _callback_error("The sign-in could not be completed.")
+    # Account is now persisted (connected). A post-connect sync-hook failure must
+    # NOT flip a successful connect into an error page — log and continue.
+    try:
+        impl.on_connected()   # immediate domain sync/backfill (fresh account → backfill)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("on_connected hook failed for %s (account already connected): %s", provider, exc)
     return _callback_success()
 
 

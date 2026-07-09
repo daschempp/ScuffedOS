@@ -56,7 +56,7 @@ export function ConnectorsPanel({ onOpenKeys }) {
   const connectOAuth = (name) => {
     setBusy(name)
     api.oauthConnect(name)
-      .then((r) => openExternal(r.authorize_url, { sameWindow: true }))
+      .then((r) => { openExternal(r.authorize_url); setBusy('') })
       .catch((e) => { setError(e?.message || 'Connect failed'); setBusy('') })
   }
 
@@ -240,7 +240,8 @@ export function ConnectorsPanel({ onOpenKeys }) {
                     ) : (
                       <div className="kit-inline" style={{ gap: 6 }}>
                         {it.status === 'needs_reauth' && (
-                          <Button variant="secondary" size="sm" onClick={() => reauthItem(it.item_id)}>Reconnect</Button>
+                          <Button variant="secondary" size="sm" disabled={connectDisabled(c) || busy === it.item_id}
+                            onClick={() => reauthItem(it.item_id)}>Reconnect</Button>
                         )}
                         <Button variant="secondary" size="sm" onClick={() => setConfirming(it.item_id)}>Disconnect</Button>
                       </div>

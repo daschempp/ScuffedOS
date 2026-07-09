@@ -102,6 +102,55 @@ def test_callback_success_renders_html_and_persists_and_syncs(client, monkeypatc
     assert state not in oauth._STATES
 
 
+def test_callback_success_persists_even_when_on_connected_hook_raises(client, monkeypatch):
+    """A post-persist on_connected() failure (e.g. the domain sync tick blowing
+    up) must NOT flip an already-successful connect into an error page — the
+    account row is committed before on_connected runs, so the user is
+    connected either way. Regression for the M9 s1 final-review Fix B: the old
+    code wrapped exchange+persist+on_connected in ONE try/except."""
+    from app import fitness_sync
+
+    class HookBoom(FakeProvider):
+        def on_connected(self) -> None:
+            raise RuntimeError("sync tick exploded")
+
+    fake = HookBoom()
+    providers.configure([fake])
+    monkeypatch.setattr(fitness_sync, "tick", lambda now=None: 0)
+
+    state = _state_of(client.get("/api/oauth/connect/whoop").json()["authorize_url"])
+    res = client.get(f"/auth/whoop/callback?code=the-code&state={state}", follow_redirects=False)
+
+    assert res.status_code == 200
+    assert "close this tab" in res.text.lower()
+    accounts = store.list_provider_accounts()
+    assert [a["provider"] for a in accounts] == ["whoop"]
+    assert accounts[0]["status"] == "connected"
+
+
+def test_callback_exchange_failure_renders_error_and_persists_nothing(client, monkeypatch):
+    """exchange_code raising (network blip, bad code) is a pre-persist failure —
+    must render the error page and leave no account row behind. Closes a
+    coverage gap: only the bad-state/access-denied/missing-code error paths
+    were previously tested, not an actual exchange exception."""
+    from app import fitness_sync
+
+    class ExchangeBoom(FakeProvider):
+        def exchange_code(self, code: str):
+            raise RuntimeError("token endpoint 500")
+
+    fake = ExchangeBoom()
+    providers.configure([fake])
+    monkeypatch.setattr(fitness_sync, "tick", lambda now=None: 0)
+
+    state = _state_of(client.get("/api/oauth/connect/whoop").json()["authorize_url"])
+    res = client.get(f"/auth/whoop/callback?code=the-code&state={state}", follow_redirects=False)
+
+    assert res.status_code == 400
+    assert "text/html" in res.headers["content-type"]
+    assert store.list_provider_accounts() == []
+
+
 def test_callback_with_bad_state_renders_error_html_and_persists_nothing(client, monkeypatch):
     from app import fitness_sync
 
