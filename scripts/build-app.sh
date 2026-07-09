@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Build the unsigned ScuffedOS.app on an Apple-Silicon Mac. Orchestrates:
-# vendor Postgres+pgvector, vendor Python, build the launcher stub, render the
-# icon, build the frontend, and cargo tauri build. Unsigned; first launch
-# requires a one-time right-click > Open (quarantine).
+# Build the ScuffedOS.app on an Apple-Silicon Mac. Orchestrates: vendor
+# Postgres+pgvector, vendor Python, build the launcher stub, render the icon,
+# build the frontend, and cargo tauri build. Unsigned by default; first
+# launch requires a one-time right-click > Open (quarantine). If
+# APPLE_SIGNING_IDENTITY is set, an optional final stage signs, notarizes,
+# and staples the app via scripts/sign-notarize.sh.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,20 +18,20 @@ if ! command -v cargo >/dev/null 2>&1; then
   source "$HOME/.cargo/env"
 fi
 
-echo "==> [1/6] Vendor Postgres + pgvector"
+echo "==> [1/7] Vendor Postgres + pgvector"
 bash "$ROOT/scripts/vendor-postgres.sh"
 
-echo "==> [2/6] Vendor Python env"
+echo "==> [2/7] Vendor Python env"
 bash "$ROOT/scripts/vendor-python.sh"
 
-echo "==> [3/6] Build the launcher stub (target-triple-suffixed externalBin)"
+echo "==> [3/7] Build the launcher stub (target-triple-suffixed externalBin)"
 ( cd "$ROOT/src-tauri/launcher" && cargo build --release )
 mkdir -p "$ROOT/src-tauri/binaries"
 cp "$ROOT/src-tauri/launcher/target/release/scuffedos-backend" \
    "$ROOT/src-tauri/binaries/scuffedos-backend-${TRIPLE}"
 codesign --force -s - "$ROOT/src-tauri/binaries/scuffedos-backend-${TRIPLE}"
 
-echo "==> [4/6] Render icon (logo-mark.svg -> 1024 PNG -> .icns)"
+echo "==> [4/7] Render icon (logo-mark.svg -> 1024 PNG -> .icns)"
 SRC_SVG="$ROOT/frontend/public/assets/logo-mark.svg"
 FALLBACK_PNG="$ROOT/src-tauri/icons/icon.png"
 ICONSET="$BUILD/ScuffedOS.iconset"
@@ -90,12 +92,20 @@ for s in 16 32 64 128 256 512 1024; do
 done
 iconutil -c icns "$ICONSET" -o "$ROOT/src-tauri/icons/icon.icns"
 
-echo "==> [5/6] Build frontend"
+echo "==> [5/7] Build frontend"
 ( cd "$ROOT/frontend" && npm ci && npm run build )
 
-echo "==> [6/6] cargo tauri build (unsigned, .app only)"
+echo "==> [6/7] cargo tauri build (.app only)"
 ( cd "$ROOT/src-tauri" && cargo tauri build --bundles app )
 
 APP="$ROOT/src-tauri/target/release/bundle/macos/ScuffedOS.app"
+
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  echo "==> [7/7] Sign + notarize (APPLE_SIGNING_IDENTITY set)"
+  bash "$ROOT/scripts/sign-notarize.sh" "$APP"
+else
+  echo "==> [7/7] Skipping sign + notarize (APPLE_SIGNING_IDENTITY unset) — unsigned build"
+fi
+
 echo "==> Done. App at: $APP"
 du -sh "$APP" || true
