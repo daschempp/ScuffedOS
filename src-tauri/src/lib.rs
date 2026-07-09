@@ -78,6 +78,49 @@ fn wait_for_health(port: u16) -> bool {
     false
 }
 
+/// Map an incoming `scuffedos://oauth/callback?provider=<p>&<oauth query>` deep
+/// link to the loopback OAuth callback the backend serves:
+/// `http://127.0.0.1:{port}/auth/{p}/callback?<oauth query minus provider>`.
+///
+/// Returns `None` for anything that is not our exact scheme/host/path, or whose
+/// `provider` is missing/empty/not lowercase-ascii (a path-injection guard — the
+/// segment is interpolated into the URL path). The backend's one-time CSRF state
+/// check is the real authorization gate; this is defense in depth.
+fn forward_target_url(deep_link: &str, port: u16) -> Option<String> {
+    let url = reqwest::Url::parse(deep_link).ok()?;
+    if url.scheme() != "scuffedos" {
+        return None;
+    }
+    // `scuffedos://oauth/callback` parses to host "oauth", path "/callback".
+    if url.host_str() != Some("oauth") || url.path() != "/callback" {
+        return None;
+    }
+
+    let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+    let provider = pairs
+        .iter()
+        .find(|(k, _)| k == "provider")
+        .map(|(_, v)| v.clone())
+        .filter(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase()))?;
+
+    let mut target =
+        reqwest::Url::parse(&format!("http://127.0.0.1:{port}/auth/{provider}/callback")).ok()?;
+    {
+        let mut qp = target.query_pairs_mut();
+        for (k, v) in pairs.iter().filter(|(k, _)| k != "provider") {
+            qp.append_pair(k, v);
+        }
+    }
+    // Drop the trailing "?" url writes when there are no pairs.
+    Some(match target.query() {
+        Some("") | None => {
+            target.set_query(None);
+            target.to_string()
+        }
+        Some(_) => target.to_string(),
+    })
+}
+
 /// Resolve ~/Library/Application Support/ScuffedOS/logs/<name>.
 fn app_log_path(name: &str) -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
@@ -289,4 +332,72 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forward_target_url;
+
+    #[test]
+    fn maps_whoop_callback_to_loopback_preserving_code_and_state() {
+        let got = forward_target_url(
+            "scuffedos://oauth/callback?provider=whoop&code=abc123&state=xyz789",
+            54321,
+        );
+        assert_eq!(
+            got.as_deref(),
+            Some("http://127.0.0.1:54321/auth/whoop/callback?code=abc123&state=xyz789"),
+        );
+    }
+
+    #[test]
+    fn preserves_error_param_and_reencodes_values() {
+        // WHOOP denial: error present, no code. query_pairs decodes `a+b` to
+        // "a b"; append_pair re-encodes the space back to `+`.
+        let got = forward_target_url(
+            "scuffedos://oauth/callback?provider=whoop&error=access_denied&state=a+b",
+            8000,
+        );
+        assert_eq!(
+            got.as_deref(),
+            Some("http://127.0.0.1:8000/auth/whoop/callback?error=access_denied&state=a+b"),
+        );
+    }
+
+    #[test]
+    fn rejects_foreign_scheme() {
+        assert_eq!(
+            forward_target_url("https://evil.example/oauth/callback?provider=whoop&code=x", 8000),
+            None,
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_host_or_path() {
+        assert_eq!(
+            forward_target_url("scuffedos://evil/callback?provider=whoop&code=x", 8000),
+            None,
+        );
+        assert_eq!(
+            forward_target_url("scuffedos://oauth/other?provider=whoop&code=x", 8000),
+            None,
+        );
+    }
+
+    #[test]
+    fn rejects_missing_empty_or_unsafe_provider() {
+        assert_eq!(
+            forward_target_url("scuffedos://oauth/callback?code=x&state=y", 8000),
+            None,
+        );
+        assert_eq!(
+            forward_target_url("scuffedos://oauth/callback?provider=&code=x", 8000),
+            None,
+        );
+        // Path-injection defense: provider must be lowercase ascii only.
+        assert_eq!(
+            forward_target_url("scuffedos://oauth/callback?provider=..%2Fetc&code=x", 8000),
+            None,
+        );
+    }
 }
