@@ -299,9 +299,6 @@ class GoogleProvider:
             return None
 
     # ---- OAuthProvider connect/disconnect hooks ----
-    def success_redirect(self) -> str:
-        return "/?screen=email&connected=google"
-
     def on_connected(self) -> None:
         """Post-connect hook (called by the shared callback AFTER tokens persist):
         kick an immediate first-sync backfill. Imported lazily so this module

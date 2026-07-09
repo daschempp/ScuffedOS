@@ -9,13 +9,14 @@
    client. Read-only against Plaid — budgets are the only edit, and they're
    local. Holdings/Subscriptions/Bills day-change is out of slice 1. */
 import React from 'react'
-import { Card, Stat, Badge, ProgressBar, Button, IconButton } from '../components/ui.jsx'
+import { Card, Stat, ProgressBar, Button } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 import { api } from '../lib/api.js'
+import { NotConnectedCard, NeedsReauthBanner } from '../components/ConnectorEmptyState.jsx'
 
 const money = (n) => (n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD' }))
 
-export function FinanceScreen() {
+export function FinanceScreen({ onOpenConnectors }) {
   const [status, setStatus] = React.useState(null)
   const [summary, setSummary] = React.useState(null)
   const [accounts, setAccounts] = React.useState(null)
@@ -25,8 +26,6 @@ export function FinanceScreen() {
   const [subs, setSubs] = React.useState(null)
   const [bills, setBills] = React.useState(null)
   const [invTxns, setInvTxns] = React.useState(null)
-  const [pendingLink, setPendingLink] = React.useState(null)   // {link_token} after a connect button
-  const [linkMsg, setLinkMsg] = React.useState('')
   const [edits, setEdits] = React.useState({})                 // category -> edited limit string
 
   const refresh = React.useCallback(() => {
@@ -44,39 +43,8 @@ export function FinanceScreen() {
 
   const items = status?.items || []
   const connected = items.length > 0
-  const needsReauth = items.filter((i) => i.status === 'needs_reauth')
 
-  const startLink = (kind) => {
-    setLinkMsg('')
-    api.financeLinkStart(kind).then((r) => {
-      if (r?.hosted_link_url) {
-        window.open(r.hosted_link_url, '_blank', 'noopener')
-        setPendingLink({ link_token: r.link_token })
-        setLinkMsg('Finish linking in the Plaid tab, then click "Finish linking" below.')
-      }
-    }).catch(() => setLinkMsg('Could not start the link flow. Try again.'))
-  }
-  const reauth = (itemId) => {
-    api.financeReauthStart(itemId).then((r) => {
-      if (r?.hosted_link_url) {
-        window.open(r.hosted_link_url, '_blank', 'noopener')
-        setPendingLink({ reauthItemId: itemId })
-        setLinkMsg('Finish reconnecting in the Plaid tab, then click "Finish linking".')
-      }
-    }).catch(() => setLinkMsg('Could not start reconnect. Try again.'))
-  }
-  const finishLink = () => {
-    if (!pendingLink) return
-    const done = pendingLink.reauthItemId
-      ? api.financeReauthComplete(pendingLink.reauthItemId)
-      : api.financeLinkComplete(pendingLink.link_token)
-    done.then(() => { setPendingLink(null); setLinkMsg(''); refresh() })
-      .catch((e) => setLinkMsg(e?.status === 409
-        ? 'Still waiting — finish in the Plaid tab, then try again.'
-        : 'Linking failed. Try again.'))
-  }
   const sync = () => { api.financeSync().then(() => refresh()).catch(() => {}) }
-  const disconnect = (itemId) => { api.financeDisconnect(itemId).then(() => refresh()).catch(() => {}) }
   const saveBudgets = () => {
     const month = summary?.month
     const payload = (budgets || []).map((b) => ({
@@ -86,63 +54,30 @@ export function FinanceScreen() {
     api.financeSaveBudgets(month, payload).then((b) => { if (b) { setBudgets(b); setEdits({}) } }).catch(() => {})
   }
 
-  const ConnectButtons = (
-    <div className="kit-inline" style={{ gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-      <Button variant="primary" iconLeft={<Icon name="building-2" />} onClick={() => startLink('bank')}>Connect a bank</Button>
-      <Button variant="secondary" iconLeft={<Icon name="bitcoin" />} onClick={() => startLink('investments')}>Connect Coinbase or brokerage</Button>
-    </div>
-  )
-  const FinishLink = pendingLink && (
-    <div className="kit-stack" style={{ gap: 8, marginTop: 14, alignItems: 'center' }}>
-      <Button variant="primary" size="sm" iconLeft={<Icon name="check" />} onClick={finishLink}>Finish linking</Button>
-      {linkMsg && <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>{linkMsg}</p>}
-    </div>
-  )
-
-  // —— not connected: connect card ——
+  // —— not connected: shared empty-state, deep-links to Settings › Connectors ——
   if (status && !connected) {
     return (
-      <Card variant="flat" style={{ maxWidth: 560, margin: '0 auto', padding: '40px 28px', textAlign: 'center' }}>
-        <div style={{ display: 'inline-flex', width: 56, height: 56, borderRadius: 'var(--radius-lg)', background: 'var(--accent-soft)', color: 'var(--accent-text)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
-          <Icon name="wallet" />
-        </div>
-        <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--text-xl)', color: 'var(--text-strong)', margin: '0 0 6px' }}>Connect your money</h3>
-        <p className="kit-muted" style={{ maxWidth: 420, margin: '0 auto 18px' }}>Link a bank for balances, transactions and budgets, or Coinbase/a brokerage for holdings. Read-only — Plaid handles your login and we never move money.</p>
-        {ConnectButtons}
-        {FinishLink}
-        {!pendingLink && linkMsg && <p className="kit-muted" style={{ color: 'var(--clay-600)', marginTop: 12 }}>{linkMsg}</p>}
-      </Card>
+      <NotConnectedCard title="Finance isn’t connected"
+        blurb="Link a bank or investment account to see balances, transactions and budgets."
+        onOpenConnectors={onOpenConnectors} icon="wallet" />
     )
   }
 
   const nw = accounts?.networth
   return (
     <div className="kit-stack" style={{ gap: 'var(--gutter)' }}>
-      {/* header: linked institutions + sync + add */}
+      {/* header: linked institutions + sync */}
       <div className="kit-inline" style={{ flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
         {items.map((it) => (
           <span key={it.item_id} className="kit-inline" style={{ gap: 6, alignItems: 'center', padding: '4px 10px', borderRadius: 999, border: '1px solid var(--paper-300)' }}>
             <span className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>{it.institution_name}</span>
-            {it.status === 'needs_reauth' && <Badge color="clay" style={{ cursor: 'pointer' }} onClick={() => reauth(it.item_id)}>Reconnect</Badge>}
-            <IconButton label="Disconnect" size="sm" onClick={() => disconnect(it.item_id)}><Icon name="x" /></IconButton>
           </span>
         ))}
         <span className="kit-inline" style={{ marginLeft: 'auto', gap: 8 }}>
-          <Button variant="soft" size="sm" iconLeft={<Icon name="plus" />} onClick={() => startLink('bank')}>Add</Button>
           <Button variant="soft" size="sm" iconLeft={<Icon name="refresh-cw" />} onClick={sync}>Sync</Button>
         </span>
       </div>
-      {pendingLink && <Card variant="flat" style={{ textAlign: 'center', padding: '14px' }}>{FinishLink}</Card>}
-      {needsReauth.length > 0 && (
-        <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <span className="kit-statline__ico" style={{ background: 'var(--clay-100)', color: 'var(--clay-600)' }}><Icon name="alert-triangle" /></span>
-          <div style={{ flex: 1 }}>
-            <p className="kit-row__title">Reconnect {needsReauth.map((i) => i.institution_name).join(', ')}</p>
-            <p className="kit-muted">A bank login expired. Reconnect to resume syncing.</p>
-          </div>
-          <Button variant="primary" size="sm" onClick={() => reauth(needsReauth[0].item_id)}>Reconnect</Button>
-        </Card>
-      )}
+      {items.some((it) => it.status === 'needs_reauth') && <NeedsReauthBanner onOpenConnectors={onOpenConnectors} />}
 
       {/* summary */}
       <div className="kit-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>

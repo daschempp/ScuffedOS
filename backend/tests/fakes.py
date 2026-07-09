@@ -147,9 +147,6 @@ class FakeProvider:
         self.revoked.append(tokens)
 
     # ---- OAuthProvider hooks (M5) — the shared oauth router drives these ----
-    def success_redirect(self) -> str:
-        return "/?screen=fitness&connected=whoop"
-
     def on_connected(self) -> None:
         self.connected_calls = getattr(self, "connected_calls", 0) + 1
         # Mirror WhoopProvider: kick an immediate sync so the callback test's
@@ -385,9 +382,6 @@ class FakeEmailProvider:
     def fetch_profile(self, tokens: Tokens) -> str | None:
         return "google-sub-1"
 
-    def success_redirect(self) -> str:
-        return "/?screen=email&connected=google"
-
     def on_connected(self) -> None:
         from app import email_sync
 
@@ -487,9 +481,6 @@ class FakeMoodleProvider:
 
     def revoke(self, tokens: Tokens) -> None:
         self.revoked.append(tokens)
-
-    def success_redirect(self) -> str:
-        return "/?screen=school&connected=moodle"
 
     def on_connected(self) -> None:
         from app import moodle_sync

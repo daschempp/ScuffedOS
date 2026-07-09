@@ -188,10 +188,6 @@ def test_fetch_profile_failure_returns_none():
     assert p.fetch_profile(Tokens("AT", "RT", None)) is None
 
 
-def test_success_redirect_targets_the_email_screen():
-    assert GoogleProvider().success_redirect() == "/?screen=email&connected=google"
-
-
 def test_name_and_no_kind_attr():
     p = GoogleProvider()
     assert p.name == "google"

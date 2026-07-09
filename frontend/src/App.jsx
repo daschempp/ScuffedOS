@@ -71,6 +71,8 @@ function liveSub(screen, calendar, habitsState, nutrition) {
 
 export function App() {
   const [screen, setScreen] = React.useState('home')
+  const [settingsTab, setSettingsTab] = React.useState('connectors')
+  const onOpenConnectors = () => { setScreen('settings'); setSettingsTab('connectors') }
   // The one rich task list (D1) — Home, TasksScreen and the assistant share it.
   const { tasks, addTask, toggleTask, updateTask, refresh } = useTasks()
   // Calendar, habits and nutrition state — same shared-hook pattern.
@@ -114,16 +116,16 @@ export function App() {
   let body
   if (screen === 'home') body = <DashboardScreen tasks={tasks.filter((t) => t.group === 'Today')} onToggleTask={toggleTask} voiceNotes={voiceNotes} calendar={calendar} nutrition={nutrition} onNavigate={setScreen} />
   else if (screen === 'nutrition') body = <NutritionScreen nutrition={nutrition} />
-  else if (screen === 'finance') body = <FinanceScreen />
+  else if (screen === 'finance') body = <FinanceScreen onOpenConnectors={onOpenConnectors} />
   else if (screen === 'memory') body = <MemoryScreen voiceNotes={voiceNotes} />
   else if (screen === 'calendar') body = <CalendarScreen calendar={calendar} />
   else if (screen === 'tasks') body = <TasksScreen tasks={tasks} onToggle={toggleTask} onUpdate={updateTask} onAdd={addTask} onRefresh={refresh} />
-  else if (screen === 'fitness') body = <FitnessScreen />
+  else if (screen === 'fitness') body = <FitnessScreen onOpenConnectors={onOpenConnectors} />
   else if (screen === 'habits') body = <HabitsScreen habits={habitsState} />
   else if (screen === 'people') body = <CRMScreen />
-  else if (screen === 'email') body = <EmailScreen />
-  else if (screen === 'school') body = <SchoolScreen />
-  else if (screen === 'settings') body = <SettingsScreen />
+  else if (screen === 'email') body = <EmailScreen onOpenConnectors={onOpenConnectors} />
+  else if (screen === 'school') body = <SchoolScreen onOpenConnectors={onOpenConnectors} />
+  else if (screen === 'settings') body = <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />
   else body = <Placeholder icon={{ settings: 'settings' }[screen] || 'sparkles'} name={meta.title} />
 
   return (

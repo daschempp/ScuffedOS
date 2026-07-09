@@ -15,8 +15,9 @@ import React from 'react'
 import { Card, Badge, Button } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 import { api } from '../lib/api.js'
+import { NotConnectedCard, NeedsReauthBanner } from '../components/ConnectorEmptyState.jsx'
 
-export function SchoolScreen() {
+export function SchoolScreen({ onOpenConnectors }) {
   const [status, setStatus] = React.useState(null)          // null = /status not answered yet
   const [courses, setCourses] = React.useState(null)        // null = not loaded
   const [deadlines, setDeadlines] = React.useState(null)
@@ -24,8 +25,6 @@ export function SchoolScreen() {
   const [announcements, setAnnouncements] = React.useState(null)
   const [notifications, setNotifications] = React.useState(null)
   const [selCourse, setSelCourse] = React.useState(null)    // selected course_id (string) for the grades pane
-  const [token, setToken] = React.useState('')              // wstoken paste field (connect form)
-  const [connectError, setConnectError] = React.useState('')
 
   const refresh = React.useCallback(() => {
     api.oauthStatus().then((s) => { if (s) setStatus(s) }).catch(() => {})
@@ -55,13 +54,6 @@ export function SchoolScreen() {
     if (selCourse == null || !list.some((c) => c.source_id === selCourse)) setSelCourse(list[0].source_id)
   }, [courses, selCourse])
 
-  const connect = () => {
-    if (!token.trim()) { setConnectError('Paste your Moodle security key first.'); return }
-    setConnectError('')
-    api.moodleConnect({ token: token.trim() })
-      .then(() => { setToken(''); refresh() })
-      .catch(() => setConnectError("Moodle rejected that key — double-check you copied the whole value."))
-  }
   const sync = () => { api.moodleSync().then(() => refresh()).catch(() => {}) }
 
   const courseName = (courseId) => {
@@ -69,38 +61,12 @@ export function SchoolScreen() {
     return c ? (c.shortname || c.fullname) : courseId
   }
 
-  // —— not connected: paste-field connect card ——
+  // —— not connected: shared empty-state, deep-links to Settings › Connectors ——
   if (status && !connected && !needsReauth) {
     return (
-      <Card variant="flat" style={{ maxWidth: 560, margin: '0 auto', padding: '40px 28px' }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ display: 'inline-flex', width: 56, height: 56, borderRadius: 'var(--radius-lg)', background: 'var(--accent-soft)', color: 'var(--accent-text)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
-            <Icon name="graduation-cap" />
-          </div>
-          <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--text-xl)', color: 'var(--text-strong)', margin: '0 0 6px' }}>Connect Moodle</h3>
-          <p className="kit-muted" style={{ maxWidth: 420, margin: '0 auto 18px' }}>Sync your WolfWare courses, deadlines and grades into Scuffed OS. Read-only — your security key stays server-side and message bodies are never stored.</p>
-        </div>
-        <div className="kit-stack" style={{ gap: 10 }}>
-          <input
-            className="kit-input"
-            placeholder="Paste your Moodle security key…"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && connect()}
-            style={{ width: '100%', padding: '10px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--paper-300)', fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--text-sm)' }}
-          />
-          {connectError && <p className="kit-muted" style={{ color: 'var(--clay-600)' }}>{connectError}</p>}
-          <Button variant="primary" fullWidth iconLeft={<Icon name="graduation-cap" />} onClick={connect}>Connect Moodle</Button>
-        </div>
-        <div className="kit-divider" style={{ margin: '18px 0 12px' }} />
-        <p className="sa-card__eyebrow" style={{ margin: '0 0 6px' }}>Where do I find my security key?</p>
-        <ol className="kit-muted" style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--text-sm)', lineHeight: 1.7 }}>
-          <li>Sign in to WolfWare Moodle in your browser.</li>
-          <li>Open <strong>Preferences → Security keys</strong> (under your profile menu).</li>
-          <li>Copy the key for the <strong>Moodle mobile web service</strong>.</li>
-          <li>Paste it above and press Connect.</li>
-        </ol>
-      </Card>
+      <NotConnectedCard title="School isn’t connected"
+        blurb="Connect Moodle to see your courses, deadlines and grades."
+        onOpenConnectors={onOpenConnectors} icon="graduation-cap" />
     )
   }
 
@@ -117,33 +83,7 @@ export function SchoolScreen() {
 
   return (
     <div className="kit-stack" style={{ gap: 'var(--gutter)' }}>
-      {needsReauth && (
-        <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <span className="kit-statline__ico" style={{ background: 'var(--clay-100)', color: 'var(--clay-600)' }}><Icon name="alert-triangle" /></span>
-          <div style={{ flex: 1 }}>
-            <p className="kit-row__title">Moodle needs to be reconnected</p>
-            <p className="kit-muted">Your security key expired or was revoked. Paste a fresh key to resume syncing your courses.</p>
-          </div>
-        </Card>
-      )}
-
-      {needsReauth && (
-        <Card variant="flat" style={{ maxWidth: 560, padding: '20px 24px' }}>
-          <p className="sa-card__eyebrow" style={{ margin: '0 0 8px' }}>Reconnect Moodle</p>
-          <div className="kit-stack" style={{ gap: 10 }}>
-            <input
-              className="kit-input"
-              placeholder="Paste your Moodle security key…"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && connect()}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--paper-300)', fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--text-sm)' }}
-            />
-            {connectError && <p className="kit-muted" style={{ color: 'var(--clay-600)' }}>{connectError}</p>}
-            <Button variant="primary" size="sm" onClick={connect}>Reconnect</Button>
-          </div>
-        </Card>
-      )}
+      {needsReauth && <NeedsReauthBanner onOpenConnectors={onOpenConnectors} />}
 
       {syncing && (
         <Card variant="flat" style={{ textAlign: 'center', padding: '48px 24px' }}>

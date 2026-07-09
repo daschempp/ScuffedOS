@@ -167,10 +167,6 @@ class WhoopProvider:
             log.warning("WHOOP revoke failed (continuing): %s", exc)
 
     # ---- OAuthProvider hooks (M5: the shared oauth router drives these) ----
-    def success_redirect(self) -> str:
-        """Screen the SPA lands on after a successful WHOOP connect."""
-        return "/?screen=fitness&connected=whoop"
-
     def on_connected(self) -> None:
         """Post-connect hook: kick an immediate fitness sync (backfill). The
         fresh account has no last_sync_at, so tick() backfills on this pass."""

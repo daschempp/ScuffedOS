@@ -25,6 +25,7 @@ from .errors import install_error_handlers
 from .routers import (
     assistant,
     calendar,
+    connectors,
     email,
     finance,
     fitness,
@@ -141,6 +142,7 @@ app.include_router(oauth.auth_router)
 app.include_router(email.router)
 app.include_router(moodle.router)
 app.include_router(finance.router)
+app.include_router(connectors.router)
 app.include_router(settings_router.router)
 
 

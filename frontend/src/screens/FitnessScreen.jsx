@@ -9,6 +9,7 @@ import React from 'react'
 import { Card, Badge, ProgressRing, IconButton, Button } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 import { api } from '../lib/api.js'
+import { NotConnectedCard, NeedsReauthBanner } from '../components/ConnectorEmptyState.jsx'
 
 const EMPTY_FORM = { name: '', sport: '', duration_min: '', strain: '', calories: '', avg_hr: '' }
 
@@ -28,7 +29,7 @@ function fmtDelta(delta) {
   return (r > 0 ? '+' : r < 0 ? '−' : '') + Math.abs(r)
 }
 
-export function FitnessScreen() {
+export function FitnessScreen({ onOpenConnectors }) {
   const [status, setStatus] = React.useState(null)   // null = /status not answered yet
   const [today, setToday] = React.useState(null)
   const [workouts, setWorkouts] = React.useState([])
@@ -47,22 +48,12 @@ export function FitnessScreen() {
   React.useEffect(() => { refresh() }, [refresh])
 
   const whoop = (status?.providers || []).find((p) => p.provider === 'whoop') || null
-  const connected = !!status?.connected
+  const connected = !!whoop
   const needsReauth = whoop?.status === 'needs_reauth'
   // Connected + an account exists, but no day data has landed yet → first sync
   // is still running. has_data===false with a connected account = "Syncing…".
   const syncing = connected && !needsReauth && today != null && today.has_data === false && !whoop?.last_sync_at
 
-  const connect = () => {
-    api.oauthConnect('whoop')
-      .then((r) => { if (r?.authorize_url) window.location = r.authorize_url })
-      .catch(() => {})
-  }
-  const disconnect = () => {
-    api.oauthDisconnect('whoop')
-      .then((s) => { if (s) setStatus(s); refresh() })
-      .catch(() => {})
-  }
   const sync = () => { api.fitnessSync().then(() => refresh()).catch(() => {}) }
 
   const submitWorkout = () => {
@@ -97,17 +88,12 @@ export function FitnessScreen() {
     color: 'var(--text-strong)',
   }
 
-  // —— not connected: single CTA card ——
+  // —— not connected: shared empty-state, deep-links to Settings › Connectors ——
   if (status && !connected && !needsReauth) {
     return (
-      <Card variant="flat" style={{ textAlign: 'center', padding: '56px 24px' }}>
-        <div style={{ display: 'inline-flex', width: 56, height: 56, borderRadius: 'var(--radius-lg)', background: 'var(--accent-soft)', color: 'var(--accent-text)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
-          <Icon name="activity" />
-        </div>
-        <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--text-xl)', color: 'var(--text-strong)', margin: '0 0 6px' }}>Connect WHOOP</h3>
-        <p className="kit-muted" style={{ maxWidth: 360, margin: '0 auto 18px' }}>Sync recovery, sleep, strain and workouts into Scuffed OS. Your tokens stay server-side and never reach this screen.</p>
-        <Button variant="primary" iconLeft={<Icon name="activity" />} onClick={connect}>Connect WHOOP</Button>
-      </Card>
+      <NotConnectedCard title="Fitness isn’t connected"
+        blurb="Connect WHOOP to see recovery, sleep, strain and workouts."
+        onOpenConnectors={onOpenConnectors} icon="activity" />
     )
   }
 
@@ -120,16 +106,7 @@ export function FitnessScreen() {
 
   return (
     <div className="kit-stack" style={{ gap: 'var(--gutter)' }}>
-      {needsReauth && (
-        <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <span className="kit-statline__ico" style={{ background: 'var(--clay-100)', color: 'var(--clay-600)' }}><Icon name="alert-triangle" /></span>
-          <div style={{ flex: 1 }}>
-            <p className="kit-row__title">WHOOP needs to be reconnected</p>
-            <p className="kit-muted">Your authorization expired or was revoked. Reconnect to resume syncing.</p>
-          </div>
-          <Button variant="primary" size="sm" onClick={connect}>Reconnect</Button>
-        </Card>
-      )}
+      {needsReauth && <NeedsReauthBanner onOpenConnectors={onOpenConnectors} />}
 
       {syncing && (
         <Card variant="flat" style={{ textAlign: 'center', padding: '48px 24px' }}>
@@ -149,7 +126,6 @@ export function FitnessScreen() {
               <div className="kit-inline" style={{ gap: 8 }}>
                 {today?.has_data && <Badge color={recovered ? 'green' : 'honey'} dot>{recovered ? 'Recovered' : 'Take it easy'}</Badge>}
                 <IconButton label="Sync now" size="sm" onClick={sync}><Icon name="refresh-cw" /></IconButton>
-                <IconButton label="Disconnect WHOOP" size="sm" onClick={disconnect}><Icon name="unplug" /></IconButton>
               </div>
             }>
             {today?.has_data ? (
