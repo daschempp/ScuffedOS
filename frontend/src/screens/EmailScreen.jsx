@@ -11,6 +11,7 @@ import React from 'react'
 import { Card, Badge, Button, IconButton, Checkbox } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 import { api } from '../lib/api.js'
+import { NotConnectedCard, NeedsReauthBanner } from '../components/ConnectorEmptyState.jsx'
 
 /* Category → the left-column group label + list. Untriaged messages still show
    (under 'Other') so a triage hiccup never hides mail. */
@@ -20,7 +21,7 @@ const GROUPS = [
   { key: 'untriaged', label: 'Other' },
 ]
 
-export function EmailScreen() {
+export function EmailScreen({ onOpenConnectors }) {
   const [status, setStatus] = React.useState(null)   // null = /status not answered yet
   const [inbox, setInbox] = React.useState(null)     // null = not loaded
   const [selId, setSelId] = React.useState(null)
@@ -90,11 +91,6 @@ export function EmailScreen() {
     return () => { live = false }
   }, [selId])
 
-  const connect = () => {
-    api.oauthConnect('google')
-      .then((r) => { if (r?.authorize_url) window.location = r.authorize_url })
-      .catch(() => {})
-  }
   const sync = () => { api.emailSync().then(() => refresh()).catch(() => {}) }
 
   // Confirm-first writes (contract §F): the Gmail call happens server-side
@@ -204,17 +200,12 @@ export function EmailScreen() {
     })
   }
 
-  // —— not connected: single CTA card ——
+  // —— not connected: shared empty-state, deep-links to Settings › Connectors ——
   if (status && !connected && !needsReauth) {
     return (
-      <Card variant="flat" style={{ textAlign: 'center', padding: '56px 24px' }}>
-        <div style={{ display: 'inline-flex', width: 56, height: 56, borderRadius: 'var(--radius-lg)', background: 'var(--accent-soft)', color: 'var(--accent-text)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
-          <Icon name="mail" />
-        </div>
-        <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--text-xl)', color: 'var(--text-strong)', margin: '0 0 6px' }}>Connect Google</h3>
-        <p className="kit-muted" style={{ maxWidth: 380, margin: '0 auto 18px' }}>Sync your Gmail inbox into Scuffed OS. Messages are triaged into what needs a reply vs. FYI, with AI summaries. Read-only — your tokens stay server-side and message bodies are never stored.</p>
-        <Button variant="primary" iconLeft={<Icon name="mail" />} onClick={connect}>Connect Google</Button>
-      </Card>
+      <NotConnectedCard title="Email isn’t connected"
+        blurb="Connect your Google account to see and act on your inbox here."
+        onOpenConnectors={onOpenConnectors} icon="mail" />
     )
   }
 
@@ -277,25 +268,13 @@ export function EmailScreen() {
         </Card>
       )}
 
-      {needsReauth && (
-        <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <span className="kit-statline__ico" style={{ background: 'var(--clay-100)', color: 'var(--clay-600)' }}><Icon name="alert-triangle" /></span>
-          <div style={{ flex: 1 }}>
-            <p className="kit-row__title">Google needs to be reconnected</p>
-            <p className="kit-muted">Your authorization expired or was revoked. Reconnect to resume syncing your inbox.</p>
-          </div>
-          <Button variant="primary" size="sm" onClick={connect}>Reconnect</Button>
-        </Card>
-      )}
+      {needsReauth && <NeedsReauthBanner onOpenConnectors={onOpenConnectors} />}
 
       {connected && !needsReauth && !canWrite && (
-        <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-          <span className="kit-statline__ico" style={{ background: 'var(--sky-100)', color: 'var(--sky-600)' }}><Icon name="mail" /></span>
-          <div style={{ flex: 1 }}>
-            <p className="kit-row__title">Enable email actions</p>
-            <p className="kit-muted">ScuffedOS has read-only access. Re-connect Google and tick the Gmail checkboxes to allow replying, deleting, starring and labeling.</p>
-          </div>
-          <Button variant="primary" size="sm" onClick={connect}>Enable</Button>
+        <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Icon name="pen-line" />
+          <p className="kit-muted" style={{ flex: 1 }}>Email actions are read-only — enable them in Settings › Connectors.</p>
+          <Button variant="secondary" size="sm" onClick={onOpenConnectors}>Open Connectors</Button>
         </Card>
       )}
 
