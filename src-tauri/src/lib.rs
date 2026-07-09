@@ -206,6 +206,7 @@ pub fn run() {
                 .sidecar("scuffedos-backend")?
                 .env("SCUFFEDOS_MANAGED_PG", "1")
                 .env("RESOURCES_PGSQL_DIR", pgsql_res.to_string_lossy().to_string())
+                .env("SCUFFEDOS_PORT", port.to_string())
                 .args(["--port", &port.to_string()])
                 .spawn()?;
 
