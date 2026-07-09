@@ -124,6 +124,11 @@ class Settings(BaseSettings):
     # which makes app/localdb.py boot a vendored Postgres under app_support_dir
     # and inject the socket DSN into database_url before the first DB call.
     scuffedos_managed_pg: bool = False           # env SCUFFEDOS_MANAGED_PG
+    # Loopback port the backend listens on. Dev = uvicorn's 8000; packaged = the
+    # random port the Tauri shell picks and exports as SCUFFEDOS_PORT (lib.rs).
+    # GoogleProvider embeds this in the computed redirect URI when
+    # google_redirect_uri is empty (M9 s2). No env_prefix/alias -> binds SCUFFEDOS_PORT.
+    scuffedos_port: int = 8000                   # env SCUFFEDOS_PORT
     # Per-user state root; ~ is expanded by app/localdb.py, never here.
     app_support_dir: str = "~/Library/Application Support/ScuffedOS"
     managed_pg_superuser: str = "scuffedos"      # initdb -U role + DSN user
