@@ -7,6 +7,7 @@ import React from 'react'
 import { Card, Button } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 import { api } from '../lib/api.js'
+import { isTauri } from '@tauri-apps/api/core'
 
 const WIPE_COPY = {
   google: 'all synced emails',
@@ -25,11 +26,16 @@ function StatusChip({ status }) {
   return <span className="kit-muted" style={{ fontSize: 'var(--text-sm)', color }}>{label}</span>
 }
 
-// Open an OAuth/hosted-link URL. Slice 2 swaps this single function for the
-// Tauri system-browser opener under isTauri().
-function openExternal(url, { sameWindow = false } = {}) {
-  if (sameWindow) window.location = url
-  else window.open(url, '_blank', 'noopener')
+// Open an OAuth/hosted-link URL. In the packaged app (isTauri) route through the
+// Tauri opener plugin so consent happens in the user's real system browser with
+// their live session; in dev keep the webview new-tab behavior.
+async function openExternal(url) {
+  if (isTauri()) {
+    const { openUrl } = await import('@tauri-apps/plugin-opener')
+    await openUrl(url)
+    return
+  }
+  window.open(url, '_blank', 'noopener')
 }
 
 export function ConnectorsPanel({ onOpenKeys }) {
