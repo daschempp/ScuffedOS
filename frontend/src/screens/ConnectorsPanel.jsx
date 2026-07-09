@@ -89,7 +89,12 @@ export function ConnectorsPanel({ onOpenKeys }) {
   const connectOAuth = (name) => {
     setBusy(name)
     api.oauthConnect(name)
-      .then((r) => { openExternal(r.authorize_url); setBusy(''); startConnectPoll(name) })
+      .then((r) => {
+        setBusy('')
+        openExternal(r.authorize_url)
+          .then(() => startConnectPoll(name))
+          .catch((e) => setError(e?.message || 'Could not open the sign-in page'))
+      })
       .catch((e) => { setError(e?.message || 'Connect failed'); setBusy('') })
   }
 
@@ -118,7 +123,7 @@ export function ConnectorsPanel({ onOpenKeys }) {
     setLinkMsg('')
     api.financeLinkStart(kind).then((r) => {
       if (r?.hosted_link_url) {
-        openExternal(r.hosted_link_url)
+        openExternal(r.hosted_link_url).catch((e) => setError(e?.message || 'Could not open the link page'))
         setPendingLink({ link_token: r.link_token })
         setLinkMsg('Finish linking in the Plaid tab, then click “Finish linking”.')
       }
@@ -128,7 +133,7 @@ export function ConnectorsPanel({ onOpenKeys }) {
     setLinkMsg('')
     api.financeReauthStart(itemId).then((r) => {
       if (r?.hosted_link_url) {
-        openExternal(r.hosted_link_url)
+        openExternal(r.hosted_link_url).catch((e) => setError(e?.message || 'Could not open the link page'))
         setPendingLink({ reauthItemId: itemId })
         setLinkMsg('Finish reconnecting in the Plaid tab, then click “Finish linking”.')
       }
