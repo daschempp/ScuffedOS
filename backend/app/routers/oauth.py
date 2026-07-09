@@ -11,6 +11,8 @@ callback (outside /api). main.py includes both.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import html as _html
 import logging
 import secrets
@@ -25,22 +27,26 @@ from ..store import store
 router = APIRouter(prefix="/api/oauth", tags=["oauth"])
 auth_router = APIRouter(tags=["oauth"])
 
-# One-time CSRF states: state token -> provider name. In-process is fine for a
-# single-user desktop app (one-time CSRF check); a restart mid-flow just makes
-# the user click Connect again.
-_STATES: dict[str, str] = {}
+# state token -> (provider name, PKCE verifier). One-time; in-process is fine
+# for a single-user desktop app. Slice 2 added the verifier for Google PKCE.
+_STATES: dict[str, tuple[str, str]] = {}
 
 logger = logging.getLogger("scuffed_os.oauth")
 
 
-def _issue_state(provider: str) -> str:
+def _issue_state(provider: str) -> tuple[str, str]:
+    """Return (state, code_challenge). Stores (provider, verifier) one-time."""
     state = secrets.token_urlsafe(24)
-    _STATES[state] = provider
-    return state
+    verifier = secrets.token_urlsafe(64)                      # RFC 7636 high-entropy verifier
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()
+    ).rstrip(b"=").decode()                                   # S256 challenge, base64url no pad
+    _STATES[state] = (provider, verifier)
+    return state, challenge
 
 
-def _consume_state(state: str) -> str | None:
-    """Pop a state, returning the provider it was issued for (one-time use)."""
+def _consume_state(state: str) -> tuple[str, str] | None:
+    """Pop (provider, verifier) for a state (one-time use)."""
     return _STATES.pop(state, None)
 
 
@@ -58,8 +64,8 @@ def connect(provider: str) -> dict:
     impl = providers.get(provider)
     if impl is None:
         raise HTTPException(status_code=404, detail=f"Unknown provider '{provider}'")
-    state = _issue_state(provider)
-    return {"authorize_url": impl.authorize_url(state)}
+    state, challenge = _issue_state(provider)
+    return {"authorize_url": impl.authorize_url(state, code_challenge=challenge)}
 
 
 @router.get("/status", response_model=OAuthStatus)
@@ -114,9 +120,10 @@ def oauth_callback(
     error page. The backend serves no SPA, so there is no redirect back into the
     app — the user closes the tab and the Connectors tab's poll (Slice 2) picks
     up the flip. Tokens never leave the server."""
-    issued_for = _consume_state(state)
-    if issued_for is None or issued_for != provider:
+    issued = _consume_state(state)
+    if issued is None or issued[0] != provider:
         return _callback_error("This sign-in link has expired or is invalid.")
+    verifier = issued[1]
     if error is not None or code is None:
         detail = _html.escape(error) if error else "no authorization code was returned"
         return _callback_error(f"The provider reported: {detail}.")
@@ -124,7 +131,7 @@ def oauth_callback(
     if impl is None:
         return _callback_error(f"Unknown provider ‘{_html.escape(provider)}’.")
     try:
-        tokens = impl.exchange_code(code)
+        tokens = impl.exchange_code(code, verifier=verifier)
         fetch_profile = getattr(impl, "fetch_profile", None)
         if fetch_profile is not None and tokens.provider_user_id is None:
             uid = fetch_profile(tokens)

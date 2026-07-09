@@ -205,7 +205,7 @@ class GoogleProvider:
     def authorize_url(self, state: str, code_challenge: str | None = None) -> str:
         # access_type=offline + prompt=consent guarantee Google issues a
         # refresh_token (without them a re-consent may omit it).
-        q = urlencode({
+        params = {
             "client_id": settings.google_client_id,
             "redirect_uri": self._redirect_uri(),
             "response_type": "code",
@@ -213,7 +213,11 @@ class GoogleProvider:
             "access_type": "offline",
             "prompt": "consent",
             "state": state,
-        })
+        }
+        if code_challenge is not None:
+            params["code_challenge"] = code_challenge
+            params["code_challenge_method"] = "S256"
+        q = urlencode(params)
         return f"{GOOGLE_AUTH_URL}?{q}"
 
     def _token_request(self, data: dict) -> Tokens:
@@ -236,13 +240,16 @@ class GoogleProvider:
         )
 
     def exchange_code(self, code: str, verifier: str | None = None) -> Tokens:
-        return self._token_request({
+        data = {
             "grant_type": "authorization_code",
             "code": code,
             "redirect_uri": self._redirect_uri(),
             "client_id": settings.google_client_id,
             "client_secret": settings.google_client_secret,
-        })
+        }
+        if verifier is not None:
+            data["code_verifier"] = verifier   # [confirm-against-live] RFC 7636 field name
+        return self._token_request(data)
 
     def refresh(self, tokens: Tokens) -> Tokens:
         if not tokens.refresh_token:

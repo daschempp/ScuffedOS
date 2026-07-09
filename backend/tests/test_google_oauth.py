@@ -88,6 +88,30 @@ def test_authorize_url_uses_env_redirect_verbatim_when_set(monkeypatch):
     assert q["redirect_uri"] == ["https://tunnel.example/auth/google/callback"]
 
 
+def test_authorize_url_adds_s256_challenge_when_passed():
+    p = _provider()
+    url = p.authorize_url("st8", code_challenge="CHALLENGE")
+    q = parse_qs(urlparse(url).query)
+    assert q["code_challenge"] == ["CHALLENGE"]
+    assert q["code_challenge_method"] == ["S256"]
+
+
+def test_authorize_url_omits_challenge_when_none():
+    p = _provider()
+    q = parse_qs(urlparse(p.authorize_url("st8")).query)
+    assert "code_challenge" not in q
+
+
+def test_exchange_code_includes_code_verifier_when_passed():
+    p = _provider()
+    p.configure(fake_http=FakeHttp({
+        GOOGLE_TOKEN_URL: FakeResp(200, {"access_token": "AT", "expires_in": 3600}),
+    }))
+    p.exchange_code("thecode", verifier="VRF")
+    _, data = p._http.posts[0]
+    assert data["code_verifier"] == "VRF"
+
+
 def test_exchange_code_uses_computed_loopback_when_redirect_empty(monkeypatch):
     # §9 lock-step: the EXCHANGE leg must embed the SAME computed loopback the
     # authorize leg does. Guards against exchange_code being left on the raw
