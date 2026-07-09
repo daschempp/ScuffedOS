@@ -23,7 +23,9 @@ echo "==> Signing nested Mach-Os (deepest first)"
 find "$APP/Contents/Resources" \( -name '*.dylib' -o -name '*.so' \) -type f -print0 \
   | while IFS= read -r -d '' f; do sign "$f"; done
 # 2. Mach-O executables under Resources (python3, postgres, initdb, psql, ...).
-find "$APP/Contents/Resources" -type f -perm -111 ! -name '*.dylib' ! -name '*.so' -print0 \
+# -perm -u+x (owner-exec bit set) catches 700/750/755 alike; -perm -111 would
+# require all three exec bits and silently skip an owner-only-exec binary.
+find "$APP/Contents/Resources" -type f -perm -u+x ! -name '*.dylib' ! -name '*.so' -print0 \
   | while IFS= read -r -d '' f; do
       if file "$f" | grep -q 'Mach-O'; then sign "$f"; fi
     done
