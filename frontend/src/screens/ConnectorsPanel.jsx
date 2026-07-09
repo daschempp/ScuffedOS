@@ -59,10 +59,37 @@ export function ConnectorsPanel({ onOpenKeys }) {
 
   React.useEffect(() => { refresh() }, [refresh])
 
+  const pollRef = React.useRef(null)
+  React.useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  const snapshotOf = (c) => `${c?.status}|${c?.can_write_email}|${c?.connected_at}`
+
+  // From a Connect click, poll the connectors read model (~2s, bounded ~2min) and
+  // stop as soon as THIS connector's (status, can_write_email, connected_at) tuple
+  // changes from its pre-click snapshot — covers both first-connect AND the
+  // scope-upgrade reconnect (status stays 'connected', only can_write_email moves).
+  const startConnectPoll = (name) => {
+    const before = snapshotOf((connectors || []).find((c) => c.name === name))
+    if (pollRef.current) clearInterval(pollRef.current)
+    let ticks = 0
+    pollRef.current = setInterval(() => {
+      ticks += 1
+      api.getConnectors().then((list) => {
+        const now = snapshotOf(list.find((c) => c.name === name))
+        if (now !== before) {
+          clearInterval(pollRef.current); pollRef.current = null
+          setConnectors(list); setError('')
+        } else if (ticks >= 60) {          // ~2 min at 2s
+          clearInterval(pollRef.current); pollRef.current = null
+        }
+      }).catch(() => {})
+    }, 2000)
+  }
+
   const connectOAuth = (name) => {
     setBusy(name)
     api.oauthConnect(name)
-      .then((r) => { openExternal(r.authorize_url); setBusy('') })
+      .then((r) => { openExternal(r.authorize_url); setBusy(''); startConnectPoll(name) })
       .catch((e) => { setError(e?.message || 'Connect failed'); setBusy('') })
   }
 
