@@ -136,7 +136,7 @@ def test_callback_exchange_failure_renders_error_and_persists_nothing(client, mo
     from app import fitness_sync
 
     class ExchangeBoom(FakeProvider):
-        def exchange_code(self, code: str):
+        def exchange_code(self, code, verifier=None):
             raise RuntimeError("token endpoint 500")
 
     fake = ExchangeBoom()

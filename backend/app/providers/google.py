@@ -202,7 +202,7 @@ class GoogleProvider:
         return (settings.google_redirect_uri
                 or f"http://127.0.0.1:{settings.scuffedos_port}/auth/google/callback")
 
-    def authorize_url(self, state: str) -> str:
+    def authorize_url(self, state: str, code_challenge: str | None = None) -> str:
         # access_type=offline + prompt=consent guarantee Google issues a
         # refresh_token (without them a re-consent may omit it).
         q = urlencode({
@@ -235,7 +235,7 @@ class GoogleProvider:
             scopes=payload.get("scope", "") or "",
         )
 
-    def exchange_code(self, code: str) -> Tokens:
+    def exchange_code(self, code: str, verifier: str | None = None) -> Tokens:
         return self._token_request({
             "grant_type": "authorization_code",
             "code": code,

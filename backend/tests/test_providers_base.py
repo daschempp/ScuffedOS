@@ -65,8 +65,8 @@ class _MinimalProvider:
     name = "whoop"
     kind = "pull"
 
-    def authorize_url(self, state): return ""
-    def exchange_code(self, code): return Tokens("a", None, None)
+    def authorize_url(self, state, code_challenge=None): return ""
+    def exchange_code(self, code, verifier=None): return Tokens("a", None, None)
     def refresh(self, tokens): return tokens
     def fetch_recovery(self, since): return []
     def fetch_sleep(self, since): return []
@@ -79,6 +79,13 @@ class _MinimalProvider:
 
 def test_runtime_checkable_protocol_accepts_a_conforming_object():
     assert isinstance(_MinimalProvider(), FitnessProvider)
+
+
+def test_oauth_methods_accept_optional_pkce_params():
+    p = _MinimalProvider()
+    # New optional PKCE params must be accepted by every OAuthProvider signature.
+    assert p.authorize_url("st8", code_challenge="chal") == ""
+    p.exchange_code("code", verifier="vrf")  # must not raise TypeError
 
 
 def test_runtime_checkable_protocol_rejects_a_missing_method():
