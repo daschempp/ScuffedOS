@@ -40,9 +40,10 @@ R8) — the model can't deep-link to a screen that doesn't exist.
   calendar read+write (`get_calendar`, `create/update/delete_event`), habits
   (`get_habits_today`, `toggle_habit` — fuzzy name match, `create_habit`),
   nutrition (`get_nutrition_today`, `search_food` (USDA), `log_meal`,
-  `log_water`) — all real from M3 — plus read-only tools over the remaining
-  seeded domains (finance/fitness from `app/seeds.py`, payloads labeled SAMPLE
-  DATA until M4/M6). Write executors return the action card. Tool errors go
+  `log_water`) — all real from M3 — plus fitness (WHOOP, M4), email
+  (Gmail read + AI draft, M5), school (Moodle courses/deadlines/grades, M6,
+  read-only) and finance (Plaid reads + local budget writes, M7). Every tool
+  result is live data — no SAMPLE payloads. Write executors return the action card. Tool errors go
   back to the model (`{"error": …}` in the tool result), not to the user.
   Naive datetimes from the model are interpreted as the user's local time.
 - **`app/assistant.py`** — the loop: build system prompt (persona + current

@@ -3,9 +3,11 @@
 > Status: built (M1 CRUD + M2 Mem0 engine) · Last updated: 2026-06-10 · Owner: _TBD_
 >
 > M2 implementation notes: `app/memory_engine.py` realizes the Mem0 design
-> below — Claude (haiku) extraction, Ollama `nomic-embed-text` embedder (768
-> dims, pinned), pgvector store in the same Postgres (`mem0_memories`
-> collection, HNSW; `CREATE EXTENSION vector` via migration 0002), local SQLite
+> below — Claude (haiku) extraction, OpenAI `text-embedding-3-small` embedder
+> (1536 dims, pinned; OpenAI is used *only* for embeddings — the assistant
+> itself never calls OpenAI), pgvector store in the same Postgres
+> (`mem0_memories_openai` collection, HNSW; `CREATE EXTENSION vector` via
+> migration 0002), local SQLite
 > history DB under `backend/data/`. Auto-capture runs after every chat turn
 > (`infer=True`) and its ADD/UPDATE/DELETE events are **mirrored** into the
 > canonical `memories` table (`src="learned"`, linked by `mem0_id`), so the
