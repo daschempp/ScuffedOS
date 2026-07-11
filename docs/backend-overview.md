@@ -1,6 +1,6 @@
 # Backend Overview — Architecture
 
-> Status: draft · Last updated: 2026-06-09 · Owner: _TBD_
+> Status: current (through M9) · Last updated: 2026-07-11 · Owner: _TBD_
 >
 > The overarching doc: what the backend is, the functions it's made of, and — the main
 > point — **how those functions interact**. Each function has its own doc; this one is
@@ -12,8 +12,8 @@ The backend is the **system of record and intelligence layer** for the Scuffed O
 dashboard, built with **FastAPI**. The target is one backend function per surface of the
 app.
 
-Today **six** are built; the other four render sample data inside their React screens
-and are documented here as the **planned** backend they should grow into:
+**Ten** functions are built and live; only **People/CRM** still lacks a backend
+(its React screen renders static contacts):
 
 | Function | Doc | Status | Backing today |
 | --- | --- | --- | --- |
@@ -23,16 +23,17 @@ and are documented here as the **planned** backend they should grow into:
 | Calendar | [calendar.md](calendar.md) | ✅ Built (M3) | Postgres; recurrence expanded on read |
 | Habits | [habits.md](habits.md) | ✅ Built (M3) | Postgres; completion log + linked auto-complete |
 | Nutrition | [nutrition.md](nutrition.md) | ✅ Built (M3) | Postgres + USDA food DB lookup |
-| Fitness | [fitness.md](fitness.md) | ⬜ Planned (M4) | Sample data in `FitnessScreen.jsx` (Whoop) |
-| Finance | [finance.md](finance.md) | ⬜ Planned (M6) | Sample data in `FinanceScreen.jsx` |
-| Email | [email.md](email.md) | ⬜ Planned (M5) | Sample data in `EmailScreen.jsx` |
-| People | [people.md](people.md) | ⬜ Planned (M5) | Sample data in `CRMScreen.jsx` |
+| Fitness | [fitness.md](fitness.md) | ✅ Built (M4) | Postgres; live WHOOP OAuth + background sync |
+| Email | [email.md](email.md) | ✅ Built (M5) | Postgres; live Gmail sync, AI triage + draft |
+| School | [school.md](school.md) | ✅ Built (M6) | Postgres; Moodle courses/deadlines/grades (read-only) |
+| Finance | [finance.md](finance.md) | ✅ Built (M7) | Postgres; Plaid reads + local budget writes |
+| People | [people.md](people.md) | ⬜ Planned | Static contacts in `CRMScreen.jsx`; no backend yet |
 | _Data store_ | [data-store.md](data-store.md) | ✅ Built | Postgres (Supabase) + SQLAlchemy/Alembic store + Pydantic schemas |
 
 > The frontend **degrades gracefully** — if the backend is down (or a surface has no
-> backend yet), the screens fall back to their seeded sample data. The backend is an
-> enhancement (real persistence + intelligence + a single source of truth), not a hard
-> dependency for the UI to render.
+> backend yet, as with People), the screen keeps its last state or a static fallback. The
+> backend is where real persistence + intelligence + the single source of truth live, but
+> the UI still renders without it.
 
 ## System context
 
@@ -190,9 +191,12 @@ and whether each function is a read-only **mirror** or our own **canonical recor
 - [x] **Local domains** — M3 (2026-06-10): calendar (+shared recurrence engine),
       habits (+linked auto-complete), nutrition (+USDA food DB), firing reminders,
       real file attachments, recurring tasks — with assistant tools for all.
-- [ ] **Graduate the four integration functions** from React sample data:
-      Fitness/Whoop (M4), Email + People (M5), Finance/Plaid (M6); then the Tauri
-      bundle (M8).
+- [x] **Graduate the integration functions** from React sample data:
+      Fitness/WHOOP (M4), Email/Gmail (M5), School/Moodle (M6), Finance/Plaid (M7)
+      all shipped and live. Only **People/CRM** is still frontend-only.
+- [ ] **Ship / desktop bundle** (in progress) — Tauri v2 shell + vendored sidecar
+      and managed local Postgres (M8), packaged OAuth + signing + connectors (M9).
+- [ ] **People/CRM backend** — the last integration function without one.
 - [ ] **Auth & multi-user** for external accounts and the future iPhone client.
 
 ## Open questions / future work

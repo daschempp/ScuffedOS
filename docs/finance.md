@@ -1,6 +1,6 @@
 # Finance — Architecture
 
-> Status: **building** (M7 slice-2 shipped) · Last updated: 2026-07-06 · Owner: _Dylan_
+> Status: **built** (M7 — live Plaid: reads + local budget writes) · Last updated: 2026-07-11 · Owner: _Dylan_
 >
 > Part of the [backend overview](backend-overview.md). A **read-only**, multi-institution
 > view of the user's real bank and Coinbase accounts via **Plaid** — balances, net worth,

@@ -1,6 +1,6 @@
 # School (Moodle) — Architecture
 
-> Status: **building** (M6 slice-1) · Last updated: 2026-07-04 · Owner: _Dylan_
+> Status: **built** (M6 — Moodle read-only; live sync gated on a real WolfWare token) · Last updated: 2026-07-11 · Owner: _Dylan_
 >
 > Part of the [backend overview](backend-overview.md). A read-only view of the student's
 > Moodle learning-management data — courses, deadlines, grades, and announcements — that
