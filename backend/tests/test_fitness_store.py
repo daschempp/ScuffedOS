@@ -196,6 +196,38 @@ def test_synced_workout_auto_completes_linked_habit():
     assert habit["days"][local_day.weekday()] is True
 
 
+def _linked_habit_done_on(local_day: date) -> bool:
+    week = store.habits_week(local_day - timedelta(days=local_day.weekday()))
+    return week["habits"][0]["days"][local_day.weekday()]
+
+
+def test_delete_last_workout_retracts_auto_habit_completion():
+    """Deleting the only workout of a day must retract the workout->habit
+    auto-completion — otherwise a streak survives on a workout that's gone."""
+    store.create_habit({"name": "Workout", "link": "workout"})
+    started = datetime(2026, 6, 30, 9, tzinfo=UTC)
+    local_day = started.astimezone().date()
+    out = store.create_workout({"name": "Lift", "started_at": started, "duration_min": 30})
+    assert _linked_habit_done_on(local_day) is True  # auto-completed on log
+
+    assert store.delete_workout(out["id"]) is True
+    assert _linked_habit_done_on(local_day) is False  # retracted on delete
+
+
+def test_delete_workout_keeps_habit_when_another_remains_that_day():
+    """Deleting one of two same-day workouts leaves the habit complete —
+    the day was still trained."""
+    store.create_habit({"name": "Workout", "link": "workout"})
+    started = datetime(2026, 6, 30, 9, tzinfo=UTC)
+    local_day = started.astimezone().date()
+    a = store.create_workout({"name": "AM", "started_at": started, "duration_min": 30})
+    store.create_workout({"name": "PM", "started_at": started + timedelta(hours=2),
+                          "duration_min": 20})
+
+    assert store.delete_workout(a["id"]) is True
+    assert _linked_habit_done_on(local_day) is True
+
+
 def test_fitness_today_empty_state():
     out = store.fitness_today(DAY)
     assert out["date"] == DAY

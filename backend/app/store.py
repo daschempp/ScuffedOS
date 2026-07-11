@@ -2854,8 +2854,23 @@ class Store:
             row = s.get(Workout, workout_id)
             if row is None:
                 return False
+            day = self._workout_local_day(row.started_at)
             s.delete(row)
-            return True
+            s.flush()
+            # Did that remove the last workout of the day? If so, retract the
+            # workout->habit auto-completion (mirrors set_water lowering below
+            # goal). Manual taps are untouched — auto_complete_linked only
+            # retracts source='auto' rows.
+            local_midnight = datetime.combine(day, time.min).astimezone()
+            start_utc = local_midnight.astimezone(timezone.utc)
+            another = s.scalars(
+                select(Workout.id)
+                .where(Workout.started_at >= start_utc)
+                .where(Workout.started_at < start_utc + timedelta(days=1))
+                .limit(1)
+            ).first()
+        self.auto_complete_linked("workout", day, another is not None)
+        return True
 
     # ---- demo data ----
     def seed_demo(self) -> bool:
