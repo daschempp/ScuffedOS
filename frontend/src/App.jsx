@@ -24,19 +24,28 @@ import { useHabits } from './lib/useHabits.js'
 import { useNutrition } from './lib/useNutrition.js'
 import { useSpeech } from './lib/useSpeech.js'
 
+// Fallback subtitles — honest, non-numeric. Screens with a live branch in
+// liveSub() (home, calendar, habits, nutrition) override these with real counts
+// once their data loads; the rest just describe the screen (no fabricated stats).
 const SCREENS = {
-  home: { title: 'Good morning, Sam', sub: 'Tuesday, June 9 · 4 things need you today' },
-  nutrition: { title: 'Nutrition', sub: '1,690 of 2,100 kcal · 410 to go' },
+  home: { title: 'Home', sub: 'Your day at a glance' },
+  nutrition: { title: 'Nutrition', sub: 'Meals, macros & water' },
   fitness: { title: 'Fitness', sub: 'Recovery, sleep, strain & workouts' },
-  finance: { title: 'Finance', sub: '$129,050 net worth · on budget for June' },
-  memory: { title: 'Second Brain', sub: '142 memories · learning from your notes' },
-  calendar: { title: 'Calendar', sub: '3 events today' },
-  tasks: { title: 'Tasks', sub: '5 open · 2 done today' },
-  habits: { title: 'Habits', sub: '2 of 5 done · keep your streaks alive' },
-  people: { title: 'People', sub: '142 contacts · 2 to reach out to' },
-  email: { title: 'Email', sub: '12 new · 4 need a reply' },
+  finance: { title: 'Finance', sub: 'Accounts, spending & net worth' },
+  memory: { title: 'Second Brain', sub: 'Notes, ideas & saved context' },
+  calendar: { title: 'Calendar', sub: 'Your schedule' },
+  tasks: { title: 'Tasks', sub: 'Your to-dos' },
+  habits: { title: 'Habits', sub: 'Your daily routines' },
+  people: { title: 'People', sub: 'Your contacts' },
+  email: { title: 'Email', sub: 'Your inbox' },
   school: { title: 'School', sub: 'Courses, deadlines & grades' },
   settings: { title: 'Settings', sub: 'Preferences & connections' },
+}
+
+// Time-of-day greeting for the Home header (no stored name to personalize with).
+function homeGreeting() {
+  const h = new Date().getHours()
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'
 }
 
 function Placeholder({ icon, name }) {
@@ -53,7 +62,14 @@ function Placeholder({ icon, name }) {
 
 /* Live header subtitle when real data has loaded; null falls back to the
    static SCREENS sub. */
-function liveSub(screen, calendar, habitsState, nutrition) {
+function liveSub(screen, calendar, habitsState, nutrition, tasks) {
+  if (screen === 'home') {
+    const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+    const openToday = tasks.filter((t) => !t.done && t.group === 'Today').length
+    const events = calendar.todayCount || 0
+    const n = openToday + events
+    return `${today} · ${n} thing${n === 1 ? '' : 's'} on your plate today`
+  }
   if (screen === 'calendar' && calendar.todayCount !== null) {
     const n = calendar.todayCount
     return `${n} event${n === 1 ? '' : 's'} today`
@@ -101,7 +117,8 @@ export function App() {
   }
 
   const meta = SCREENS[screen] || SCREENS.home
-  const sub = liveSub(screen, calendar, habitsState, nutrition) || meta.sub
+  const title = screen === 'home' ? homeGreeting() : meta.title
+  const sub = liveSub(screen, calendar, habitsState, nutrition, tasks) || meta.sub
 
   // Assistant action → refresh whichever domain it touched. Nutrition also
   // refreshes habits: water actions deep-link to 'nutrition' but can flip a
@@ -132,7 +149,7 @@ export function App() {
     <div className="kit">
       <Sidebar active={screen} onNavigate={setScreen} />
       <main className="kit-main">
-        <TopBar title={meta.title} subtitle={sub} recording={recording} onToggleRecord={toggleRecord} />
+        <TopBar title={title} subtitle={sub} recording={recording} onToggleRecord={toggleRecord} />
         <div className="kit-page">
           {recording && (
             <div className="kit-voice" style={{ marginBottom: 'var(--gutter)' }}>

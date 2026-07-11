@@ -1,9 +1,27 @@
 /* Scuffed OS — Dashboard (home overview).
-   Agenda + nutrition rings are live (M3); finance stays sample until Plaid (M6). */
+   Agenda + nutrition rings (M3) and the finance snapshot (M7, Plaid) are all live. */
+import React from 'react'
 import { Button, Card, IconButton, Badge, Stat, ProgressBar, ProgressRing, Checkbox } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
+import { api } from '../lib/api.js'
+
+const money = (n) => (n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }))
 
 export function DashboardScreen({ tasks, onToggleTask, voiceNotes, calendar, nutrition, onNavigate }) {
+  // Live finance snapshot (M7): real balance, month spend, recent transactions.
+  const [finance, setFinance] = React.useState(null)  // { summary, txns } | null while loading
+  React.useEffect(() => {
+    let alive = true
+    Promise.all([
+      api.financeSummary().catch(() => null),
+      api.financeTransactions({ days: 30 }).catch(() => null),
+    ]).then(([summary, txns]) => { if (alive) setFinance({ summary, txns: txns || [] }) })
+    return () => { alive = false }
+  }, [])
+  const summary = finance && finance.summary
+  const financeTxns = (finance && finance.txns) || []
+  // "Connected" once any real money/activity exists; otherwise show the empty state.
+  const financeConnected = !!summary && (summary.balance !== 0 || financeTxns.length > 0)
   // Up-next occurrences double as the agenda; `when` arrives pre-formatted.
   const agenda = ((calendar && calendar.upNext) || []).map((u, i) => ({
     time: (u.when || '').split(' · ')[0],
@@ -18,11 +36,6 @@ export function DashboardScreen({ tasks, onToggleTask, voiceNotes, calendar, nut
   const totals = (day && day.totals) || { kcal: 0, protein_g: 0 }
   const targets = (day && day.targets) || { calories: 2100, protein_g: 160 }
   const water = (day && day.water) || { cups: 0, goal: 8 }
-  const txns = [
-    { title: 'Whole Foods', sub: 'Groceries · 8:42am', amt: '-$64.20', cat: 'var(--clay-600)' },
-    { title: 'Salary', sub: 'Acme Inc · deposit', amt: '+$3,200', cat: 'var(--green-600)', pos: true },
-    { title: 'Spotify', sub: 'Subscriptions', amt: '-$11.99', cat: 'var(--plum-600)' },
-  ]
   return (
     <div className="kit-grid kit-grid--dash">
       <div className="kit-col">
@@ -41,23 +54,33 @@ export function DashboardScreen({ tasks, onToggleTask, voiceNotes, calendar, nut
           </div>
         </Card>
 
-        <Card eyebrow="Sample data — real bank sync lands with Plaid (M6)" title="Finance snapshot" action={<Badge color="green" dot>On budget</Badge>}>
-          <div className="kit-spread" style={{ marginBottom: 18 }}>
-            <Stat label="Balance" value="$4,820" delta="+3.2% this week" trend="up" />
-            <div style={{ flex: 1, maxWidth: 230 }}>
-              <ProgressBar label="June spending" meta="$1,840 / $2,400" value={1840} max={2400} color="clay" />
+        <Card eyebrow={summary ? `Live · ${summary.month}` : 'Finance'} title="Finance snapshot" action={<IconButton label="Open finance" size="sm" onClick={() => onNavigate && onNavigate('finance')}><Icon name="arrow-up-right" /></IconButton>}>
+          {!financeConnected ? (
+            <div className="kit-insight">
+              <div className="kit-insight__icon"><Icon name="wallet" /></div>
+              <p>No bank connected yet. Link an account to see your balance, spending and recent transactions here.</p>
             </div>
-          </div>
-          {txns.map((t, i) => (
-            <div className="kit-row" key={i}>
-              <span className="kit-cat" style={{ background: t.cat }} />
-              <div className="kit-row__main">
-                <p className="kit-row__title">{t.title}</p>
-                <p className="kit-row__sub">{t.sub}</p>
+          ) : (
+            <>
+              <div className="kit-spread" style={{ marginBottom: 18 }}>
+                <Stat label="Balance" value={money(summary.balance)} />
+                <div style={{ flex: 1, maxWidth: 230 }}>
+                  <ProgressBar label={`Spent · ${summary.month}`} meta={money(summary.spent_month)} value={summary.spent_month} max={Math.max(summary.spent_month, summary.income_month, 1)} color="clay" />
+                </div>
               </div>
-              <span className={`kit-row__amt ${t.pos ? 'kit-amt--pos' : 'kit-amt--neg'}`}>{t.amt}</span>
-            </div>
-          ))}
+              {financeTxns.slice(0, 3).map((t) => (
+                <div className="kit-row" key={t.id}>
+                  <span className="kit-cat" style={{ background: t.positive ? 'var(--green-600)' : 'var(--clay-600)' }} />
+                  <div className="kit-row__main">
+                    <p className="kit-row__title">{t.merchant_name || t.name}</p>
+                    <p className="kit-row__sub">{t.category} · {t.when}</p>
+                  </div>
+                  <span className={`kit-row__amt ${t.positive ? 'kit-amt--pos' : 'kit-amt--neg'}`}>{t.positive ? '+' : '−'}{money(Math.abs(t.amount))}</span>
+                </div>
+              ))}
+              {financeTxns.length === 0 && <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>No transactions in the last 30 days.</p>}
+            </>
+          )}
         </Card>
       </div>
 

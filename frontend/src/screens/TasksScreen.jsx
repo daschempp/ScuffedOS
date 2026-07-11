@@ -89,7 +89,7 @@ export function TasksScreen({ tasks, onToggle, onUpdate, onAdd, onRefresh }) {
           <Card title="Progress" variant="sunken">
             <div className="kit-spread" style={{ marginBottom: 14 }}>
               <Stat label="Open" value={openCount} />
-              <Stat label="Done today" value={doneToday} trend="up" delta="+2" />
+              <Stat label="Done today" value={doneToday} />
             </div>
             <ProgressBar label="Today" value={doneToday} max={doneToday + tasks.filter((t) => t.group === 'Today' && !t.done).length} color="green" meta={`${doneToday} done`} />
           </Card>
