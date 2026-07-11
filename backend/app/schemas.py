@@ -30,7 +30,7 @@ HabitLink = Literal["water", "workout"]
 # ---- Assistant ------------------------------------------------------------
 # The deep-link vocabulary (review R8) — every screen the sidebar knows.
 Screen = Literal["home", "tasks", "calendar", "habits", "nutrition", "fitness",
-                 "finance", "people", "email", "memory", "settings"]
+                 "finance", "people", "email", "school", "memory", "settings"]
 
 
 class ChatRequest(BaseModel):
@@ -235,7 +235,10 @@ class EventUpdate(BaseModel):
 
 
 class UpNextItem(BaseModel):
-    id: int
+    # int for local rows; "moodle:<id>"/"finance:<id>" for read-time projections
+    # (mirrors EventOccurrence.id) — an int-only id 500s once a real bill/deadline
+    # lands in the 14-day window.
+    id: int | str
     title: str
     when: str  # derived: "Now · 9:00am–10:30am" / "Tomorrow 4:00pm · Oak Street"
     tint: Tint

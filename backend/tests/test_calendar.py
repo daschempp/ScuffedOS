@@ -197,6 +197,23 @@ def test_up_next_orders_ongoing_first_and_respects_limit(client):
     assert [i["title"] for i in limited] == ["Ongoing now"]
 
 
+def test_up_next_includes_projected_moodle_deadline_with_string_id(client):
+    """Regression: a read-time projection (Moodle deadline / finance bill) carries
+    a string id like 'moodle:<id>'. up-next must serialize it, not 500 on a schema
+    that only allows int ids (as /events already does)."""
+    from app.providers.base import NormalizedDeadline
+    from app.store import store
+
+    due = _now() + timedelta(days=2)
+    store.upsert_moodle_deadline(NormalizedDeadline(
+        source="moodle", source_id="777", course_id="72",
+        name="Essay is due", module_name="assign", event_type="due", due_at=due,
+    ))
+    res = client.get("/api/calendar/up-next")
+    assert res.status_code == 200, res.text
+    assert "moodle:777" in [i["id"] for i in res.json()]
+
+
 def test_patch_rejects_end_at_or_before_start(client):
     start = _now() + timedelta(days=1)
     ev = client.post("/api/calendar/events", json={

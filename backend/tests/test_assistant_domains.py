@@ -34,6 +34,18 @@ class FakeFood:
                  "carbs_g": 20.0, "fat_g": 9.0}]
 
 
+def test_moodle_tool_through_chat_returns_school_action(client):
+    """Regression: a Moodle tool emits an action card with screen='school'.
+    The chat response model must accept it — otherwise /chat 500s and the
+    stored card poisons every later /conversation reload."""
+    llm.configure(FakeLLM(
+        tool_turn(tool_block("get_courses", {})),
+        text_turn("Here are your courses."),
+    ))
+    body = chat(client, "what courses am I in?")
+    assert body["actions"][0]["screen"] == "school"
+
+
 def test_create_event_tool_creates_real_event(client):
     friday = _next_friday()
     llm.configure(FakeLLM(
