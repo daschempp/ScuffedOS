@@ -33,8 +33,10 @@ def test_all_six_fitness_tools_are_in_the_definitions():
 
 def test_persona_presents_fitness_as_live_and_composable():
     persona = assistant._PERSONA.lower()
-    # Fitness is no longer lumped with the read-only finance panel...
-    assert "finance panel is read-only" in persona or "finance is read-only" in persona
+    # Finance is live from M7 — the persona must NOT still call it read-only or sample.
+    assert "read-only" not in persona and "sample data" not in persona
+    # Finance writes exist but are local budgets only (they never move real money).
+    assert "never move real money" in persona
     # ...and the model is told it can act on fitness by composing a calendar/task write.
     assert "compose" in persona or "create_event" in persona
     # And get_fitness_today's description nudges toward acting, not just reading.

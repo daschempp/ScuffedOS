@@ -1,6 +1,6 @@
 # Email — Architecture
 
-> Status: **planned** (no backend yet) · Last updated: 2026-06-09 · Owner: _TBD_
+> Status: **built** (M5 — live Gmail sync, AI triage + draft) · Last updated: 2026-07-11 · Owner: _TBD_
 >
 > Part of the [backend overview](backend-overview.md). AI triage + draft replies over a
 > synced inbox — the most LLM-heavy surface after the assistant.
@@ -12,9 +12,11 @@ replies** in selectable tones. Serve the two-pane inbox/reading UI and support a
 
 ## Current state
 
-Not implemented in the backend. `frontend/src/screens/EmailScreen.jsx` renders **sample
-emails — including pre-baked AI summaries and drafts — held in the component**. This doc
-describes the backend function that should own it.
+Built and live (M5). `app/routers/email.py` serves the triaged inbox, message read, sync,
+flags, labels, send and AI draft; `app/email_sync.py` runs the background Gmail sync loop,
+`app/email_triage.py` categorizes + summarizes each message on sync, and `app/email_draft.py`
+generates replies — all over `app/providers/google.py`. Bodies are never stored; they're
+fetched live on demand. `frontend/src/screens/EmailScreen.jsx` renders the live synced inbox.
 
 ## Data model (from the prototype)
 

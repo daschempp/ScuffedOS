@@ -1,6 +1,6 @@
 # Fitness — Architecture
 
-> Status: **planned** (no backend yet) · Last updated: 2026-06-09 · Owner: _TBD_
+> Status: **built** (M4 — live WHOOP sync) · Last updated: 2026-07-11 · Owner: _TBD_
 >
 > Part of the [backend overview](backend-overview.md). Owns recovery/strain/sleep
 > snapshots, vitals, and the workout log — largely **ingested from Whoop**.
@@ -13,9 +13,11 @@ from an external wearable (Whoop), not user-entered.
 
 ## Current state
 
-Not implemented in the backend. `frontend/src/screens/FitnessScreen.jsx` renders
-**sample vitals, workouts, and a weekly chart held in the component** with a "Synced with
-Whoop" eyebrow. This doc describes the backend function that should own it.
+Built and live (M4). `app/routers/fitness.py`, `app/fitness_sync.py` and
+`app/providers/whoop.py` own the WHOOP OAuth + background sync of recovery/sleep/strain
+snapshots, vitals and workouts (alongside manually-logged workouts).
+`frontend/src/screens/FitnessScreen.jsx` renders today's rings, the vitals panel and the
+weekly strain trend from the live store.
 
 ## Data model (from the prototype)
 
