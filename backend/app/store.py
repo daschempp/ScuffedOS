@@ -56,6 +56,7 @@ from .models import (
     FinanceTransaction,
     Habit,
     HabitCompletion,
+    Insight,
     Meal,
     Memory,
     MoodleAnnouncement,
@@ -460,6 +461,20 @@ def _snapshot_dict(d: DailySnapshot) -> dict:
         "metrics_json": d.metrics_json or {},
         "created_at": aware_utc(d.created_at),
         "updated_at": aware_utc(d.updated_at),
+    }
+
+
+def _insight_dict(i: Insight) -> dict:
+    return {
+        "id": i.id,
+        "day": i.day,
+        "domain": i.domain,
+        "code": i.code,
+        "tone": i.tone,
+        "headline": i.headline,
+        "body": i.body,
+        "signals": i.signals_json or {},
+        "source": i.source,
     }
 
 
@@ -3510,6 +3525,80 @@ class Store:
             "avg_strain": round(sum(logged) / len(logged), 1) if logged else 0,
             "peak_day": peak["date"] if logged else None,
         }
+
+    # ---- insights (derived; cached by the engine, read here) ----
+    def list_snapshots(self, end_day: date, days_back: int = 7) -> list[dict]:
+        """One snapshot dict per day in [end_day - days_back, end_day], oldest
+        first, owner-scoped, 'whoop' source preferred (matches _snapshot_row).
+        The rules' baseline window reads through this."""
+        from .config import settings
+
+        start = end_day - timedelta(days=days_back)
+        precedence = case((DailySnapshot.source == "whoop", 0), else_=1)
+        with self._session() as s:
+            rows = s.scalars(
+                select(DailySnapshot)
+                .where(DailySnapshot.owner == settings.owner)
+                .where(DailySnapshot.day >= start)
+                .where(DailySnapshot.day <= end_day)
+                .order_by(DailySnapshot.day.asc(), precedence.asc(), DailySnapshot.id.desc())
+            ).all()
+        by_day: dict[date, dict] = {}
+        for r in rows:
+            if r.day not in by_day:            # first per day == preferred source
+                by_day[r.day] = _snapshot_dict(r)
+        return [by_day[d] for d in sorted(by_day)]
+
+    @_retry_integrity
+    def upsert_insight(self, *, day: date, domain: str, code: str, tone: str,
+                       headline: str, body: str, signals: dict, source: str) -> dict:
+        """Get-or-create by (owner, domain, day, code); regeneration replaces."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            row = s.scalars(
+                select(Insight)
+                .where(Insight.owner == settings.owner)
+                .where(Insight.domain == domain)
+                .where(Insight.day == day)
+                .where(Insight.code == code)
+            ).first()
+            if row is None:
+                row = Insight(owner=settings.owner, domain=domain, day=day, code=code)
+                s.add(row)
+            row.tone = tone
+            row.headline = headline
+            row.body = body
+            row.signals_json = signals or {}
+            row.source = source
+            s.flush()
+            return _insight_dict(row)
+
+    def list_insights(self, day: date | None = None, domain: str = "fitness") -> list[dict]:
+        """Cached cards for a day (default today), insertion order (anchor first)."""
+        from .config import settings
+
+        day = day or _local_today()
+        with self._session() as s:
+            rows = s.scalars(
+                select(Insight)
+                .where(Insight.owner == settings.owner)
+                .where(Insight.domain == domain)
+                .where(Insight.day == day)
+                .order_by(Insight.id.asc())
+            ).all()
+            return [_insight_dict(r) for r in rows]
+
+    def has_insight(self, day: date, domain: str = "fitness") -> bool:
+        from .config import settings
+
+        with self._session() as s:
+            return s.scalars(
+                select(Insight.id)
+                .where(Insight.owner == settings.owner)
+                .where(Insight.domain == domain)
+                .where(Insight.day == day)
+            ).first() is not None
 
     # ---- workouts ----
     def _workout_local_day(self, started_at: datetime) -> date:

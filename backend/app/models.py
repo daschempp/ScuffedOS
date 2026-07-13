@@ -325,6 +325,32 @@ class Workout(Base):
     )
 
 
+class Insight(Base):
+    """Derived coaching insight for a day+domain (fitness slice 1). One row per
+    (owner, domain, day, code) — regeneration upserts. `body` is LLM-phrased from
+    the rule's facts, or rule-templated when the LLM is unavailable (`source`)."""
+
+    __tablename__ = "insights"
+    __table_args__ = (
+        UniqueConstraint("owner", "domain", "day", "code", name="uq_insights_owner_domain_day_code"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    day: Mapped[date] = mapped_column(Date, index=True)
+    domain: Mapped[str] = mapped_column(String(16), index=True)      # 'fitness' this slice
+    code: Mapped[str] = mapped_column(String(40))                    # the rule/signal id
+    tone: Mapped[str] = mapped_column(String(12))                    # positive|neutral|caution
+    headline: Mapped[str] = mapped_column(String(160))
+    body: Mapped[str] = mapped_column(Text)
+    signals_json: Mapped[dict] = mapped_column(JSONField, default=dict)
+    source: Mapped[str] = mapped_column(String(8))                   # 'llm' | 'rules'
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class Email(Base):
     """A synced email (M5). Keyed (owner, source, source_id) = ('google', gmail id)
     so re-sync upserts idempotently. Triage output (category + summary_json) is
