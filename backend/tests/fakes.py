@@ -49,15 +49,23 @@ class _FakeStream:
 class FakeLLM:
     """Plays back a script of turns; records every request it was sent."""
 
-    def __init__(self, *turns):
+    def __init__(self, *turns, completions=None):
         self.turns = list(turns)
+        self.completions = list(completions or [])
         self.calls: list[dict] = []
+        self.complete_calls: list[dict] = []
 
     def stream(self, **kwargs):
         self.calls.append(kwargs)
         if not self.turns:
             raise AssertionError("FakeLLM script exhausted")
         return _FakeStream(self.turns.pop(0))
+
+    def complete(self, **kwargs):
+        self.complete_calls.append(kwargs)
+        if not self.completions:
+            raise AssertionError("FakeLLM has no scripted completions")
+        return self.completions.pop(0)
 
 
 class FakeMem0:
