@@ -174,6 +174,14 @@ def tick(now: datetime | None = None) -> int:
             logger.exception("sync failed for %s", provider.name)
         except Exception:
             logger.exception("sync failed for %s", provider.name)
+    # Derived insights: generate today's once (gated to ~1 LLM call/day). A
+    # generation failure must never crash the sync — log and continue.
+    try:
+        from .insights import engine as insights_engine
+
+        insights_engine.maybe_generate_today()
+    except Exception:
+        logger.exception("insight generation failed (continuing)")
     return total
 
 
