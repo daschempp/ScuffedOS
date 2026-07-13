@@ -19,6 +19,7 @@ TREND_MARGIN = 10            # recovery pct-points vs baseline to call a trend
 STRAIN_HIGH = 14.0          # day_strain (0-21) considered a hard day
 RECOVERY_LOW = 50           # recovery below which high strain = overreaching
 SLEEP_LOW_PCT = 70          # sleep_quality_pct below this = short sleep
+SHORT_SLEEP_HRS = 6.0        # a night below this counts toward a short-sleep streak
 HRV_DROP_FRAC = 0.15        # HRV this fraction below baseline = suppressed
 RHR_ELEVATION = 5           # resting_hr bpm above baseline = elevated
 
@@ -101,13 +102,22 @@ def _strain_recovery_balance(ctx: Ctx) -> Signal | None:
 def _sleep_performance(ctx: Ctx) -> Signal | None:
     sq = ctx.val("sleep_quality_pct")
     hrs = ctx.val("sleep_hours")
-    if sq is None or sq >= SLEEP_LOW_PCT:
+    nights = ([ctx.today] if ctx.today else []) + ctx.history
+    short_nights = sum(
+        1 for n in nights
+        if n.get("sleep_hours") is not None and n["sleep_hours"] < SHORT_SLEEP_HRS
+    )
+    low_quality = sq is not None and sq < SLEEP_LOW_PCT
+    if not low_quality and short_nights < 2:
         return None
-    hrs_txt = f" ({hrs} h)" if hrs is not None else ""
-    return Signal("sleep_performance", "caution",
-                  {"sleep_quality_pct": sq, "sleep_hours": hrs},
-                  "Sleep came up short",
-                  f"Sleep quality was {sq}%{hrs_txt} last night — prioritise an earlier night.")
+    facts = {"sleep_quality_pct": sq, "sleep_hours": hrs, "short_nights": short_nights}
+    if low_quality:
+        hrs_txt = f" ({hrs} h)" if hrs is not None else ""
+        body = f"Sleep quality was {sq}%{hrs_txt} last night — prioritise an earlier night."
+    else:
+        body = (f"That's {short_nights} short nights recently — sleep debt is building. "
+                f"Prioritise an earlier night.")
+    return Signal("sleep_performance", "caution", facts, "Sleep came up short", body)
 
 
 def _hrv_trend(ctx: Ctx) -> Signal | None:

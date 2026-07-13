@@ -62,3 +62,44 @@ def test_rhr_elevation_vs_baseline():
 
 def test_empty_day_produces_nothing():
     assert rules.run_rules(_ctx(None)) == []
+
+
+def test_hrv_suppressed_is_caution():
+    history = [{"hrv_ms": 60.0}, {"hrv_ms": 62.0}, {"hrv_ms": 58.0}]
+    sigs = rules.run_rules(_ctx({"recovery_pct": 60, "hrv_ms": 40.0}, history))
+    hrv = next(s for s in sigs if s.code == "hrv_trend")
+    assert hrv.tone == "caution"
+
+
+def test_hrv_strong_is_positive():
+    history = [{"hrv_ms": 50.0}, {"hrv_ms": 52.0}, {"hrv_ms": 48.0}]
+    sigs = rules.run_rules(_ctx({"recovery_pct": 60, "hrv_ms": 70.0}, history))
+    hrv = next(s for s in sigs if s.code == "hrv_trend")
+    assert hrv.tone == "positive"
+
+
+def test_recovery_yellow_is_neutral():
+    band = next(s for s in rules.run_rules(_ctx({"recovery_pct": 50}))
+                if s.code == "recovery_band")
+    assert band.tone == "neutral"
+
+
+def test_recovery_trend_up_is_positive():
+    history = [{"recovery_pct": 55}, {"recovery_pct": 58}, {"recovery_pct": 57}]
+    sigs = rules.run_rules(_ctx({"recovery_pct": 80}, history))
+    trend = next(s for s in sigs if s.code == "recovery_trend")
+    assert trend.tone == "positive"
+
+
+def test_primed_underused_is_positive():
+    sigs = rules.run_rules(_ctx({"recovery_pct": 75, "day_strain": 5.0}))
+    bal = next(s for s in sigs if s.code == "strain_recovery_balance")
+    assert bal.tone == "positive"
+
+
+def test_sleep_streak_without_low_quality_is_caution():
+    history = [{"sleep_hours": 5.2}, {"recovery_pct": 60}]
+    sigs = rules.run_rules(_ctx({"recovery_pct": 60, "sleep_hours": 5.5}, history))
+    sleep = next(s for s in sigs if s.code == "sleep_performance")
+    assert sleep.tone == "caution"
+    assert sleep.facts["short_nights"] >= 2
