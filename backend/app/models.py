@@ -788,3 +788,112 @@ class FinanceInvestmentTransaction(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+# ---- People / CRM (M10 s1) -------------------------------------------------
+class Person(Base):
+    """A contact (M10 s1). `source='macos_contacts'` rows are synced one-way from
+    the local AddressBook and keyed (owner, source, source_id) for idempotent
+    upsert; `source='manual'` rows are user-created. source_id is the already-
+    hashed, namespaced id from the reader (contract: Source ID namespacing) — the
+    model just stores it.
+
+    Ownership split (contract: Sync-owned vs CRM-native): sync writes ONLY the
+    sync-owned identity fields (names, org, phones/emails, photo_key/has_photo,
+    meta); the CRM-native block (relationship .. last_contacted_at) is
+    ScuffedOS-owned and never touched by sync. `removed_from_source_at`
+    soft-deletes a contact that vanished from AddressBook (preserving its CRM
+    data) and is cleared on any re-upsert (resurrection).
+
+    Photos: `photo_key` is the opaque, RELATIVE key persisted here (contract:
+    Photo storage); the extracted bytes live on the backend host's App Support
+    filesystem, never in this table."""
+
+    __tablename__ = "people"
+    __table_args__ = (
+        UniqueConstraint("owner", "source", "source_id",
+                         name="uq_people_owner_source_source_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    source: Mapped[str] = mapped_column(String(16), index=True)        # 'macos_contacts' | 'manual'
+    source_id: Mapped[str] = mapped_column(String(128), index=True)    # hashed, namespaced (reader)
+    display_name: Mapped[str] = mapped_column(Text, default="")
+    first_name: Mapped[str] = mapped_column(Text, default="")
+    last_name: Mapped[str] = mapped_column(Text, default="")
+    nickname: Mapped[str] = mapped_column(Text, default="")
+    organization: Mapped[str] = mapped_column(Text, default="")
+    job_title: Mapped[str] = mapped_column(Text, default="")
+    phones: Mapped[list] = mapped_column(JSONField, default=list)      # [{value, label, normalized}]
+    emails: Mapped[list] = mapped_column(JSONField, default=list)      # [{value, label, normalized}]
+    photo_key: Mapped[str | None] = mapped_column(Text)               # opaque, RELATIVE (contract)
+    has_photo: Mapped[bool] = mapped_column(default=False)
+    # ---- CRM-native (ScuffedOS-owned; sync NEVER writes these) ----
+    relationship: Mapped[str | None] = mapped_column(String(32))
+    relationship_strength: Mapped[int | None] = mapped_column()
+    notes: Mapped[str | None] = mapped_column(Text)
+    pinned: Mapped[bool] = mapped_column(default=False)
+    last_contacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    removed_from_source_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    meta: Mapped[dict] = mapped_column(JSONField, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
+class PersonHandle(Base):
+    """Normalized handle -> person index for resolve_handle (M10 s1). One row per
+    (person_id, kind, value); `value` is the canonical key from app.identity and
+    `kind` is 'phone' | 'email' | 'short'. Kept across soft-delete so historical
+    messages still resolve to a removed contact. A single handle may map to many
+    people (shared family/household numbers) -> resolve_handle returns a list."""
+
+    __tablename__ = "person_handle"
+    __table_args__ = (
+        UniqueConstraint("person_id", "kind", "value",
+                         name="uq_person_handle_person_kind_value"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64), default="me", index=True)
+    person_id: Mapped[int] = mapped_column(
+        ForeignKey("people.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16))               # 'phone' | 'email' | 'short'
+    value: Mapped[str] = mapped_column(String(320), index=True)  # normalized key
+    possible: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ContactsSyncState(Base):
+    """One row per owner: the Contacts connector's consent + lifecycle record
+    (contract: Consent & lifecycle). `enabled` is APP CONSENT and defaults OFF —
+    no probing, no background sync, and no reads happen until the user explicitly
+    connects. `access` (FDA state) is tracked SEPARATELY from consent.
+    `normalization_region` is the region persisted at enable/first-sync used to
+    canonicalize handles; a later system-locale change does NOT retroactively
+    alter it (contract: Region persistence)."""
+
+    __tablename__ = "contacts_sync_state"
+    __table_args__ = (
+        UniqueConstraint("owner", name="uq_contacts_sync_state_owner"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str] = mapped_column(String(64))              # unique via constraint above
+    # app consent (default OFF); status/access are independent
+    enabled: Mapped[bool] = mapped_column(default=False)
+    # 'disabled' | 'access_denied' | 'ready' | 'syncing' | 'stale' | 'error'
+    status: Mapped[str] = mapped_column(String(16), default="disabled")
+    # 'granted' | 'denied' | 'unknown'
+    access: Mapped[str] = mapped_column(String(16), default="unknown")
+    normalization_region: Mapped[str | None] = mapped_column(String(8))
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    enabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

@@ -37,6 +37,7 @@ ALL_TABLES = {
     "finance_items", "finance_accounts", "finance_transactions",
     "finance_securities", "finance_holdings", "finance_budgets",
     "finance_recurring", "finance_liabilities", "finance_investment_transactions",
+    "people", "person_handle", "contacts_sync_state",
 }
 
 
@@ -80,6 +81,21 @@ def test_upgrade_head_builds_full_schema(alembic_cfg, tmp_path):
     notification_cols = {c["name"] for c in inspect(engine).get_columns("moodle_notifications")}
     assert {"owner", "source", "source_id", "subject", "full_message",
             "context_url", "created_at", "read", "meta"} <= notification_cols
+
+    people_cols = {c["name"] for c in inspect(engine).get_columns("people")}
+    assert {"owner", "source", "source_id", "display_name", "first_name",
+            "last_name", "nickname", "organization", "job_title", "phones",
+            "emails", "photo_key", "has_photo", "relationship",
+            "relationship_strength", "notes", "pinned", "last_contacted_at",
+            "removed_from_source_at", "meta", "created_at", "updated_at"} <= people_cols
+
+    handle_cols = {c["name"] for c in inspect(engine).get_columns("person_handle")}
+    assert {"owner", "person_id", "kind", "value", "possible", "created_at"} <= handle_cols
+
+    state_cols = {c["name"] for c in inspect(engine).get_columns("contacts_sync_state")}
+    assert {"owner", "enabled", "status", "access", "normalization_region",
+            "last_sync_at", "last_error", "enabled_at",
+            "created_at", "updated_at"} <= state_cols
     engine.dispose()
 
 
