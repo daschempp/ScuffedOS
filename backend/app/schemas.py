@@ -616,6 +616,23 @@ class FitnessWeek(BaseModel):
     peak_day: Day | None
 
 
+class InsightCard(BaseModel):
+    id: int
+    domain: str
+    code: str
+    tone: str            # positive | neutral | caution
+    headline: str
+    body: str
+    signals: dict
+    source: str          # llm | rules
+
+
+class InsightsDay(BaseModel):
+    date: Day
+    has_data: bool
+    cards: List[InsightCard]
+
+
 # ---- Email schemas (M5) -----------------------------------------------------
 # EmailOut is the inbox list item and carries NO body (privacy: bodies are
 # never persisted and never travel in the list). EmailDetail adds the live,
