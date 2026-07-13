@@ -28,12 +28,15 @@ def generate_for_day(day: date) -> int:
     signals = rules_mod.run_rules(rules_mod.Ctx(day=day, today=today, history=history))
     facts_by_code = {s.code: s.facts for s in signals}
     cards = phraser.phrase(signals)
+    fired_codes = set()
     for c in cards:
         store.upsert_insight(
             day=day, domain=DOMAIN, code=c["code"], tone=c["tone"],
             headline=c["headline"], body=c["body"],
             signals=facts_by_code.get(c["code"], {}), source=c["source"],
         )
+        fired_codes.add(c["code"])
+    store.prune_insights(day, DOMAIN, fired_codes)
     return len(cards)
 
 

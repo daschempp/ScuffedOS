@@ -44,3 +44,18 @@ def test_maybe_generate_runs_once_then_skips(client):
     llm.configure(None)
     assert engine.maybe_generate_today() >= 1
     assert engine.maybe_generate_today() == 0      # already has today's insight
+
+
+def test_regenerate_prunes_cards_that_stopped_firing(client):
+    llm.configure(None)
+    # Morning: green recovery + low strain -> strain_recovery_balance (positive) fires.
+    store.upsert_snapshot(NormalizedSnapshot(source="whoop", day=TODAY, recovery_pct=75, day_strain=5.0))
+    engine.generate_for_day(TODAY)
+    codes1 = {c["code"] for c in store.list_insights(TODAY)}
+    assert "strain_recovery_balance" in codes1
+    # Later: strain has climbed past the "primed & underused" threshold -> that signal no longer fires.
+    store.upsert_snapshot(NormalizedSnapshot(source="whoop", day=TODAY, day_strain=15.0))
+    engine.generate_for_day(TODAY)
+    codes2 = {c["code"] for c in store.list_insights(TODAY)}
+    assert "strain_recovery_balance" not in codes2   # pruned, not left stale
+    assert "recovery_band" in codes2                 # anchor still present

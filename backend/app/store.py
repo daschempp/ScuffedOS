@@ -3600,6 +3600,27 @@ class Store:
                 .where(Insight.day == day)
             ).first() is not None
 
+    @_retry_integrity
+    def prune_insights(self, day: date, domain: str, keep_codes) -> int:
+        """Delete the day's insight rows (owner+domain) whose code isn't in
+        keep_codes. Used by regeneration to drop signals that stopped firing so
+        a manual refresh never leaves a stale card behind."""
+        from .config import settings
+
+        with self._session() as s, s.begin():
+            rows = s.scalars(
+                select(Insight)
+                .where(Insight.owner == settings.owner)
+                .where(Insight.domain == domain)
+                .where(Insight.day == day)
+            ).all()
+            removed = 0
+            for r in rows:
+                if r.code not in keep_codes:
+                    s.delete(r)
+                    removed += 1
+            return removed
+
     # ---- workouts ----
     def _workout_local_day(self, started_at: datetime) -> date:
         """The calendar day a workout belongs to = its start in local tz."""

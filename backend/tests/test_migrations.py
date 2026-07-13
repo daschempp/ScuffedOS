@@ -31,7 +31,7 @@ ALL_TABLES = {
     "tasks", "memories", "conversations", "conversation_messages",
     "task_reminders", "events", "habits", "habit_completions",
     "meals", "water_days", "nutrition_targets",
-    "provider_accounts", "daily_snapshots", "workouts", "emails",
+    "provider_accounts", "daily_snapshots", "workouts", "insights", "emails",
     "moodle_courses", "moodle_deadlines", "moodle_assignments",
     "moodle_grades", "moodle_announcements", "moodle_notifications",
     "finance_items", "finance_accounts", "finance_transactions",
