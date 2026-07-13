@@ -14,7 +14,7 @@ Related brainstorm decisions are recorded in §2. The broader messaging arc (rea
 - Sync the user's **macOS Contacts** (AddressBook) into `Person` records, keyed by source so a re-sync is idempotent and **never clobbers manual edits**.
 - Establish the **Full Disk Access** connect flow (a new `local` connector kind) — the same grant the iMessage slice reuses.
 - Ship a `resolve_handle(phone_or_email) -> Person | None` store seam for the next slice.
-- Everything stays **on-device**: Contacts data lives only in the app-managed local Postgres; nothing leaves the machine.
+- Contacts are read **locally and read-only**; structured contact fields are persisted to the **configured PostgreSQL database**, which may run locally or on a **remote/self-hosted** server (when remote, contact data travels over the network to it; TLS required for non-loopback). Extracted photos stay on the backend host. No Contacts data is sent to AI providers or third-party Contacts APIs in this slice. `auth_kind="local"` describes the source/authorization mechanism, not data residency.
 
 ### Non-goals (this slice)
 - No iMessage / `chat.db` reads (Slice 2).
@@ -51,7 +51,7 @@ ScuffedOS.app (Tauri, signed)  ──spawns──▶  scuffedos-backend (Python 
                                    providers/macos_contacts.py  ──▶  contacts_sync.py  ──▶  store.upsert_person(...)
                                                │                                              │
                                                ▼                                              ▼
-                                       identity.py (canonicalize                     local Postgres  (Person rows)
+                                       identity.py (canonicalize            configured PostgreSQL (Person rows; may be remote)
                                         phones/emails)                                        │
                                                                                               ▼
                                    routers/people.py  ──▶  frontend CRMScreen (real data)
@@ -193,7 +193,7 @@ Confirmed by adversarial verification (CONFIRMED): a **signed, in-bundle Python 
 
 ## 8. Privacy
 
-Contacts data (names, phones, emails, photos) persists **only in the app-managed local Postgres**; no network egress in this slice. This is a **new local-data-access surface**, so the canonical privacy policy (`docs/privacy-policy.md`) gains a "macOS Contacts (local, on-device)" disclosure, mirrored via the **`publish-privacy-policy`** skill (gist + corp site). Full Disk Access rationale is documented user-facing in the connect card copy.
+Contacts are **read locally and read-only** from the macOS AddressBook; structured contact fields (names, phones, emails, organization) are persisted to the **configured PostgreSQL database, which may run locally or on a remote/self-hosted server** — when remote, that data is transmitted over the network (**TLS required** for non-loopback connections; connection strings/credentials are **never logged**). Extracted contact **photos remain on the backend host** under App Support (not in PostgreSQL). No Contacts data is sent to AI providers or third-party Contacts APIs in this slice. Because imported Contacts contain **third-party personal information**, the canonical privacy policy (`docs/privacy-policy.md`) gains a "macOS Contacts (local read → configured PostgreSQL)" disclosure covering fields read, remote transmission, TLS, local photo storage, explicit app consent + FDA, and revocation/disconnect/deletion/retention/stale-data behavior — mirrored via the **`publish-privacy-policy`** skill. Contacts import is **disabled by default** and only reads/persists after the user explicitly enables it.
 
 ---
 
@@ -210,7 +210,7 @@ Mirror the Moodle/Email 6–8 file set. No real Mac files touched — everything
 - `test_people_api.py`, `test_people_schema.py` — endpoints + Pydantic.
 - `test_connectors*.py` — `macos_contacts` catalog entry, `auth_kind="local"`, `access` field.
 - `0010` migration test.
-- **FDA responsible-process check** is a manual on-device acceptance step on the signed build (§5), not a unit test.
+- **FDA responsible-process check** is a manual acceptance step on the signed build, run on the target Mac (§5), not a unit test.
 
 Report the full suite pass count after each task (repo rule). Baseline ≈ 699 tests.
 
@@ -244,7 +244,7 @@ Report the full suite pass count after each task (repo rule). Baseline ≈ 699 t
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| FDA responsible-process chain fails on the real bundle | low (CONFIRMED) | On-device `launchctl procinfo` acceptance check; keep sidecar in-bundle, no launchd, no disclaim |
+| FDA responsible-process chain fails on the real bundle | low (CONFIRMED) | `launchctl procinfo` acceptance check on the target Mac; keep sidecar in-bundle, no launchd, no disclaim |
 | macOS 26 schema drift vs. verified 13–15 dumps | low–med | Runtime `Z_ENT` discovery + `PRAGMA table_info` gating; skip-and-log unknown tables |
 | Wrong `default_region` silently mis-canonicalizes phones | med | Seed region from OS locale; `is_possible_number` low-confidence flag; same region both sides |
 | Photo format reverse-engineered/undocumented | med | Every step degrades to the initials fallback; a photo failure never fails the import |
