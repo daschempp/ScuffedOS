@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{Manager, RunEvent, State, WindowEvent};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -76,6 +77,49 @@ fn wait_for_health(port: u16) -> bool {
         std::thread::sleep(Duration::from_millis(200));
     }
     false
+}
+
+/// Map an incoming `scuffedos://oauth/callback?provider=<p>&<oauth query>` deep
+/// link to the loopback OAuth callback the backend serves:
+/// `http://127.0.0.1:{port}/auth/{p}/callback?<oauth query minus provider>`.
+///
+/// Returns `None` for anything that is not our exact scheme/host/path, or whose
+/// `provider` is missing/empty/not lowercase-ascii (a path-injection guard — the
+/// segment is interpolated into the URL path). The backend's one-time CSRF state
+/// check is the real authorization gate; this is defense in depth.
+fn forward_target_url(deep_link: &str, port: u16) -> Option<String> {
+    let url = reqwest::Url::parse(deep_link).ok()?;
+    if url.scheme() != "scuffedos" {
+        return None;
+    }
+    // `scuffedos://oauth/callback` parses to host "oauth", path "/callback".
+    if url.host_str() != Some("oauth") || url.path() != "/callback" {
+        return None;
+    }
+
+    let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
+    let provider = pairs
+        .iter()
+        .find(|(k, _)| k == "provider")
+        .map(|(_, v)| v.clone())
+        .filter(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase()))?;
+
+    let mut target =
+        reqwest::Url::parse(&format!("http://127.0.0.1:{port}/auth/{provider}/callback")).ok()?;
+    {
+        let mut qp = target.query_pairs_mut();
+        for (k, v) in pairs.iter().filter(|(k, _)| k != "provider") {
+            qp.append_pair(k, v);
+        }
+    }
+    // Drop the trailing "?" url writes when there are no pairs.
+    Some(match target.query() {
+        Some("") | None => {
+            target.set_query(None);
+            target.to_string()
+        }
+        Some(_) => target.to_string(),
+    })
 }
 
 /// Resolve ~/Library/Application Support/ScuffedOS/logs/<name>.
@@ -194,6 +238,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![api_port, quit_app])
         .setup(|app| {
             let port = free_port();
@@ -213,6 +258,48 @@ pub fn run() {
 
             let child = Arc::new(Mutex::new(Some(child)));
             app.manage(Backend { child: child.clone(), port });
+
+            // Forward WHOOP's scuffedos:// OAuth callback into the loopback
+            // callback the backend serves. The deep-link plugin delivers these
+            // here, including the cold-start launch URL (macOS buffers it and
+            // replays it to on_open_url). WHOOP needs a public https redirect
+            // (its dashboard rejects loopback), so the public bounce page hops
+            // the code back in via this scheme. The backend's one-time CSRF
+            // state check rejects any forged deep link, so firing for any
+            // incoming scuffedos:// URL is safe.
+            let dl_handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                let port = dl_handle.state::<Backend>().port;
+                for url in event.urls() {
+                    match forward_target_url(url.as_str(), port) {
+                        Some(target) => {
+                            let h = dl_handle.clone();
+                            std::thread::spawn(move || {
+                                // Gate on backend health BEFORE the single
+                                // forward: on a cold start the sidecar may not be
+                                // listening yet. The state token is one-time, so
+                                // we must NOT retry the GET itself — wait for
+                                // health, then fire exactly once. reqwest::blocking
+                                // must run off the UI/tokio thread (mirrors the
+                                // health-gate worker at lib.rs:239).
+                                if !wait_for_health(h.state::<Backend>().port) {
+                                    eprintln!("[deep-link] backend not healthy; dropping OAuth callback forward");
+                                    return;
+                                }
+                                let client = reqwest::blocking::Client::builder()
+                                    .timeout(Duration::from_secs(30))
+                                    .build()
+                                    .expect("reqwest client");
+                                match client.get(&target).send() {
+                                    Ok(resp) => eprintln!("[deep-link] forwarded OAuth callback ({})", resp.status()),
+                                    Err(e) => eprintln!("[deep-link] OAuth callback forward failed: {e}"),
+                                }
+                            });
+                        }
+                        None => eprintln!("[deep-link] ignoring unrecognized deep link: {}", url.as_str()),
+                    }
+                }
+            });
 
             // Drain the sidecar's stdout/stderr to the console (app log).
             let app_handle = app.handle().clone();
@@ -289,4 +376,72 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::forward_target_url;
+
+    #[test]
+    fn maps_whoop_callback_to_loopback_preserving_code_and_state() {
+        let got = forward_target_url(
+            "scuffedos://oauth/callback?provider=whoop&code=abc123&state=xyz789",
+            54321,
+        );
+        assert_eq!(
+            got.as_deref(),
+            Some("http://127.0.0.1:54321/auth/whoop/callback?code=abc123&state=xyz789"),
+        );
+    }
+
+    #[test]
+    fn preserves_error_param_and_reencodes_values() {
+        // WHOOP denial: error present, no code. query_pairs decodes `a+b` to
+        // "a b"; append_pair re-encodes the space back to `+`.
+        let got = forward_target_url(
+            "scuffedos://oauth/callback?provider=whoop&error=access_denied&state=a+b",
+            8000,
+        );
+        assert_eq!(
+            got.as_deref(),
+            Some("http://127.0.0.1:8000/auth/whoop/callback?error=access_denied&state=a+b"),
+        );
+    }
+
+    #[test]
+    fn rejects_foreign_scheme() {
+        assert_eq!(
+            forward_target_url("https://evil.example/oauth/callback?provider=whoop&code=x", 8000),
+            None,
+        );
+    }
+
+    #[test]
+    fn rejects_wrong_host_or_path() {
+        assert_eq!(
+            forward_target_url("scuffedos://evil/callback?provider=whoop&code=x", 8000),
+            None,
+        );
+        assert_eq!(
+            forward_target_url("scuffedos://oauth/other?provider=whoop&code=x", 8000),
+            None,
+        );
+    }
+
+    #[test]
+    fn rejects_missing_empty_or_unsafe_provider() {
+        assert_eq!(
+            forward_target_url("scuffedos://oauth/callback?code=x&state=y", 8000),
+            None,
+        );
+        assert_eq!(
+            forward_target_url("scuffedos://oauth/callback?provider=&code=x", 8000),
+            None,
+        );
+        // Path-injection defense: provider must be lowercase ascii only.
+        assert_eq!(
+            forward_target_url("scuffedos://oauth/callback?provider=..%2Fetc&code=x", 8000),
+            None,
+        );
+    }
 }
