@@ -1772,7 +1772,7 @@ git commit -m "feat(people): store — transactional apply_contacts_snapshot + h
 The novel, macOS-specific code, and the single most safety-critical module in the slice: everything downstream keys off the *status* this reader assigns. A snapshot that misclassifies a permission blip or a corrupt store as "empty" would soft-delete every contact on the next reconcile. So `read_snapshot()` **never raises for control flow** — it classifies into the contract's `SnapshotStatus` and lets the transactional apply decide what is safe. Pure + injectable path; a fixture `.abcddb` drives the tests so no real Mac files are ever touched.
 
 **Files:**
-- Create: `backend/app/providers/macos_contacts.py`
+- Modify: `backend/app/providers/macos_contacts.py` (created by Task 3 with the shared types `SnapshotStatus`/`ContactsSnapshot`/`SyncResult` at the top; this task APPENDS the reader below them and must not redefine them)
 - Create: `backend/tests/test_macos_contacts_reader.py`
 
 **Interfaces:**
@@ -2047,41 +2047,32 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'app.providers.macos_co
 - [ ] **Step 3: Write the reader** — `backend/app/providers/macos_contacts.py`
 
 ```python
-"""Read the local macOS Contacts (AddressBook) store, one-way and read-only.
-
-There is no supported API; we open the Core Data SQLite stores directly. The
-schema is stable at AddressBook-v22 (macOS 13–26), but we treat it DEFENSIVELY:
-the ABCDContact entity number is discovered at runtime via Z_PRIMARYKEY (never
-hardcoded), required tables/columns are probed via sqlite_master/PRAGMA, and any
-single-store failure is isolated and classified rather than raised.
-
-`read_snapshot()` NEVER raises for control flow. It returns a typed
-`ContactsSnapshot` whose `status` tells the caller exactly what happened:
-
-  COMPLETE_NONEMPTY / COMPLETE_EMPTY  every discovered store read OK (>=1 / 0 rows)
-  ACCESS_DENIED                       Full Disk Access missing -> EPERM on open
-  UNSUPPORTED_SCHEMA                  missing ABCDContact entity or a required table
-  MISSING_STORE                       no AddressBook store files present
-  PARTIAL_READ                        >=1 store read but >=1 failed -> reconcile UNSAFE
-  IO_ERROR                            sqlite corruption / generic I/O failure
-
-Only COMPLETE_* may drive soft-delete reconciliation downstream; every other
-status is a no-op for row removal. That is the whole point: a permission blip, a
-corrupt file, or a half-read multi-store set can never look like "every contact
-was deleted". A `[]` people list is ONLY ever COMPLETE_EMPTY — a missing entity
-or table is UNSUPPORTED_SCHEMA, not empty.
-
-Live-read safety (why NOT immutable=1): the AddressBook store is a WAL-mode
-SQLite database that Contacts.app / cloudd write to concurrently. Opening it with
-`immutable=1` avoids locks but tells SQLite the file never changes, so it IGNORES
-the -wal frames — yielding a stale/inconsistent view and masking real corruption.
-Instead we take a private point-in-time SNAPSHOT: copy the store plus its
--wal/-shm sidecars into a per-read temp dir and read the COPY with mode=ro +
-PRAGMA query_only=ON + a bounded busy_timeout inside a single read transaction.
-Nothing writes the copy, so the read is consistent, never blocks or corrupts the
-live store, and still applies committed -wal frames (because we did NOT set
-immutable). The temp dir is removed after each store is read.
-"""
+# ---- reader (Task 4 appends below Task 3's shared types at the top of this
+# file; this comment supplements, and does NOT replace, Task 3's module
+# docstring already at the top of macos_contacts.py) ----
+#
+# Reads the local macOS Contacts (AddressBook) store, one-way and read-only, by
+# opening the Core Data SQLite files directly (there is no supported API). The
+# schema is stable at AddressBook-v22 (macOS 13-26) but is treated DEFENSIVELY:
+# the ABCDContact entity number is discovered at runtime via Z_PRIMARYKEY (never
+# hardcoded), required tables/columns are probed via sqlite_master/PRAGMA, and
+# any single-store failure is isolated and classified rather than raised.
+#
+# read_snapshot() NEVER raises for control flow — it returns a ContactsSnapshot
+# whose `status` (SnapshotStatus, defined above) tells the caller exactly what
+# happened; only COMPLETE_* may drive soft-delete reconciliation downstream. A
+# `[]` people list is ONLY ever COMPLETE_EMPTY — a missing entity/table is
+# UNSUPPORTED_SCHEMA, not empty.
+#
+# Live-read safety (why NOT immutable=1): the AddressBook store is a WAL-mode
+# SQLite database that Contacts.app / cloudd write to concurrently. immutable=1
+# would dodge locks but tells SQLite the file never changes, so it IGNORES the
+# -wal frames — yielding a stale/inconsistent view and masking real corruption.
+# Instead we take a private point-in-time SNAPSHOT: copy the store plus its
+# -wal/-shm sidecars into a per-read temp dir and read the COPY with mode=ro +
+# PRAGMA query_only=ON + a bounded busy_timeout inside a single read
+# transaction — consistent, never disturbs the live store, still reflects
+# committed WAL frames.
 from __future__ import annotations
 
 import errno
@@ -2113,24 +2104,7 @@ _RECORD_OPTIONAL = (
 )
 
 
-class SnapshotStatus(str, Enum):
-    COMPLETE_NONEMPTY = "complete_nonempty"
-    COMPLETE_EMPTY = "complete_empty"
-    ACCESS_DENIED = "access_denied"
-    UNSUPPORTED_SCHEMA = "unsupported_schema"
-    MISSING_STORE = "missing_store"
-    PARTIAL_READ = "partial_read"
-    IO_ERROR = "io_error"
-
-
-@dataclass
-class ContactsSnapshot:
-    status: SnapshotStatus
-    people: list                                    # list[NormalizedPerson]; only for COMPLETE_*
-    stores_total: int = 0
-    stores_read: int = 0
-    store_ids: list = field(default_factory=list)   # stable ids of stores read OK
-    error: str | None = None                        # redacted; never a path/username/DSN
+# SnapshotStatus / ContactsSnapshot / SyncResult are defined above (Task 3) — do not redefine
 
 
 # ---- per-store failure taxonomy (classified, never surfaced raw) -------------
@@ -4109,8 +4083,8 @@ connector recipe from the current plan's Tasks 5–7.
 - (No frontend here — the `local` card renders via **Task 9's** `ContactsLocalCard`.)
 
 **Interfaces:**
-- Consumes: `macos_contacts.is_supported() -> bool` (Task 4 — drives `configured`, replacing raw `sys.platform`); `macos_contacts.probe_access(root=DEFAULT_ROOT) -> str` (Task 4); `store.get_contacts_state() -> dict` (Task 6).
-- Produces: a 5th `ConnectorInfo` `name="macos_contacts"`, `auth_kind="local"`, `access ∈ {granted,denied,unknown}`, status from consent state.
+- Consumes: `macos_contacts.is_supported() -> bool` (Task 4 — drives `configured`, replacing raw `sys.platform`); `macos_contacts.probe_access(root=DEFAULT_ROOT) -> str` (Task 4); `store.get_contacts_state() -> dict` (Task 6); `store.count_people(source="macos_contacts") -> int` (see note in Step 4 — not yet defined elsewhere in this plan).
+- Produces: a 5th `ConnectorInfo` `name="macos_contacts"`, `auth_kind="local"`, `access ∈ {granted,denied,unknown}`, status from consent state, plus the `enabled`/`sync_status`/`last_sync_at`/`last_error`/`count` fields **Task 9's `ContactsLocalCard` and status-banner logic consume**.
 
 - [ ] **Step 1: Widen the schema** — `backend/app/schemas.py` (brief)
 
@@ -4120,8 +4094,13 @@ connector recipe from the current plan's Tasks 5–7.
     auth_kind: Literal["oauth", "token", "link", "local"]
     ...
     access: Literal["granted", "denied", "unknown"] = "unknown"   # macos_contacts only
+    enabled: bool = False                # macos_contacts only (contacts_sync_state.enabled)
+    sync_status: str | None = None       # macos_contacts only (contacts_sync_state.status)
+    last_sync_at: datetime | None = None # macos_contacts only
+    last_error: str | None = None        # macos_contacts only
+    count: int | None = None             # macos_contacts only (imported people count)
 ```
-(Keep `access` defaulted so the other four constructions stay valid.)
+(Keep `access` and the five new fields defaulted so the other four constructions stay valid.)
 
 - [ ] **Step 2: Write the failing test** — `backend/tests/test_connectors_contacts.py` (brief)
 
@@ -4155,6 +4134,8 @@ def test_contacts_card_connected(monkeypatch):
     assert card["auth_kind"] == "local"
     assert card["access"] == "granted"
     assert card["status"] == "connected"
+    assert card["enabled"] is True
+    assert card["sync_status"] == "ready"
 
 
 def test_contacts_card_denied(monkeypatch):
@@ -4164,6 +4145,8 @@ def test_contacts_card_denied(monkeypatch):
     card = _card(TestClient(app))
     assert card["access"] == "denied"
     assert card["status"] == "not_connected"
+    assert card["enabled"] is True
+    assert card["sync_status"] == "disabled"
 
 
 def test_contacts_card_unsupported_off_darwin(monkeypatch):
@@ -4172,6 +4155,8 @@ def test_contacts_card_unsupported_off_darwin(monkeypatch):
     assert card["configured"] is False
     assert card["access"] == "unknown"
     assert card["status"] == "not_connected"
+    assert card["enabled"] is False
+    assert card["sync_status"] is None
 ```
 
 - [ ] **Step 3: Run to verify it fails** (brief)
@@ -4216,6 +4201,12 @@ def _contacts_access() -> str:
     )
 
 
+> **Note:** `store.count_people(source: str | None = None) -> int` (owner-scoped,
+> excludes soft-deleted rows) is not yet defined anywhere in this plan — Task 3
+> (`store.py`) or this task must add it before `_contacts_connector()`'s `count`
+> field below can be populated.
+
+```python
 def _contacts_connector() -> ConnectorInfo:
     from ..store import store
 
@@ -4224,11 +4215,17 @@ def _contacts_connector() -> ConnectorInfo:
     state = store.get_contacts_state() if configured else {"enabled": False, "enabled_at": None}
     status = "connected" if (configured and state.get("enabled") and access == "granted") \
         else "not_connected"
+    count = store.count_people(source="macos_contacts") if configured else None
     return ConnectorInfo(
         name="macos_contacts", label="Apple Contacts", auth_kind="local",
         configured=configured, status=status,
         connected_at=state.get("enabled_at"), provider_user_id=None,
         can_write_email=None, access=access, items=[],
+        enabled=bool(state.get("enabled", False)),
+        sync_status=state.get("status"),
+        last_sync_at=state.get("last_sync_at"),
+        last_error=state.get("last_error"),
+        count=count,
     )
 ```
 In `list_connectors`, add the short-circuit alongside plaid's:
@@ -4286,7 +4283,7 @@ The forbidden non-functional **"Draft a note"** button on each row is removed (i
 
 **Interfaces:**
 - Consumes (backend contract types by name — do NOT redefine):
-  - `api.listPeople() -> Promise<PersonOut[]>` where each row carries `phones: PhoneEntry[]`, `emails: EmailEntry[]` (contract "Typed handle schemas"), `source ∈ {'macos_contacts','manual'}`, `has_photo`, and the CRM-native fields (`relationship`, `relationship_strength`, `notes`, `pinned`, `last_contacted_at`).
+  - `api.listPeople() -> Promise<PeoplePage>` — `{ items: PersonOut[], next_cursor: string | null }` (Task 7's `PeoplePage`; **not** a bare array — `CRMScreen` reads `page.items`). Each row in `items` carries `phones: PhoneEntry[]`, `emails: EmailEntry[]` (contract "Typed handle schemas"), `source ∈ {'macos_contacts','manual'}`, `has_photo`, and the CRM-native fields (`relationship`, `relationship_strength`, `notes`, `pinned`, `last_contacted_at`).
   - `api.getConnectors() -> Promise<ConnectorInfo[]>`; the `macos_contacts` card projects `contacts_sync_state` for the UI as `{ name:'macos_contacts', label, auth_kind:'local', configured, access:'granted'|'denied'|'unknown', enabled, sync_status:'disabled'|'ready'|'syncing'|'stale'|'error'|'access_denied'|'unsupported', last_sync_at, last_error, count }`. `access` is exactly the `probe_access` return (granted/denied/unknown); the frontend derives a fourth **`unsupported`** display capability from `configured===false` or `sync_status==='unsupported'` (an `UNSUPPORTED_SCHEMA` snapshot per `SnapshotStatus`) so it is never mislabelled "denied".
   - Consent lifecycle endpoints (contract "Consent & lifecycle"): `POST /api/people/contacts/enable` (gated frontend-side on the storage-disclosure ack), `POST /api/people/contacts/disconnect`, `POST /api/people/contacts/forget`, plus `POST /api/people/sync` (one `apply_contacts_snapshot` pass, returns a `SyncResult`).
 - Produces (frontend):
@@ -4407,14 +4404,14 @@ describe('CRMScreen', () => {
     render(<CRMScreen />)
     expect(screen.getByText(/loading your people/i)).toBeInTheDocument()
 
-    resolve([])
+    resolve({ items: [], next_cursor: null })
     expect(await screen.findByText(/no people yet/i)).toBeInTheDocument()
     // the empty CTA offers a manual add (distinct label from the header's "New person")
     expect(screen.getByRole('button', { name: /add a person/i })).toBeInTheDocument()
   })
 
   it('renders imported identity read-only with a macOS Contacts note; CRM fields stay editable', async () => {
-    api.listPeople.mockResolvedValue([importedPerson])
+    api.listPeople.mockResolvedValue({ items: [importedPerson], next_cursor: null })
     render(<CRMScreen />)
 
     const row = await screen.findByRole('button', { name: /jane doe/i })
@@ -4766,14 +4763,17 @@ export function CRMScreen({ onOpenConnectors }) {
 
   const refresh = React.useCallback(async () => {
     try {
-      const [ppl, cards] = await Promise.all([
+      const [page, cards] = await Promise.all([
         api.listPeople(),
         api.getConnectors().catch(() => []),
       ])
-      setPeople(ppl)
+      const items = page?.items || []
+      setPeople(items)
+      // TODO(slice 2): store page.next_cursor + a "load more" control; slice 1
+      // pages once (default limit) and does not paginate further.
       setContacts((cards || []).find((k) => k.name === 'macos_contacts') || null)
       setError('')
-      return ppl
+      return items
     } catch (e) {
       setError(e?.message || 'Couldn’t load your people.')
       throw e
