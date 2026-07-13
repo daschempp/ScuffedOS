@@ -19,6 +19,24 @@ snapshots, vitals and workouts (alongside manually-logged workouts).
 `frontend/src/screens/FitnessScreen.jsx` renders today's rings, the vitals panel and the
 weekly strain trend from the live store.
 
+## Insights (derived) — WHOOP-style coaching
+
+Built (slice 1, 2026-07-13). The **Insights** tab turns the synced snapshots into short,
+warm daily coaching cards — the narrative WHOOP shows in-app but its public API does not
+expose (verified: the API returns only raw numbers). A **hybrid** engine produces them:
+deterministic rules (`app/insights/rules.py`) detect what's noteworthy (recovery band,
+recovery/HRV/RHR trends vs a 7-day baseline, strain↔recovery balance, sleep quality +
+short-sleep streak) and a phraser (`app/insights/phraser.py`) asks Claude — via
+`llm.complete()`, one call, chat tier — to word those *facts only* into plain-text copy,
+falling back to deterministic templates when the LLM is unavailable. Results are **cached
+once per day** in the `insights` table (`app/insights/engine.py`, hooked into
+`fitness_sync.tick()` after a sync; `POST /api/insights/refresh` forces a regen). Reads
+(`GET /api/insights`) are a pure cache read — never a live provider/LLM call, matching the
+fitness-domain invariant. Frontend: `screens/InsightsScreen.jsx`. The engine is
+domain-generic (an `insights.domain` column) so finance/school/email insights can plug into
+the same table/phraser/feed later — the first slice of the proactive-layer roadmap. See the
+design spec `docs/superpowers/specs/2026-07-13-fitness-insights-slice1-design.md`.
+
 ## Data model (from the prototype)
 
 | Entity | Fields the UI uses | Notes |
