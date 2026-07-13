@@ -4,7 +4,7 @@
    /api/insights feeds the card feed. Reads are pure cache server-side, so the
    feed shows whatever the last sync generated. */
 import React from 'react'
-import { Card, Badge, IconButton, Button } from '../components/ui.jsx'
+import { Card, Badge, IconButton } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'
 import { api } from '../lib/api.js'
 import { NotConnectedCard, NeedsReauthBanner } from '../components/ConnectorEmptyState.jsx'
@@ -91,7 +91,7 @@ export function InsightsScreen({ onOpenConnectors }) {
                   {chips(c.signals).length > 0 && (
                     <div className="kit-inline" style={{ gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                       {chips(c.signals).map((t, i) => (
-                        <span key={i} className="kit-navitem__badge" style={{ position: 'static' }}>{t}</span>
+                        <span key={i} style={{ fontFamily: 'var(--font-sans)', fontSize: 11, fontWeight: 600, color: 'var(--text-strong)', background: 'var(--surface)', padding: '2px 8px', borderRadius: 'var(--radius-sm)' }}>{t}</span>
                       ))}
                     </div>
                   )}
