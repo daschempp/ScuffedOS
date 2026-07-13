@@ -191,6 +191,12 @@ export const api = {
   deleteWorkout: (id) => request(`/api/fitness/workouts/${id}`, { method: 'DELETE' }),
   fitnessSync: () => request('/api/fitness/sync', { method: 'POST' }),
 
+  // Insights (M10 fitness-insights slice 1) — cached, derived WHOOP-style
+  // coaching cards. Reads are pure cache server-side (no live WHOOP call);
+  // insightsRefresh regenerates the day's cards from the latest normalized data.
+  insights: (isoDate) => request(`/api/insights${isoDate ? `?date=${isoDate}` : ''}`),
+  insightsRefresh: () => request('/api/insights/refresh', { method: 'POST' }),
+
   // Email (M5) — the inbox/detail come straight from the emails table server-
   // side (list never triggers a live Gmail call). Only emailDetail fetches the
   // body live, with a graceful fallback string if Gmail is unreachable. Bodies

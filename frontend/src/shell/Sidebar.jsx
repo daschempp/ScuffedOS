@@ -14,6 +14,7 @@ export function Sidebar({ active, onNavigate }) {
     { label: 'Health', items: [
       { id: 'nutrition', label: 'Nutrition', icon: 'apple' },
       { id: 'fitness', label: 'Fitness', icon: 'activity' },
+      { id: 'insights', label: 'Insights', icon: 'sparkles' },
     ] },
     { label: 'Money', items: [
       { id: 'finance', label: 'Finance', icon: 'wallet' },

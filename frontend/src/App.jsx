@@ -10,6 +10,7 @@ import { TasksScreen } from './screens/TasksScreen.jsx'
 import { HabitsScreen } from './screens/HabitsScreen.jsx'
 import { NutritionScreen } from './screens/NutritionScreen.jsx'
 import { FitnessScreen } from './screens/FitnessScreen.jsx'
+import { InsightsScreen } from './screens/InsightsScreen.jsx'
 import { FinanceScreen } from './screens/FinanceScreen.jsx'
 import { CRMScreen } from './screens/CRMScreen.jsx'
 import { EmailScreen } from './screens/EmailScreen.jsx'
@@ -31,6 +32,7 @@ const SCREENS = {
   home: { title: 'Home', sub: 'Your day at a glance' },
   nutrition: { title: 'Nutrition', sub: 'Meals, macros & water' },
   fitness: { title: 'Fitness', sub: 'Recovery, sleep, strain & workouts' },
+  insights: { title: 'Insights', sub: 'Your daily coaching read' },
   finance: { title: 'Finance', sub: 'Accounts, spending & net worth' },
   memory: { title: 'Second Brain', sub: 'Notes, ideas & saved context' },
   calendar: { title: 'Calendar', sub: 'Your schedule' },
@@ -138,6 +140,7 @@ export function App() {
   else if (screen === 'calendar') body = <CalendarScreen calendar={calendar} />
   else if (screen === 'tasks') body = <TasksScreen tasks={tasks} onToggle={toggleTask} onUpdate={updateTask} onAdd={addTask} onRefresh={refresh} />
   else if (screen === 'fitness') body = <FitnessScreen onOpenConnectors={onOpenConnectors} />
+  else if (screen === 'insights') body = <InsightsScreen onOpenConnectors={onOpenConnectors} />
   else if (screen === 'habits') body = <HabitsScreen habits={habitsState} />
   else if (screen === 'people') body = <CRMScreen onOpenConnectors={onOpenConnectors} />
   else if (screen === 'email') body = <EmailScreen onOpenConnectors={onOpenConnectors} />
