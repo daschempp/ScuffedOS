@@ -86,8 +86,8 @@ def test_email_lowercased_trimmed_no_dot_folding():
 def test_email_unicode_is_nfc_normalized():
     # Build the two byte-distinct spellings explicitly (\u escapes) so the
     # test proves NFC folding rather than however the file encodes the accented char.
-    decomposed = "café@example.com"   # e + U+0301 combining acute
-    composed = "café@example.com"       # single precomposed é
+    decomposed = "cafe\u0301@example.com"  # e + U+0301 combining acute
+    composed = "caf\u00e9@example.com"     # single precomposed e + U+00E9 (e-acute)
     assert decomposed != composed             # genuinely different byte strings
     assert canon_email(decomposed) == canon_email(composed)  # both fold to one key
 
