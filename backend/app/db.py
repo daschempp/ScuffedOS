@@ -16,6 +16,25 @@ class Base(DeclarativeBase):
     pass
 
 
+def _assert_secure_dsn(url: str) -> None:
+    """Reject a non-loopback PostgreSQL DSN that lacks TLS. Loopback needs no TLS;
+    a remote host requires sslmode=require|verify-ca|verify-full. Remote DSNs are
+    SUPPORTED — only insecure ones are refused. The error text carries a redacted
+    host only, NEVER the DSN or password."""
+    from sqlalchemy.engine import make_url
+
+    u = make_url(url)
+    host = (u.host or "").lower()
+    is_loopback = host in ("", "localhost", "127.0.0.1", "::1")
+    if u.drivername.startswith("postgresql") and not is_loopback:
+        sslmode = (u.query.get("sslmode") or "").lower()
+        if sslmode not in ("require", "verify-ca", "verify-full"):
+            raise RuntimeError(
+                f"Refusing a non-loopback PostgreSQL DSN without TLS (host={host!r}); "
+                "set sslmode=require or stronger."
+            )
+
+
 def normalize_database_url(url: str) -> str:
     """Accept the connection string exactly as Supabase hands it out.
 
@@ -31,6 +50,7 @@ def normalize_database_url(url: str) -> str:
 
 def make_engine(url: str) -> Engine:
     url = normalize_database_url(url)
+    _assert_secure_dsn(url)
     if url.startswith("sqlite"):
         # In-memory databases need a single shared connection or every
         # checkout would see a fresh empty schema.
