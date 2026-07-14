@@ -139,7 +139,7 @@ export function App() {
   else if (screen === 'tasks') body = <TasksScreen tasks={tasks} onToggle={toggleTask} onUpdate={updateTask} onAdd={addTask} onRefresh={refresh} />
   else if (screen === 'fitness') body = <FitnessScreen onOpenConnectors={onOpenConnectors} />
   else if (screen === 'habits') body = <HabitsScreen habits={habitsState} />
-  else if (screen === 'people') body = <CRMScreen />
+  else if (screen === 'people') body = <CRMScreen onOpenConnectors={onOpenConnectors} />
   else if (screen === 'email') body = <EmailScreen onOpenConnectors={onOpenConnectors} />
   else if (screen === 'school') body = <SchoolScreen onOpenConnectors={onOpenConnectors} />
   else if (screen === 'settings') body = <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />

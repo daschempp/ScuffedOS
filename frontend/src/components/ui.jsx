@@ -1,6 +1,7 @@
 /* Scuffed OS — UI primitives (the design-system components, 1:1).
    Pure, presentational, styled entirely via the .sa-* classes in kit.css and the
    token custom properties. No CSS-in-JS, no extra deps. */
+import React from 'react'
 
 export function Button({ variant = 'primary', size = 'md', iconLeft, iconRight, fullWidth, children, ...rest }) {
   return (
@@ -56,11 +57,15 @@ const AV_TINTS = {
   plum: ['var(--plum-100)', '#5f4267'],
 }
 export function Avatar({ name = '', src, size = 'md', tint = 'green', ...rest }) {
+  // A photo URL that 404s / expires must fall back to initials, never a blank box.
+  const [failed, setFailed] = React.useState(false)
+  React.useEffect(() => { setFailed(false) }, [src])
   const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase()
   const [bg, fg] = AV_TINTS[tint] || AV_TINTS.green
+  const showImg = src && !failed
   return (
-    <span className={`sa-avatar sa-avatar--${size}`} style={src ? undefined : { background: bg, color: fg }} {...rest}>
-      {src ? <img src={src} alt={name} /> : initials || '?'}
+    <span className={`sa-avatar sa-avatar--${size}`} style={showImg ? undefined : { background: bg, color: fg }} {...rest}>
+      {showImg ? <img src={src} alt={name} onError={() => setFailed(true)} /> : (initials || '?')}
     </span>
   )
 }
