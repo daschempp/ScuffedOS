@@ -52,4 +52,17 @@ describe('ConnectorsPanel — macOS Contacts (local)', () => {
     fireEvent.click(enable)
     await waitFor(() => expect(api.enableContacts).toHaveBeenCalledTimes(1))
   })
+
+  it('is exempt from the not-configured API-keys gate when unsupported on this device', async () => {
+    api.getConnectors.mockResolvedValue([localCard({
+      configured: false, access: 'unknown', sync_status: 'disabled',
+    })])
+    render(<ConnectorsPanel onOpenKeys={() => {}} />)
+
+    // Local card renders its own "not available on this device" message…
+    expect(await screen.findByText(/contacts import isn.t available on this device/i)).toBeInTheDocument()
+    // …and must NOT also show the OAuth/Plaid "not configured" gate.
+    expect(screen.queryByText(/API keys required/i)).toBeNull()
+    expect(screen.queryByText(/Add API keys first/i)).toBeNull()
+  })
 })

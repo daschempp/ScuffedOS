@@ -334,8 +334,8 @@ export function ConnectorsPanel({ onOpenKeys }) {
               </p>
             )}
 
-            {/* Not-configured gate (OAuth/Plaid only; Moodle exempt) */}
-            {c.auth_kind !== 'token' && !c.configured && (
+            {/* Not-configured gate (OAuth/Plaid only; Moodle + local exempt) */}
+            {c.auth_kind !== 'token' && c.auth_kind !== 'local' && !c.configured && (
               <div className="kit-inline" style={{ gap: 8, alignItems: 'center' }}>
                 <span className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>API keys required.</span>
                 <Button variant="secondary" size="sm" onClick={onOpenKeys}>Add API keys first →</Button>
