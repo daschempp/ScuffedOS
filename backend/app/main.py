@@ -34,6 +34,7 @@ from .routers import (
     moodle,
     nutrition,
     oauth,
+    people,
     settings as settings_router,
     tasks,
 )
@@ -136,6 +137,7 @@ install_error_handlers(app)
 app.include_router(assistant.router)
 app.include_router(tasks.router)
 app.include_router(memory.router)
+app.include_router(people.router)
 app.include_router(calendar.router)
 app.include_router(habits.router)
 app.include_router(nutrition.router)

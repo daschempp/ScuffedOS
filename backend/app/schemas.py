@@ -188,6 +188,106 @@ class MemoryUpdate(BaseModel):
     color: str | None = None
 
 
+# ---- People (M10) ---------------------------------------------------------
+class PhoneEntry(BaseModel):
+    value: str = Field(min_length=1)
+    label: str = ""
+    normalized: str | None = None
+
+
+class EmailEntry(BaseModel):
+    value: str = Field(min_length=1)
+    label: str = ""
+    normalized: str | None = None
+
+
+class PersonOut(BaseModel):
+    id: int
+    source: str
+    source_id: str
+    display_name: str
+    first_name: str
+    last_name: str
+    nickname: str
+    organization: str
+    job_title: str
+    phones: list[PhoneEntry]
+    emails: list[EmailEntry]
+    has_photo: bool
+    relationship: str | None = None
+    relationship_strength: int | None = None
+    notes: str | None = None
+    pinned: bool
+    last_contacted_at: datetime | None = None
+    removed_from_source_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PersonCreate(BaseModel):
+    display_name: str = Field(min_length=1)
+    first_name: str = ""
+    last_name: str = ""
+    nickname: str = ""
+    organization: str = ""
+    job_title: str = ""
+    phones: list[PhoneEntry] = []
+    emails: list[EmailEntry] = []
+    relationship: str | None = None
+    relationship_strength: int | None = None
+    notes: str | None = None
+    pinned: bool = False
+
+
+class PersonUpdate(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1)
+    first_name: str | None = None
+    last_name: str | None = None
+    nickname: str | None = None
+    organization: str | None = None
+    job_title: str | None = None
+    phones: list[PhoneEntry] | None = None
+    emails: list[EmailEntry] | None = None
+    relationship: str | None = None
+    relationship_strength: int | None = None
+    notes: str | None = None
+    pinned: bool | None = None
+    last_contacted_at: datetime | None = None
+
+
+class PeoplePage(BaseModel):
+    items: list[PersonOut]
+    next_cursor: str | None = None
+
+
+class SyncResultOut(BaseModel):
+    status: str
+    access: str
+    imported: int = 0
+    updated: int = 0
+    removed: int = 0
+    last_sync_at: datetime | None = None
+    last_error: str | None = None
+
+
+class ContactsStateOut(BaseModel):
+    enabled: bool
+    status: str
+    access: str
+    normalization_region: str | None = None
+    last_sync_at: datetime | None = None
+    last_error: str | None = None
+    enabled_at: datetime | None = None
+
+
+class ContactsEnableIn(BaseModel):
+    ack_storage_disclosure: bool = False
+
+
+class ContactsForgetIn(BaseModel):
+    confirm: bool = False
+
+
 # ---- Calendar ---------------------------------------------------------------
 class EventOccurrence(BaseModel):
     """One concrete occurrence — what GET /events returns. For a recurring

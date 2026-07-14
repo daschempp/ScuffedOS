@@ -16,6 +16,7 @@ import functools
 import hashlib
 import json
 import logging
+import os
 import threading
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
@@ -649,6 +650,26 @@ def _state_dict(st: ContactsSyncState) -> dict:
         "created_at": aware_utc(st.created_at),
         "updated_at": aware_utc(st.updated_at),
     }
+
+
+def _delete_photo_files(photos_root: str, keys: list[str]) -> None:
+    """Best-effort unlink of relative photo_key files under the resolved photos
+    root, with a containment check (never follow `..`/symlinks out of the root).
+    A failure here never aborts the calling operation — including a malformed
+    key (e.g. an embedded null byte) that would make os.path.realpath raise."""
+    try:
+        real_root = os.path.realpath(photos_root)
+    except (OSError, ValueError):
+        return
+    for key in keys:
+        if not key:
+            continue
+        try:
+            target = os.path.realpath(os.path.join(real_root, key))
+            if os.path.commonpath([real_root, target]) == real_root and os.path.isfile(target):
+                os.remove(target)
+        except (OSError, ValueError):
+            continue
 
 
 def _moodle_course_dict(c: MoodleCourse) -> dict:
@@ -2162,6 +2183,101 @@ class Store:
         else:
             patch["status"] = "disabled"
         return self.set_contacts_state(patch)
+
+    # ---- people photo key (M10) ----
+    # NOTE: the paginated/searchable people list is `store.list_people(...)` from
+    # Task 3 (same `{items, next_cursor}` shape, and it searches
+    # name/nickname/organization/job_title). The router calls it directly; do NOT
+    # add a second `search_people` here.
+    def get_person_photo_key(self, person_id: int) -> str | None:
+        """The relative photo_key (opaque, stored in the configured database), or
+        None. The router resolves it against the photos root with a containment
+        check; the key itself is never a filesystem path we trust blindly."""
+        from .config import settings
+
+        with self._session() as s:
+            row = s.scalars(
+                select(Person)
+                .where(Person.owner == settings.owner)
+                .where(Person.id == person_id)
+            ).first()
+            return row.photo_key if row is not None else None
+
+    # ---- contacts consent lifecycle (M10) ----
+    def enable_contacts(self, *, region: str) -> dict:
+        """Connect: enabled=True, stamp enabled_at, and persist normalization_region
+        ONCE (a later locale change must never retroactively re-resolve existing
+        handles). Does not read contacts here — the caller kicks a sync."""
+        with self._locked_write() as s:
+            row = self._state_row(s)
+            row.enabled = True
+            row.enabled_at = utcnow()
+            if not row.normalization_region:
+                row.normalization_region = region
+            if row.status in (None, "disabled"):
+                row.status = "ready"
+            s.flush()
+            return _state_dict(row)
+
+    def disconnect_contacts(self) -> dict:
+        """Disconnect: stop future reads/syncs. Does NOT delete rows — existing CRM
+        data is preserved; normalization_region is kept."""
+        with self._locked_write() as s:
+            row = self._state_row(s)
+            row.enabled = False
+            row.status = "disabled"
+            s.flush()
+            return _state_dict(row)
+
+    @_retry_integrity
+    def forget_contacts(self) -> dict:
+        """Delete imported (source='macos_contacts') rows + their handle rows +
+        extracted photos, then disable. CRM-native survival rule: a person carrying
+        ANY CRM-native data (relationship/strength/notes/pinned/last_contacted_at)
+        is converted to a source='manual' tombstone that keeps display_name + the
+        CRM-native fields (identity fields, handle index and photo cleared);
+        people with no CRM-native data are fully deleted."""
+        import uuid
+
+        from .config import settings
+
+        photos_root = settings.contacts_photos_root()
+        removed_keys: list[str] = []
+        with self._locked_write() as s:
+            rows = s.scalars(
+                select(Person)
+                .where(Person.owner == settings.owner)
+                .where(Person.source == "macos_contacts")
+            ).all()
+            for row in rows:
+                if row.photo_key:
+                    removed_keys.append(row.photo_key)
+                has_crm = any((row.relationship, row.relationship_strength, row.notes,
+                               row.pinned, row.last_contacted_at))
+                if has_crm:
+                    s.execute(delete(PersonHandle).where(PersonHandle.person_id == row.id))
+                    row.source = "manual"
+                    row.source_id = uuid.uuid4().hex
+                    row.first_name = ""
+                    row.last_name = ""
+                    row.nickname = ""
+                    row.organization = ""
+                    row.job_title = ""
+                    row.phones = []
+                    row.emails = []
+                    row.photo_key = None
+                    row.has_photo = False
+                    row.removed_from_source_at = None
+                else:
+                    s.delete(row)  # person_handle rows cascade
+            state = self._state_row(s)
+            state.enabled = False
+            state.status = "disabled"
+            state.last_error = None
+            s.flush()
+            result = _state_dict(state)
+        _delete_photo_files(photos_root, removed_keys)   # after commit; never fatal
+        return result
 
     def _owned_email_row(self, s: Session, email_id: int) -> Email | None:
         from .config import settings
