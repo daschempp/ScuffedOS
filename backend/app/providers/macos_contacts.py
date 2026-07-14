@@ -83,6 +83,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from . import contact_photos
 from .base import NormalizedPerson
 
 logger = logging.getLogger("scuffed_os.macos_contacts")
@@ -95,7 +96,7 @@ _REQUIRED_TABLES = ("Z_PRIMARYKEY", "ZABCDRECORD")
 # older/newer schema variant degrades instead of raising.
 _RECORD_OPTIONAL = (
     "ZUNIQUEID", "ZFIRSTNAME", "ZLASTNAME", "ZNICKNAME",
-    "ZORGANIZATION", "ZJOBTITLE", "ZDISPLAYFLAGS",
+    "ZORGANIZATION", "ZJOBTITLE", "ZDISPLAYFLAGS", "ZTHUMBNAILIMAGEDATA",
 )
 
 
@@ -243,6 +244,35 @@ def _unwrap_label(raw: str | None) -> str:
     return raw
 
 
+def _thumbnail_bytes(blob, orig_db_path: str) -> bytes | None:
+    """Resolve raw image bytes from a ZTHUMBNAILIMAGEDATA blob. Core Data stores
+    either the image (optionally with a 1-byte tag prefix) inline, or a filename
+    reference into the store's external-data directory. Best-effort: returns None
+    on anything unexpected. External refs are read from the REAL store's _SUPPORT
+    dir (read-only), not the private snapshot copy, and the filename is guarded
+    against path traversal."""
+    if not blob:
+        return None
+    if contact_photos.detect_media_type(blob) is not None:      # some stores keep raw bytes
+        return blob
+    tag = blob[0]
+    if tag == 1:                                                # inline, 1-byte tag prefix
+        body = blob[1:]
+        return body if contact_photos.detect_media_type(body) is not None else None
+    if tag == 2:                                                # external-data filename ref
+        name = blob[1:].split(b"\x00", 1)[0].decode("ascii", "ignore").strip()
+        if not name or "/" in name or name.startswith("."):
+            return None
+        stem = Path(orig_db_path).stem
+        support = Path(orig_db_path).parent / f".{stem}_SUPPORT" / "_EXTERNAL_DATA"
+        try:
+            data = (support / name).read_bytes()
+        except OSError:
+            return None
+        return data if contact_photos.detect_media_type(data) is not None else None
+    return None
+
+
 def _contact_entity(con: sqlite3.Connection) -> int:
     row = con.execute(
         "SELECT Z_ENT FROM Z_PRIMARYKEY WHERE Z_NAME = 'ABCDContact'"
@@ -320,6 +350,20 @@ def _extract_people(con: sqlite3.Connection, db_path: str, store_id: str,
                    else " ".join(x for x in (first, last) if x).strip())
         display = display or nick or org or (uid or f"zpk:{z_pk}")
 
+        photo_path, has_photo = None, False
+        if photos_dir:
+            try:
+                img = _thumbnail_bytes(col("ZTHUMBNAILIMAGEDATA"), db_path)
+                if img is not None:
+                    key = contact_photos.store_photo(
+                        img, store_id=store_id, source_id=src_id,
+                        photos_root=photos_dir)
+                    if key:                                     # transient ABSOLUTE path
+                        photo_path = os.path.join(os.path.expanduser(photos_dir), key)
+                        has_photo = True
+            except Exception:                                   # a photo NEVER aborts the read
+                logger.warning("contact photo skipped for a record")
+
         people.append(NormalizedPerson(
             source="macos_contacts",
             source_id=src_id,
@@ -327,7 +371,7 @@ def _extract_people(con: sqlite3.Connection, db_path: str, store_id: str,
             first_name=first, last_name=last, nickname=nick,
             organization=org, job_title=job,
             phones=phones, emails=emails,
-            photo_path=None, has_photo=False,        # photos wired in Task 5
+            photo_path=photo_path, has_photo=has_photo,
             meta={"is_company": is_company, "store_id": store_id,
                   "zuniqueid": uid, "z_pk": z_pk},
         ))
