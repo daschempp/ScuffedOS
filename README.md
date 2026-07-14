@@ -21,9 +21,10 @@ ScuffedOS/
 Home · Calendar (live, recurring events) · Tasks (live; drawer: subtasks, firing
 reminders, list, priority, deadline, recurrence, real file attachments) · Habits
 (live, streaks + auto-complete) · Nutrition (live, USDA food lookup) · Fitness
-(Whoop-style, sample) · Finance (sample) · People (personal CRM, sample) · Email
-(sample) · Second Brain (live, semantic memory) — plus a launchable **Assistant**
-chat panel (live Claude) that reads and writes all of it.
+(Whoop-style, sample) · Finance (sample) · People (live personal CRM, with an
+Apple Contacts (local, Full-Disk-Access) connector) · Email (sample) · Second
+Brain (live, semantic memory) — plus a launchable **Assistant** chat panel
+(live Claude) that reads and writes all of it.
 
 ### Desktop app (M8)
 ScuffedOS also ships as a **double-clickable, unsigned macOS app** (Apple-Silicon
@@ -98,11 +99,14 @@ Interactive API docs are available at `http://localhost:8000/docs` while the bac
 - **The assistant is live Claude** (`backend/app/llm.py`) with a server-side tool loop
   over every built domain; reminders fire real macOS notifications via `osascript`.
   Fitness and Finance panels remain labeled sample data until their integrations land
-  (Whoop in M4, Plaid in M6); Email and People follow in M5.
-- **Data persists in Postgres** (Supabase free tier in production, any Postgres or
-  SQLite-for-tests locally) behind `backend/app/store.py`; Mem0 vectors live in the
-  same database (pgvector). Attachment bytes and Mem0's history file stay local in
-  `backend/data/`.
+  (Whoop in M4, Plaid in M6); Email remains sample data. **People/CRM + a local
+  Apple Contacts (local, Full-Disk-Access) connector landed in M10 s1** — one-way,
+  read-only import, off by default.
+- **Data persists in the configured PostgreSQL database** (local or remote/
+  self-hosted; SQLite for tests) behind `backend/app/store.py`; Mem0 vectors live
+  in the same database (pgvector). Attachment bytes, Mem0's history file, and
+  imported contact photos stay on the backend host in `backend/data/` (and
+  `app_support_dir/contact_photos` for photos in the packaged app).
 - **Fonts** load from the Google Fonts CDN (see `index.html`); not self-hosted.
 - The **iPhone app** in the design system is not yet ported — its source lives in
   `design-system/project/ui_kits/scuffed-os-ios/` for a future pass.
