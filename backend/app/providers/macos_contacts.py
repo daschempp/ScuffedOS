@@ -197,14 +197,23 @@ def _private_snapshot(db_path: str) -> tuple[str, str]:
     shutil.copy2 opens the source, which is where TCC surfaces the denial."""
     tmpdir = tempfile.mkdtemp(prefix="scuffedos_ab_")
     dst = os.path.join(tmpdir, os.path.basename(db_path))
-    shutil.copy2(db_path, dst)                       # EPERM / ENOENT surface here
-    for suffix in ("-wal", "-shm"):
-        side = db_path + suffix
-        if os.path.exists(side):
-            try:
-                shutil.copy2(side, dst + suffix)     # sidecars are best-effort
-            except OSError:
-                pass
+    try:
+        shutil.copy2(db_path, dst)                       # EPERM / ENOENT surface here
+        for suffix in ("-wal", "-shm"):
+            side = db_path + suffix
+            if os.path.exists(side):
+                try:
+                    shutil.copy2(side, dst + suffix)     # sidecars are best-effort
+                except OSError:
+                    pass
+    except Exception:
+        # The first copy2 raising (FDA-denied EPERM is the common, long-lived
+        # case) must not leak the tmpdir mkdtemp already created: the caller's
+        # cleanup never runs because we exit via this exception before ever
+        # returning tmpdir. Clean up here, then re-raise unchanged so the
+        # caller's ACCESS_DENIED/IO_ERROR classification is unaffected.
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise
     return dst, tmpdir
 
 

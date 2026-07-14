@@ -1,7 +1,9 @@
 import errno
+import glob
 import hashlib
 import os
 import sqlite3
+import tempfile
 
 import pytest
 
@@ -214,6 +216,28 @@ def test_access_denied_via_eperm(ab_root, monkeypatch):
     snap = read_snapshot(ab_root, region="US", photos_dir=None)
     assert snap.status is SnapshotStatus.ACCESS_DENIED
     assert snap.people == []                        # a denied read NEVER yields rows
+
+
+def test_private_snapshot_cleans_up_tempdir_on_copy_failure(ab_root, monkeypatch):
+    """Real _private_snapshot (NOT mocked): when the underlying shutil.copy2 raises
+    -- exactly how an FDA-denied EPERM surfaces -- the tmpdir already created by
+    tempfile.mkdtemp(prefix="scuffedos_ab_") must be cleaned up, not leaked.
+    Regression for a bug where _private_snapshot exited via the exception before
+    ever returning tmpdir, so the caller's `shutil.rmtree` cleanup never ran --
+    one leaked empty temp dir per store per read_snapshot call while FDA is
+    ungranted (the common, long-lived state)."""
+    def _boom(*_a, **_kw):
+        raise PermissionError(errno.EPERM, "Operation not permitted")
+    monkeypatch.setattr(macos_contacts.shutil, "copy2", _boom)
+
+    pattern = os.path.join(tempfile.gettempdir(), "scuffedos_ab_*")
+    before = set(glob.glob(pattern))
+    snap = read_snapshot(ab_root, region="US", photos_dir=None)
+    after = set(glob.glob(pattern))
+
+    assert snap.status is SnapshotStatus.ACCESS_DENIED
+    assert snap.people == []
+    assert after - before == set(), "a scuffedos_ab_* tempdir was leaked on copy failure"
 
 
 def test_disabled_reads_nothing(ab_root):
