@@ -96,6 +96,23 @@ def test_upgrade_head_builds_full_schema(alembic_cfg, tmp_path):
     assert {"owner", "enabled", "status", "access", "normalization_region",
             "last_sync_at", "last_error", "enabled_at",
             "created_at", "updated_at"} <= state_cols
+
+    # Idempotent-upsert + resolve integrity: the composite/unique keys exist.
+    people_uqs = {tuple(uc["column_names"])
+                  for uc in inspect(engine).get_unique_constraints("people")}
+    assert ("owner", "source", "source_id") in people_uqs
+    handle_uqs = {tuple(uc["column_names"])
+                  for uc in inspect(engine).get_unique_constraints("person_handle")}
+    assert ("person_id", "kind", "value") in handle_uqs
+    state_uqs = {tuple(uc["column_names"])
+                 for uc in inspect(engine).get_unique_constraints("contacts_sync_state")}
+    assert ("owner",) in state_uqs             # one consent row per owner
+
+    # Handle lookup + FK cleanup are indexed for resolve_handle.
+    handle_idx_cols = {tuple(ix["column_names"])
+                       for ix in inspect(engine).get_indexes("person_handle")}
+    assert ("value",) in handle_idx_cols
+    assert ("person_id",) in handle_idx_cols
     engine.dispose()
 
 
