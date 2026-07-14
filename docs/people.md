@@ -32,9 +32,14 @@ layer owns relationship fields (`relationship`, `relationship_strength`,
   than one person (shared numbers/emails); resurrected rows keep their handle
   history.
 - **`contacts_sync_state`** — one consent/status row per owner: `enabled`
-  (app consent, defaults `False`), `status` (`disabled` / `first_sync` /
-  `syncing` / `ok` / `denied` / `stale` / `error`), `normalization_region`
-  (persisted at `enable` time), `last_sync_at`, `last_error`.
+  (app consent, defaults `False`); the persisted `status` (`disabled` /
+  `ready` / `access_denied` / `stale` / `error`); the persisted `access`
+  (Full Disk Access read state, tracked **separately** from `status`:
+  `granted` / `denied` / `unknown`); `normalization_region` (persisted at
+  `enable` time); `last_sync_at`; `last_error`. Distinct from both: `POST
+  /api/people/sync` returns an **ephemeral**, non-persisted `SyncResult.status`
+  (`ok` / `empty` / `access_denied` / `unsupported` / `partial` / `error` /
+  `disabled`) describing the outcome of that one sync attempt only.
 
 ## Persistence
 
