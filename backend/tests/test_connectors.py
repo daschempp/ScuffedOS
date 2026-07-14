@@ -25,18 +25,32 @@ def _no_ambient_provider_creds(monkeypatch):
         monkeypatch.setattr(settings, field, "")
 
 
+@pytest.fixture(autouse=True)
+def _no_real_contacts(monkeypatch):
+    """Every test in this file calls GET /api/connectors, which invokes
+    _contacts_connector() unconditionally. On a macOS dev host,
+    macos_contacts.is_supported() is True and the real AddressBook store
+    exists, so without this seam probe_access() would perform a REAL
+    open+read of the developer's live, TCC-protected Contacts DB as an
+    unintended side effect of these tests — exactly the privacy/hygiene
+    property the connector's test seam exists to guarantee. Force the
+    platform seam off file-wide so is_supported() is False, configured
+    resolves to False, and probe_access() is never reached."""
+    monkeypatch.setattr(macos_contacts, "_is_darwin", lambda: False)
+
+
 def _get(client):
     res = client.get("/api/connectors")
     assert res.status_code == 200
     return {c["name"]: c for c in res.json()}
 
 
-def test_all_five_present_not_connected_on_empty_db(client, monkeypatch):
+def test_all_five_present_not_connected_on_empty_db(client):
     # macos_contacts' configured/access/status come from a live platform +
-    # FDA probe (see _contacts_connector) — stub the platform seam so this
-    # order/status assertion is deterministic on macOS dev + CI alike, never
-    # touching the real AddressBook store during the suite run.
-    monkeypatch.setattr(macos_contacts, "_is_darwin", lambda: False)
+    # FDA probe (see _contacts_connector) — the file-scoped `_no_real_contacts`
+    # autouse fixture above stubs the platform seam off, so this order/status
+    # assertion is deterministic on macOS dev + CI alike, never touching the
+    # real AddressBook store during the suite run.
     body = client.get("/api/connectors").json()
     assert [c["name"] for c in body] == [
         "google", "whoop", "moodle", "plaid", "macos_contacts",
