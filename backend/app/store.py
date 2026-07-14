@@ -1995,6 +1995,24 @@ class Store:
             rows = rows[:limit]
         return {"items": [_person_dict(r) for r in rows], "next_cursor": next_cursor}
 
+    def count_people(self, source: str | None = None) -> int:
+        """Owner-scoped count of people, excluding soft-deleted rows
+        (removed_from_source_at IS NULL). `source=None` counts every source;
+        the connectors card passes source="macos_contacts" for its imported
+        count."""
+        from .config import settings
+
+        stmt = (
+            select(func.count())
+            .select_from(Person)
+            .where(Person.owner == settings.owner)
+            .where(Person.removed_from_source_at.is_(None))
+        )
+        if source is not None:
+            stmt = stmt.where(Person.source == source)
+        with self._session() as s:
+            return int(s.scalar(stmt) or 0)
+
     def get_person(self, person_id: int) -> dict | None:
         """Fetch by id (owner-scoped). Returns soft-deleted rows too — callers
         decide; list_people hides them."""

@@ -531,15 +531,23 @@ class ConnectorInfo(BaseModel):
     ProviderStatus.status (adds 'not_connected', which a provider_accounts row
     can never express). Tokens/scopes are NEVER included — same rule as
     _provider_account_dict."""
-    name: Literal["google", "whoop", "moodle", "plaid"]
+    name: Literal["google", "whoop", "moodle", "plaid", "macos_contacts"]
     label: str
-    auth_kind: Literal["oauth", "token", "link"]
+    auth_kind: Literal["oauth", "token", "link", "local"]
     configured: bool
     status: Literal["not_connected", "connected", "needs_reauth"]
     connected_at: datetime | None = None
     provider_user_id: str | None = None
     can_write_email: bool | None = None   # google only; None for the others
     items: List[ConnectorItem] = []
+    # macos_contacts only — the rest stay defaulted so the other four
+    # constructions (google/whoop/moodle/plaid) are unaffected.
+    access: Literal["granted", "denied", "unknown"] = "unknown"
+    enabled: bool = False
+    sync_status: str | None = None
+    last_sync_at: datetime | None = None
+    last_error: str | None = None
+    count: int | None = None
 
 
 # ---- Fitness read/write schemas (M4) ----------------------------------------

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.config import settings
+from app.providers import macos_contacts
 from app.providers.base import NormalizedItem, Tokens
 from app.store import store
 
@@ -30,10 +31,17 @@ def _get(client):
     return {c["name"]: c for c in res.json()}
 
 
-def test_all_four_present_not_connected_on_empty_db(client):
+def test_all_five_present_not_connected_on_empty_db(client, monkeypatch):
+    # macos_contacts' configured/access/status come from a live platform +
+    # FDA probe (see _contacts_connector) — stub the platform seam so this
+    # order/status assertion is deterministic on macOS dev + CI alike, never
+    # touching the real AddressBook store during the suite run.
+    monkeypatch.setattr(macos_contacts, "_is_darwin", lambda: False)
     body = client.get("/api/connectors").json()
-    assert [c["name"] for c in body] == ["google", "whoop", "moodle", "plaid"]
-    assert [c["auth_kind"] for c in body] == ["oauth", "oauth", "token", "link"]
+    assert [c["name"] for c in body] == [
+        "google", "whoop", "moodle", "plaid", "macos_contacts",
+    ]
+    assert [c["auth_kind"] for c in body] == ["oauth", "oauth", "token", "link", "local"]
     for c in body:
         assert c["status"] == "not_connected"
         assert c["connected_at"] is None
