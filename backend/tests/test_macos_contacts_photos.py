@@ -3,11 +3,24 @@ import sqlite3
 
 import pytest
 
-from app.providers import contact_photos
+from app.providers import contact_photos, macos_contacts
 from app.providers.macos_contacts import SnapshotStatus, read_snapshot
 
 _ENT = 19
 _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+@pytest.fixture(autouse=True)
+def _real_reads(no_external_services):
+    """This file reads REAL (fixture) .abcddb files via read_snapshot() to
+    exercise the photo-extraction logic. The global autouse seam (conftest.py)
+    now seeds a default fake_snapshot so read_snapshot() never touches a real
+    AddressBook by default -- opt back out of that default here so these tests
+    still read the on-disk fixtures they build. Depending on
+    `no_external_services` (by name, not just autouse) guarantees this fixture's
+    reset runs AFTER that seam is installed, not before."""
+    macos_contacts.configure(platform="linux", fake_snapshot=None)
+    yield
 
 
 def _store(path, blob):

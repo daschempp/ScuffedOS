@@ -19,6 +19,7 @@ from app.config import settings
 from app.db import Base, make_engine, make_session_factory
 from app.main import app
 from app.providers import macos_contacts
+from app.providers.macos_contacts import ContactsSnapshot, SnapshotStatus
 from app.store import store
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or "sqlite+pysqlite:///:memory:"
@@ -51,11 +52,20 @@ def no_external_services():
     email_draft.configure(None)
     moodle_sync.configure(None)
     finance_sync.configure(None)
-    # Contacts: force the reader off real disk on every platform (macOS dev +
-    # Ubuntu CI) and keep the background loop disarmed. A test opts in with
-    # macos_contacts.configure(fake_snapshot=...), which short-circuits before
-    # any disk/platform logic.
-    macos_contacts.configure(platform="linux")
+    # Contacts: the REAL guarantee is the default fake_snapshot below, not the
+    # platform override. read_snapshot() only ever consults _FAKE_SNAPSHOT (never
+    # _PLATFORM_OVERRIDE/is_supported()) before touching disk, so seeding a
+    # non-None default here is what keeps every test off the real AddressBook on
+    # every platform (macOS dev + Ubuntu CI) -- platform="linux" alone would NOT
+    # have stopped a test that enables contacts and calls tick()/read_snapshot()
+    # without also configuring its own fake_snapshot from reading the real store.
+    # A test that needs a REAL read (the reader/photo fixture tests) must reset
+    # this seam first via macos_contacts.configure(fake_snapshot=None). Keep the
+    # background loop disarmed either way.
+    macos_contacts.configure(
+        platform="linux",
+        fake_snapshot=ContactsSnapshot(status=SnapshotStatus.ACCESS_DENIED, people=[]),
+    )
     contacts_sync.configure(None)
     _prev_contacts_sync_enabled = settings.contacts_sync_enabled
     settings.contacts_sync_enabled = False

@@ -17,6 +17,19 @@ from app.providers.macos_contacts import (
 _ENT_CONTACT = 19
 _ENT_GROUP = 20
 
+
+@pytest.fixture(autouse=True)
+def _real_reads(no_external_services):
+    """This whole file reads REAL (fixture) .abcddb files via read_snapshot() to
+    exercise the reader's own logic. The global autouse seam (conftest.py) now
+    seeds a default fake_snapshot so read_snapshot() never touches a real
+    AddressBook by default -- opt back out of that default here so these tests
+    still read the on-disk fixtures they build. Depending on
+    `no_external_services` (by name, not just autouse) guarantees this fixture's
+    reset runs AFTER that seam is installed, not before."""
+    macos_contacts.configure(platform="linux", fake_snapshot=None)
+    yield
+
 _SCHEMA = """
 CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER, Z_NAME TEXT);
 CREATE TABLE ZABCDRECORD (

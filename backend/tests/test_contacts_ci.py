@@ -55,6 +55,28 @@ def test_real_contacts_probing_disabled_by_default():
     assert settings.contacts_sync_enabled is False
 
 
+def test_default_autouse_seam_blocks_real_addressbook_read(monkeypatch):
+    """M10 s1 review gap: enabling contacts and calling tick() with NO
+    fake_snapshot configured beyond the global autouse default must NEVER reach
+    the real AddressBook, regardless of host platform. read_snapshot() only ever
+    consults `_FAKE_SNAPSHOT` (never the platform override) before touching
+    disk, so the fix is a default fake_snapshot seeded by the autouse fixture --
+    prove it short-circuits before `_store_paths` (the first real-disk touch)
+    ever runs."""
+    store.set_contacts_enabled(True, region="US", now=NOW)
+
+    def _must_not_touch_disk(*a, **k):
+        raise AssertionError(
+            "_store_paths must not run: the autouse default fake_snapshot "
+            "should short-circuit read_snapshot before any real disk access")
+    monkeypatch.setattr(macos_contacts, "_store_paths", _must_not_touch_disk)
+
+    result = contacts_sync.tick(NOW)
+    assert result.status == "access_denied"
+    assert result.access == "denied"
+    assert len(store.list_people()["items"]) == 0
+
+
 def test_remote_postgres_outage_is_error_never_empty(monkeypatch):
     """An unreachable/erroring PostgreSQL server is a FAILED sync (status='error'),
     NEVER 'empty' — and it must not soft-delete existing rows. Guards the money-
