@@ -264,6 +264,35 @@ export const api = {
   updateMemory: (id, patch) => request(`/api/memory/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteMemory: (id) => request(`/api/memory/${id}`, { method: 'DELETE' }),
 
+  // People / CRM (M10) — real contact rows (macOS Contacts sync + manual).
+  listPeople: (params = {}) => {
+    const qs = new URLSearchParams()
+    if (params.q) qs.set('q', params.q)
+    if (params.cursor) qs.set('cursor', params.cursor)
+    if (params.limit != null) qs.set('limit', String(params.limit))
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return request(`/api/people${suffix}`)
+  },
+  getPerson: (id) => request(`/api/people/${id}`),
+  createPerson: (person) => request('/api/people', {
+    method: 'POST',
+    body: JSON.stringify(typeof person === 'string' ? { display_name: person } : person),
+  }),
+  updatePerson: (id, patch) => request(`/api/people/${id}`, {
+    method: 'PATCH', body: JSON.stringify(patch),
+  }),
+  deletePerson: (id) => request(`/api/people/${id}`, { method: 'DELETE' }),
+  syncContacts: () => request('/api/people/sync', { method: 'POST' }),
+  enableContacts: (ack = true) => request('/api/people/contacts/enable', {
+    method: 'POST', body: JSON.stringify({ ack_storage_disclosure: ack }),
+  }),
+  disconnectContacts: () => request('/api/people/contacts/disconnect', { method: 'POST' }),
+  forgetContacts: () => request('/api/people/contacts/forget', {
+    method: 'POST', body: JSON.stringify({ confirm: true }),
+  }),
+  // Absolute URL for an <img src>; resolves against the configured API base.
+  personPhotoUrl: (id) => `${BASE}/api/people/${id}/photo`,
+
   // Settings — integration secrets. GET returns masked presence only; PUT
   // writes new values into the machine-bound vault (never echoes secrets).
   settingsGetSecrets: () => request('/api/settings/secrets'),

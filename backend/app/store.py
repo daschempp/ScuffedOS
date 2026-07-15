@@ -11,12 +11,18 @@ non-nullable fields are ignored rather than erroring.
 """
 from __future__ import annotations
 
+import base64
 import functools
+import hashlib
+import json
 import logging
+import os
+import threading
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import case, select
+from sqlalchemy import and_, case, delete, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -33,6 +39,7 @@ from .display import (
     task_due_display,
 )
 from .models import (
+    ContactsSyncState,
     Conversation,
     ConversationMessage,
     DailySnapshot,
@@ -58,6 +65,8 @@ from .models import (
     MoodleGrade,
     MoodleNotification,
     NutritionTargets,
+    Person,
+    PersonHandle,
     ProviderAccount,
     Task,
     TaskReminder,
@@ -76,6 +85,7 @@ from .providers.base import (
     NormalizedHolding,
     NormalizedItem,
     NormalizedNotification,
+    NormalizedPerson,
     NormalizedSecurity,
     NormalizedSnapshot,
     NormalizedTransaction,
@@ -83,6 +93,7 @@ from .providers.base import (
     Tokens,
     TransactionsDelta,
 )
+from .providers.macos_contacts import ContactsSnapshot, SnapshotStatus, SyncResult
 
 # ---- finance budget categories (expanded fixed set, slice 2) ----
 BUDGET_CATEGORIES = ["Groceries", "Dining out", "Rent & bills", "Transport",
@@ -502,6 +513,163 @@ def _email_dict(e: Email) -> dict:
         "created_at": aware_utc(e.created_at),
         "updated_at": aware_utc(e.updated_at),
     }
+
+
+# ---- people (M10): locking + helpers ----
+# Serializes every contacts mutation within this process; on PostgreSQL a
+# transaction-scoped advisory lock (below) extends that guarantee across
+# processes/hosts sharing the database. RLock so a retried @_retry_integrity
+# call on the same thread can't self-deadlock.
+_CONTACTS_LOCK = threading.RLock()
+
+# Non-COMPLETE snapshot -> (SyncResult.status, contacts_sync_state.status, access).
+# ACCESS_DENIED is handled inline (stale vs access_denied depends on existing rows).
+_FAILED_MAP = {
+    SnapshotStatus.UNSUPPORTED_SCHEMA: ("unsupported", "error", "unknown"),
+    SnapshotStatus.MISSING_STORE:      ("error", "error", "unknown"),
+    SnapshotStatus.PARTIAL_READ:       ("partial", "stale", "unknown"),
+    SnapshotStatus.IO_ERROR:           ("error", "error", "unknown"),
+}
+
+# Sync-owned identity fields: written by the snapshot apply; server-enforced
+# READ-ONLY on imported rows via the CRUD patch path. CRM-native fields
+# (relationship*/notes/pinned/last_contacted_at) are ScuffedOS-owned and editable.
+_PERSON_NAME_FIELDS = ("display_name", "first_name", "last_name",
+                       "nickname", "organization", "job_title")
+_PERSON_SYNC_FIELDS = _PERSON_NAME_FIELDS + ("phones", "emails", "photo_key", "has_photo")
+_PERSON_IMMUTABLE = ("id", "owner", "source", "source_id",
+                     "created_at", "updated_at", "meta", "removed_from_source_at")
+
+
+def _advisory_key(owner: str) -> int:
+    """Stable signed 64-bit key for pg_advisory_xact_lock, namespaced per owner."""
+    digest = hashlib.sha1(f"scuffedos:contacts_sync:{owner}".encode()).digest()[:8]
+    return int.from_bytes(digest, "big", signed=True)
+
+
+def _encode_cursor(display_name: str, person_id: int) -> str:
+    """Opaque keyset cursor = base64(JSON [display_name, id]). SINGLE definition
+    for the whole store — list_people (Task 3) and the router's paginated list
+    (Task 7) both reuse it; do NOT redefine it elsewhere."""
+    raw = json.dumps([display_name, person_id]).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii")
+
+
+def _decode_cursor(cursor: str) -> tuple[str | None, int | None]:
+    """Inverse of _encode_cursor; returns (None, None) on any malformed token so a
+    bad cursor yields an empty/whole page instead of a 500."""
+    try:
+        name, person_id = json.loads(base64.urlsafe_b64decode(cursor.encode("ascii")))
+        return name, int(person_id)
+    except Exception:
+        return None, None
+
+
+def _clean_name(v, maxlen: int = 256) -> str:
+    return str(v or "").strip()[:maxlen]
+
+
+def _clean_label(v, maxlen: int = 64) -> str:
+    return str(v or "").strip()[:maxlen]
+
+
+def _clean_value(v, maxlen: int = 320) -> str:
+    return str(v or "").strip()[:maxlen]
+
+
+def _clean_strength(v) -> int | None:
+    try:
+        return max(1, min(5, int(v)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _canon_entries(phones, emails, region: str):
+    """Return (norm_phones, norm_emails, handles) as FRESH dicts/keys.
+
+    Each stored entry is a brand-new ``{value,label,normalized}`` dict — reassigned
+    wholesale to the JSON column by the caller so SQLAlchemy detects the change and
+    ``normalized`` actually persists. ``handles`` maps a deduped ``(kind, value)``
+    key to its ``possible`` flag for the PersonHandle rebuild. Never mutates the
+    caller's input dicts.
+    """
+    from .identity import canon_handle
+
+    norm_phones: list[dict] = []
+    norm_emails: list[dict] = []
+    handles: dict[tuple[str, str], bool] = {}
+    for entries, out in ((phones, norm_phones), (emails, norm_emails)):
+        for entry in entries or []:
+            value = _clean_value((entry or {}).get("value", ""))
+            if not value:
+                continue
+            label = _clean_label((entry or {}).get("label", ""))
+            canon = canon_handle(value, region)
+            out.append({"value": value, "label": label,
+                        "normalized": canon["normalized"] if canon else None})
+            if canon:
+                handles.setdefault((canon["kind"], canon["normalized"]), canon["possible"])
+    return norm_phones, norm_emails, handles
+
+
+def _person_dict(p: Person) -> dict:
+    return {
+        "id": p.id,
+        "source": p.source,
+        "source_id": p.source_id,
+        "display_name": p.display_name,
+        "first_name": p.first_name,
+        "last_name": p.last_name,
+        "nickname": p.nickname,
+        "organization": p.organization,
+        "job_title": p.job_title,
+        "phones": p.phones or [],
+        "emails": p.emails or [],
+        "has_photo": bool(p.has_photo),
+        "relationship": p.relationship,
+        "relationship_strength": p.relationship_strength,
+        "notes": p.notes,
+        "pinned": bool(p.pinned),
+        "last_contacted_at": aware_utc(p.last_contacted_at),
+        "removed_from_source_at": aware_utc(p.removed_from_source_at),
+        "created_at": aware_utc(p.created_at),
+        "updated_at": aware_utc(p.updated_at),
+    }
+
+
+def _state_dict(st: ContactsSyncState) -> dict:
+    return {
+        "owner": st.owner,
+        "enabled": bool(st.enabled),
+        "status": st.status,
+        "access": st.access,
+        "normalization_region": st.normalization_region,
+        "last_sync_at": aware_utc(st.last_sync_at),
+        "last_error": st.last_error,
+        "enabled_at": aware_utc(st.enabled_at),
+        "created_at": aware_utc(st.created_at),
+        "updated_at": aware_utc(st.updated_at),
+    }
+
+
+def _delete_photo_files(photos_root: str, keys: list[str]) -> None:
+    """Best-effort unlink of relative photo_key files under the resolved photos
+    root, with a containment check (never follow `..`/symlinks out of the root).
+    A failure here never aborts the calling operation — including a malformed
+    key (e.g. an embedded null byte) that would make os.path.realpath raise."""
+    try:
+        real_root = os.path.realpath(photos_root)
+    except (OSError, ValueError):
+        return
+    for key in keys:
+        if not key:
+            continue
+        try:
+            target = os.path.realpath(os.path.join(real_root, key))
+            if os.path.commonpath([real_root, target]) == real_root and os.path.isfile(target):
+                os.remove(target)
+        except (OSError, ValueError):
+            continue
 
 
 def _moodle_course_dict(c: MoodleCourse) -> dict:
@@ -1571,6 +1739,563 @@ class Store:
                 .where(Email.owner == settings.owner)
             ).first()
             return _email_dict(row) if row is not None else None
+
+    # ---- people (M10) ----
+    @contextmanager
+    def _locked_write(self):
+        """One serialized write transaction. Holds the module process lock and,
+        on PostgreSQL, a transaction-scoped advisory lock so overlapping syncs /
+        manual edits across processes or hosts can never interleave. SQLite (tests)
+        -> the advisory lock is a no-op."""
+        from .config import settings
+
+        with _CONTACTS_LOCK:
+            with self._session() as s, s.begin():
+                if s.get_bind().dialect.name == "postgresql":
+                    s.execute(text("SELECT pg_advisory_xact_lock(:k)"),
+                              {"k": _advisory_key(settings.owner)})
+                yield s
+
+    def _state_row(self, s: Session) -> ContactsSyncState:
+        from .config import settings
+
+        row = s.scalars(
+            select(ContactsSyncState).where(ContactsSyncState.owner == settings.owner)
+        ).first()
+        if row is None:
+            row = ContactsSyncState(owner=settings.owner)
+            s.add(row)
+            s.flush()
+        return row
+
+    def _person_row(self, s: Session, source: str, source_id: str) -> Person | None:
+        from .config import settings
+
+        return s.scalars(
+            select(Person)
+            .where(Person.owner == settings.owner)
+            .where(Person.source == source)
+            .where(Person.source_id == source_id)
+        ).first()
+
+    def _write_handles(self, s: Session, person_id: int,
+                       handles: dict[tuple[str, str], bool]) -> None:
+        from .config import settings
+
+        s.execute(delete(PersonHandle).where(PersonHandle.person_id == person_id))
+        for (kind, value), possible in handles.items():
+            s.add(PersonHandle(owner=settings.owner, person_id=person_id,
+                               kind=kind, value=(value or "")[:320], possible=bool(possible)))
+
+    def _apply_person(self, s: Session, person: NormalizedPerson,
+                      region: str) -> tuple[Person, bool]:
+        """Get-or-create by (owner, source, source_id); write ONLY the sync-owned
+        identity fields + phones/emails/meta and rebuild the handle index. Clears
+        removed_from_source_at so a returning contact resurrects. CRM-native fields
+        are never touched here. Returns (row, created)."""
+        from .config import settings
+
+        row = self._person_row(s, person.source, person.source_id)
+        created = row is None
+        if created:
+            row = Person(owner=settings.owner, source=person.source,
+                         source_id=person.source_id)
+            s.add(row)
+        row.display_name = _clean_name(person.display_name)
+        row.first_name = _clean_name(person.first_name)
+        row.last_name = _clean_name(person.last_name)
+        row.nickname = _clean_name(person.nickname)
+        row.organization = _clean_name(person.organization)
+        row.job_title = _clean_name(person.job_title)
+        # Photos: the reader hands us a TRANSIENT absolute path; persist only the
+        # opaque, RELATIVE photo_key (contract: Photo storage). When a person's
+        # photo changes, unlink the superseded file. Imports are function-local so
+        # Task 3 stays self-contained (contact_photos lands in Task 5) and a
+        # photoless person (photo_path is None) never touches the photos module.
+        old_key = row.photo_key
+        new_key = None
+        if person.photo_path:
+            from .providers import contact_photos
+            new_key = contact_photos.key_for_path(person.photo_path)
+        row.photo_key = new_key
+        row.has_photo = bool(person.has_photo)
+        if old_key and old_key != new_key:
+            from .providers import contact_photos
+            contact_photos.delete_photo(old_key, settings.contacts_photos_root())
+        norm_phones, norm_emails, handles = _canon_entries(person.phones, person.emails, region)
+        row.phones = norm_phones            # fresh list of fresh dicts -> change detected
+        row.emails = norm_emails
+        row.meta = {**(row.meta or {}), **(person.meta or {})}
+        row.removed_from_source_at = None
+        s.flush()
+        self._write_handles(s, row.id, handles)
+        return row, created
+
+    def _reconcile_people(self, s: Session, source: str,
+                          seen_source_ids: list[str], now: datetime) -> int:
+        """Soft-delete synced people no longer present in the snapshot (never a
+        hard delete; handle rows survive so history still resolves). Caller runs
+        this ONLY for a clean COMPLETE_* read."""
+        from .config import settings
+
+        seen = set(seen_source_ids)
+        flipped = 0
+        rows = s.scalars(
+            select(Person)
+            .where(Person.owner == settings.owner)
+            .where(Person.source == source)
+            .where(Person.removed_from_source_at.is_(None))
+        ).all()
+        for row in rows:
+            if row.source_id not in seen:
+                row.removed_from_source_at = _to_utc(now)
+                flipped += 1
+        return flipped
+
+    @_retry_integrity
+    def apply_contacts_snapshot(self, snapshot: ContactsSnapshot,
+                                now: datetime) -> SyncResult:
+        """The one transactional entry the sync engine (Task 5) calls. In a single
+        locked transaction: on a COMPLETE_* read upsert every person + rebuild
+        handles, then reconcile soft-deletions IFF no per-record error occurred
+        (else commit the good upserts and record status='partial', skipping
+        reconcile). A non-COMPLETE read writes NO rows — it only records state;
+        ACCESS_DENIED with existing rows marks the state 'stale' (never
+        soft-deletes)."""
+        from .config import settings
+
+        now = _to_utc(now)
+        complete = snapshot.status in (SnapshotStatus.COMPLETE_NONEMPTY,
+                                       SnapshotStatus.COMPLETE_EMPTY)
+        with self._locked_write() as s:
+            state = self._state_row(s)
+            region = state.normalization_region or settings.contacts_default_region
+
+            if not complete:
+                if snapshot.status == SnapshotStatus.ACCESS_DENIED:
+                    active = s.scalar(
+                        select(func.count()).select_from(Person)
+                        .where(Person.owner == settings.owner)
+                        .where(Person.source == "macos_contacts")
+                        .where(Person.removed_from_source_at.is_(None))
+                    ) or 0
+                    result_status = "access_denied"
+                    state_status = "stale" if active else "access_denied"
+                    access = "denied"
+                else:
+                    result_status, state_status, access = _FAILED_MAP[snapshot.status]
+                state.status = state_status
+                state.access = access
+                state.last_error = snapshot.error
+                return SyncResult(status=result_status, access=access,
+                                  last_sync_at=aware_utc(state.last_sync_at),
+                                  last_error=snapshot.error)
+
+            imported = updated = 0
+            per_record_error = False
+            seen: list[str] = []
+            for person in snapshot.people:
+                try:
+                    with s.begin_nested():          # savepoint: a bad record can't poison the batch
+                        _row, created = self._apply_person(s, person, region)
+                    seen.append(person.source_id)
+                    imported += int(created)
+                    updated += int(not created)
+                except (ValueError, TypeError):
+                    # DATA-TRANSFORM error only (bad record shape / handle): drop
+                    # this record, commit the rest, and degrade to 'partial' with
+                    # reconcile skipped. Infrastructure/DB errors (SQLAlchemyError /
+                    # OperationalError) are deliberately NOT caught here -> they
+                    # propagate and the whole transaction rolls back atomically.
+                    per_record_error = True
+                    logger.exception("apply_contacts_snapshot: record failed (%s)",
+                                     getattr(person, "source_id", "?"))
+
+            removed = 0
+            if not per_record_error:
+                removed = self._reconcile_people(s, "macos_contacts", seen, now)
+                state.status = "ready"
+                state.last_error = None
+                result_status = ("empty" if snapshot.status == SnapshotStatus.COMPLETE_EMPTY
+                                 else "ok")
+            else:
+                state.status = "error"
+                state.last_error = "partial apply: one or more contacts failed to import"
+                result_status = "partial"
+
+            if state.normalization_region is None:
+                state.normalization_region = region
+            state.access = "granted"
+            state.last_sync_at = now
+            result = SyncResult(status=result_status, access="granted",
+                                imported=imported, updated=updated, removed=removed,
+                                last_sync_at=now, last_error=state.last_error)
+            # Surviving photo keys, for the post-commit orphan sweep below.
+            keep_photo_keys = set(s.scalars(
+                select(Person.photo_key)
+                .where(Person.owner == settings.owner)
+                .where(Person.photo_key.is_not(None))
+            ).all())
+
+        # After the transaction COMMITS: sweep superseded / rolled-back / orphaned
+        # photo files that no surviving row references (contract: Photo storage —
+        # cleanup on re-sync). Skipped when no photos exist, which keeps Task 3
+        # self-contained (contact_photos lands in Task 5).
+        if keep_photo_keys:
+            from .providers import contact_photos
+            contact_photos.cleanup_orphans(keep_photo_keys, settings.contacts_photos_root())
+        return result
+
+    @_retry_integrity
+    def upsert_person(self, person: NormalizedPerson) -> dict:
+        """Single-person get-or-create + reindex (its own locked transaction).
+        Convenience for granular callers/tests; the batch sync path uses
+        apply_contacts_snapshot."""
+        from .config import settings
+
+        with self._locked_write() as s:
+            region = self._state_row(s).normalization_region or settings.contacts_default_region
+            row, _created = self._apply_person(s, person, region)
+            return _person_dict(row)
+
+    def list_people(self, *, include_removed: bool = False, q: str | None = None,
+                    limit: int = 50, cursor: str | None = None) -> dict:
+        """Deterministic (display_name, id) keyset page. Bounded search `q`
+        (case-insensitive substring over name/nickname/organization/job title).
+        Returns {"items": [...], "next_cursor": str | None}."""
+        from .config import settings
+
+        limit = max(1, min(int(limit or 50), 200))
+        stmt = select(Person).where(Person.owner == settings.owner)
+        if not include_removed:
+            stmt = stmt.where(Person.removed_from_source_at.is_(None))
+        ql = (q or "").strip()[:100]
+        if ql:
+            like = f"%{ql.lower()}%"
+            stmt = stmt.where(or_(
+                func.lower(Person.display_name).like(like),
+                func.lower(Person.nickname).like(like),
+                func.lower(Person.organization).like(like),
+                func.lower(Person.job_title).like(like),
+            ))
+        if cursor:
+            cname, cid = _decode_cursor(cursor)
+            if cname is not None:
+                stmt = stmt.where(or_(
+                    Person.display_name > cname,
+                    and_(Person.display_name == cname, Person.id > cid),
+                ))
+        stmt = stmt.order_by(Person.display_name.asc(), Person.id.asc()).limit(limit + 1)
+        with self._session() as s:
+            rows = s.scalars(stmt).all()
+        next_cursor = None
+        if len(rows) > limit:
+            edge = rows[limit - 1]
+            next_cursor = _encode_cursor(edge.display_name, edge.id)
+            rows = rows[:limit]
+        return {"items": [_person_dict(r) for r in rows], "next_cursor": next_cursor}
+
+    def count_people(self, source: str | None = None) -> int:
+        """Owner-scoped count of people, excluding soft-deleted rows
+        (removed_from_source_at IS NULL). `source=None` counts every source;
+        the connectors card passes source="macos_contacts" for its imported
+        count."""
+        from .config import settings
+
+        stmt = (
+            select(func.count())
+            .select_from(Person)
+            .where(Person.owner == settings.owner)
+            .where(Person.removed_from_source_at.is_(None))
+        )
+        if source is not None:
+            stmt = stmt.where(Person.source == source)
+        with self._session() as s:
+            return int(s.scalar(stmt) or 0)
+
+    def get_person(self, person_id: int) -> dict | None:
+        """Fetch by id (owner-scoped). Returns soft-deleted rows too — callers
+        decide; list_people hides them."""
+        from .config import settings
+
+        with self._session() as s:
+            row = s.scalars(
+                select(Person)
+                .where(Person.owner == settings.owner)
+                .where(Person.id == person_id)
+            ).first()
+            return _person_dict(row) if row is not None else None
+
+    def _apply_patch(self, s: Session, row: Person, patch: dict, region: str,
+                     *, manual: bool) -> None:
+        """Source-aware CRUD field application.
+        - Imported rows: sync-owned identity fields are silently dropped (read-only).
+        - Non-nullable fields: an explicit None is ignored (PATCH never 500s);
+          nullable CRM-native fields: an explicit None clears them.
+        Rebuilds handles by reassigning fresh normalized lists when phones/emails
+        change (never post-flush nested mutation)."""
+        new_phones = new_emails = None
+        for key, value in (patch or {}).items():
+            if key in _PERSON_IMMUTABLE:
+                continue
+            if not manual and key in _PERSON_SYNC_FIELDS:     # imported identity read-only
+                continue
+            if key == "phones":
+                if value is not None:
+                    new_phones = value
+            elif key == "emails":
+                if value is not None:
+                    new_emails = value
+            elif key in _PERSON_NAME_FIELDS:
+                if value is not None:                          # non-nullable -> ignore None
+                    setattr(row, key, _clean_name(value))
+            elif key == "relationship":
+                row.relationship = None if value is None else _clean_label(value, 32)
+            elif key == "relationship_strength":
+                row.relationship_strength = None if value is None else _clean_strength(value)
+            elif key == "notes":
+                row.notes = None if value is None else str(value)
+            elif key == "pinned":
+                if value is not None:
+                    row.pinned = bool(value)
+            elif key == "last_contacted_at":
+                row.last_contacted_at = None if value is None else _to_utc(value)
+            # unknown keys (and has_photo/photo_key/source) ignored -> PATCH cannot 500
+        if new_phones is not None or new_emails is not None:
+            phones_src = new_phones if new_phones is not None else (row.phones or [])
+            emails_src = new_emails if new_emails is not None else (row.emails or [])
+            s.flush()
+            norm_phones, norm_emails, handles = _canon_entries(phones_src, emails_src, region)
+            row.phones = norm_phones
+            row.emails = norm_emails
+            s.flush()
+            self._write_handles(s, row.id, handles)
+
+    @_retry_integrity
+    def create_person(self, data: dict) -> dict:
+        """Manual (source='manual') create; server-generates source_id. Rejects a
+        whitespace-only display_name."""
+        import uuid
+
+        from .config import settings
+
+        display = _clean_name((data or {}).get("display_name", ""))
+        if not display:
+            raise ValueError("display_name must not be blank")
+        with self._locked_write() as s:
+            region = self._state_row(s).normalization_region or settings.contacts_default_region
+            row = Person(owner=settings.owner, source="manual",
+                         source_id=uuid.uuid4().hex, display_name=display)
+            s.add(row)
+            s.flush()
+            rest = {k: v for k, v in (data or {}).items() if k != "display_name"}
+            self._apply_patch(s, row, rest, region, manual=True)
+            return _person_dict(row)
+
+    @_retry_integrity
+    def update_person(self, person_id: int, patch: dict) -> dict | None:
+        from .config import settings
+
+        with self._locked_write() as s:
+            row = s.scalars(
+                select(Person)
+                .where(Person.owner == settings.owner)
+                .where(Person.id == person_id)
+            ).first()
+            if row is None:
+                return None
+            region = self._state_row(s).normalization_region or settings.contacts_default_region
+            clean = dict(patch or {})
+            # Never blank an existing name with a whitespace-only value.
+            if clean.get("display_name") is not None and not _clean_name(clean["display_name"]):
+                clean.pop("display_name")
+            self._apply_patch(s, row, clean, region, manual=(row.source == "manual"))
+            return _person_dict(row)
+
+    @_retry_integrity
+    def delete_person(self, person_id: int) -> bool:
+        """Hard-delete a manual row (its person_handle rows cascade). An imported
+        row is never hard-deleted here — it is tombstoned (soft-deleted) so history
+        still resolves; a later authoritative sync resurrects it if the source
+        contact still exists. Permanent removal of imported data is the
+        Disconnect/Forget lifecycle."""
+        from .config import settings
+
+        with self._locked_write() as s:
+            row = s.scalars(
+                select(Person)
+                .where(Person.owner == settings.owner)
+                .where(Person.id == person_id)
+            ).first()
+            if row is None:
+                return False
+            if row.source == "manual":
+                s.delete(row)
+            else:
+                row.removed_from_source_at = utcnow()
+            return True
+
+    def resolve_handle(self, handle: str) -> list[dict]:
+        """Every person carrying this handle (shared handles -> multiple), most
+        recently contacted first, INCLUDING soft-deleted people so historical
+        messages still resolve. Canonicalizes with the PERSISTED
+        normalization_region (falls back to settings), never the live locale."""
+        from .config import settings
+        from .identity import canon_handle
+
+        with self._session() as s:
+            state = s.scalars(
+                select(ContactsSyncState).where(ContactsSyncState.owner == settings.owner)
+            ).first()
+            region = (state.normalization_region if state else None) \
+                or settings.contacts_default_region
+            canon = canon_handle(handle, region)
+            if canon is None:
+                return []
+            rows = s.scalars(
+                select(Person)
+                .join(PersonHandle, PersonHandle.person_id == Person.id)
+                .where(Person.owner == settings.owner)
+                .where(PersonHandle.value == canon["normalized"])
+                .order_by(case((Person.last_contacted_at.is_(None), 1), else_=0),
+                          Person.last_contacted_at.desc(),
+                          Person.updated_at.desc(),
+                          Person.id.desc())
+            ).all()
+            return [_person_dict(r) for r in rows]
+
+    @_retry_integrity
+    def get_contacts_state(self) -> dict:
+        """Get-or-create the single contacts_sync_state row for the owner."""
+        with self._session() as s, s.begin():
+            return _state_dict(self._state_row(s))
+
+    @_retry_integrity
+    def set_contacts_state(self, patch: dict) -> dict:
+        """Patch consent/lifecycle fields (enable/disconnect/status/region/errors).
+        Datetimes are stored aware-UTC. The router (Task 6) drives enable/disconnect;
+        the sync apply writes status/access/last_sync_at itself."""
+        with self._locked_write() as s:
+            st = self._state_row(s)
+            for key in ("enabled", "status", "access", "normalization_region", "last_error"):
+                if key in patch:
+                    setattr(st, key, patch[key])
+            for key in ("last_sync_at", "enabled_at"):
+                if key in patch:
+                    setattr(st, key, _to_utc(patch[key]) if patch[key] is not None else None)
+            return _state_dict(st)
+
+    def set_contacts_enabled(self, enabled: bool, *, region: str | None = None,
+                             now: datetime | None = None) -> dict:
+        """Thin consent toggle over set_contacts_state (used by the Task 10 tests
+        and any caller that just flips the flag). Enabling stamps enabled_at +
+        status 'ready' and, when given, persists normalization_region; disabling
+        sets status 'disabled'. Delegates locking/serialization to
+        set_contacts_state."""
+        patch: dict = {"enabled": bool(enabled)}
+        if enabled:
+            patch["status"] = "ready"
+            patch["enabled_at"] = now or utcnow()
+            if region:
+                patch["normalization_region"] = region
+        else:
+            patch["status"] = "disabled"
+        return self.set_contacts_state(patch)
+
+    # ---- people photo key (M10) ----
+    # NOTE: the paginated/searchable people list is `store.list_people(...)` from
+    # Task 3 (same `{items, next_cursor}` shape, and it searches
+    # name/nickname/organization/job_title). The router calls it directly; do NOT
+    # add a second `search_people` here.
+    def get_person_photo_key(self, person_id: int) -> str | None:
+        """The relative photo_key (opaque, stored in the configured database), or
+        None. The router resolves it against the photos root with a containment
+        check; the key itself is never a filesystem path we trust blindly."""
+        from .config import settings
+
+        with self._session() as s:
+            row = s.scalars(
+                select(Person)
+                .where(Person.owner == settings.owner)
+                .where(Person.id == person_id)
+            ).first()
+            return row.photo_key if row is not None else None
+
+    # ---- contacts consent lifecycle (M10) ----
+    def enable_contacts(self, *, region: str) -> dict:
+        """Connect: enabled=True, stamp enabled_at, and persist normalization_region
+        ONCE (a later locale change must never retroactively re-resolve existing
+        handles). Does not read contacts here — the caller kicks a sync."""
+        with self._locked_write() as s:
+            row = self._state_row(s)
+            row.enabled = True
+            row.enabled_at = utcnow()
+            if not row.normalization_region:
+                row.normalization_region = region
+            if row.status in (None, "disabled"):
+                row.status = "ready"
+            s.flush()
+            return _state_dict(row)
+
+    def disconnect_contacts(self) -> dict:
+        """Disconnect: stop future reads/syncs. Does NOT delete rows — existing CRM
+        data is preserved; normalization_region is kept."""
+        with self._locked_write() as s:
+            row = self._state_row(s)
+            row.enabled = False
+            row.status = "disabled"
+            s.flush()
+            return _state_dict(row)
+
+    @_retry_integrity
+    def forget_contacts(self) -> dict:
+        """Delete imported (source='macos_contacts') rows + their handle rows +
+        extracted photos, then disable. CRM-native survival rule: a person carrying
+        ANY CRM-native data (relationship/strength/notes/pinned/last_contacted_at)
+        is converted to a source='manual' tombstone that keeps display_name + the
+        CRM-native fields (identity fields, handle index and photo cleared);
+        people with no CRM-native data are fully deleted."""
+        import uuid
+
+        from .config import settings
+
+        photos_root = settings.contacts_photos_root()
+        removed_keys: list[str] = []
+        with self._locked_write() as s:
+            rows = s.scalars(
+                select(Person)
+                .where(Person.owner == settings.owner)
+                .where(Person.source == "macos_contacts")
+            ).all()
+            for row in rows:
+                if row.photo_key:
+                    removed_keys.append(row.photo_key)
+                has_crm = any((row.relationship, row.relationship_strength, row.notes,
+                               row.pinned, row.last_contacted_at))
+                if has_crm:
+                    s.execute(delete(PersonHandle).where(PersonHandle.person_id == row.id))
+                    row.source = "manual"
+                    row.source_id = uuid.uuid4().hex
+                    row.first_name = ""
+                    row.last_name = ""
+                    row.nickname = ""
+                    row.organization = ""
+                    row.job_title = ""
+                    row.phones = []
+                    row.emails = []
+                    row.photo_key = None
+                    row.has_photo = False
+                    row.removed_from_source_at = None
+                else:
+                    s.delete(row)  # person_handle rows cascade
+            state = self._state_row(s)
+            state.enabled = False
+            state.status = "disabled"
+            state.last_error = None
+            s.flush()
+            result = _state_dict(state)
+        _delete_photo_files(photos_root, removed_keys)   # after commit; never fatal
+        return result
 
     def _owned_email_row(self, s: Session, email_id: int) -> Email | None:
         from .config import settings

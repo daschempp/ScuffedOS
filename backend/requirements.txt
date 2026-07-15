@@ -21,3 +21,5 @@ cryptography>=43
 keyring>=25
 # Optional, for `uvicorn --reload` + faster event loop (compiled deps):
 #   pip install "uvicorn[standard]"
+# Identity canonicalization (M10 s1): E.164 phone parsing, pure-Python/offline.
+phonenumberslite

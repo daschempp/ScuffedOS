@@ -345,6 +345,29 @@ class NormalizedInvestmentTransaction:      # /investments/transactions/get
     iso_currency: str = "USD"
 
 
+@dataclass
+class NormalizedPerson:
+    """A contact as produced by the local macOS AddressBook reader (Task 4).
+    phones/emails arrive as ``[{"value","label"}]``; the store fills ``normalized``
+    from ``app.identity``. ``photo_path`` is the reader's TRANSIENT absolute path to
+    the extracted file on the backend host; the store converts it to the opaque,
+    relative ``photo_key`` it persists (contract: Photo storage)."""
+
+    source: str                                  # 'macos_contacts'
+    source_id: str
+    display_name: str
+    first_name: str = ""
+    last_name: str = ""
+    nickname: str = ""
+    organization: str = ""
+    job_title: str = ""
+    phones: list = field(default_factory=list)   # [{value, label}]
+    emails: list = field(default_factory=list)   # [{value, label}]
+    photo_path: str | None = None                # transient absolute path; store -> photo_key
+    has_photo: bool = False
+    meta: dict = field(default_factory=dict)
+
+
 @runtime_checkable
 class PlaidProvider(Protocol):
     """Read-only Plaid REST adapter. NOT an OAuthProvider (Hosted Link is a

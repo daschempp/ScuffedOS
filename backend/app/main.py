@@ -19,7 +19,7 @@ import signal
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import email_sync, finance_sync, fitness_sync, localdb, moodle_sync, reminders
+from . import contacts_sync, email_sync, finance_sync, fitness_sync, localdb, moodle_sync, reminders
 from .config import settings
 from .errors import install_error_handlers
 from .routers import (
@@ -34,6 +34,7 @@ from .routers import (
     moodle,
     nutrition,
     oauth,
+    people,
     settings as settings_router,
     tasks,
 )
@@ -82,6 +83,7 @@ async def lifespan(_: FastAPI):
     email_task: asyncio.Task | None = None
     moodle_task: asyncio.Task | None = None
     finance_task: asyncio.Task | None = None
+    contacts_task: asyncio.Task | None = None
     if settings.reminders_enabled:
         reminder_task = asyncio.create_task(reminders.run_loop())
     if settings.fitness_sync_enabled:
@@ -92,8 +94,10 @@ async def lifespan(_: FastAPI):
         moodle_task = asyncio.create_task(moodle_sync.run_loop())
     if settings.finance_sync_enabled:
         finance_task = asyncio.create_task(finance_sync.run_loop())
+    if settings.contacts_sync_enabled:
+        contacts_task = asyncio.create_task(contacts_sync.run_loop())
     yield
-    for task in (reminder_task, fitness_task, email_task, moodle_task, finance_task):
+    for task in (reminder_task, fitness_task, email_task, moodle_task, finance_task, contacts_task):
         if task is not None:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -133,6 +137,7 @@ install_error_handlers(app)
 app.include_router(assistant.router)
 app.include_router(tasks.router)
 app.include_router(memory.router)
+app.include_router(people.router)
 app.include_router(calendar.router)
 app.include_router(habits.router)
 app.include_router(nutrition.router)

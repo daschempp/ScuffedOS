@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 import pytest
 
 from app.config import settings
-from app.providers.base import NormalizedItem, Tokens
+from app.providers import macos_contacts
+from app.providers.base import NormalizedItem, NormalizedPerson, Tokens
+from app.providers.macos_contacts import ContactsSnapshot, SnapshotStatus
 from app.store import store
 
 
@@ -30,14 +32,52 @@ def _get(client):
     return {c["name"]: c for c in res.json()}
 
 
-def test_all_four_present_not_connected_on_empty_db(client):
+def test_all_five_present_not_connected_on_empty_db(client):
+    # macos_contacts' configured/access/status come from a live platform +
+    # FDA probe (see _contacts_connector) — the GLOBAL autouse Contacts seam in
+    # conftest.py (macos_contacts.configure(platform="linux")) stubs the
+    # platform seam off, so this order/status assertion is deterministic on
+    # macOS dev + CI alike, never touching the real AddressBook store during
+    # the suite run.
     body = client.get("/api/connectors").json()
-    assert [c["name"] for c in body] == ["google", "whoop", "moodle", "plaid"]
-    assert [c["auth_kind"] for c in body] == ["oauth", "oauth", "token", "link"]
+    assert [c["name"] for c in body] == [
+        "google", "whoop", "moodle", "plaid", "macos_contacts",
+    ]
+    assert [c["auth_kind"] for c in body] == ["oauth", "oauth", "token", "link", "local"]
     for c in body:
         assert c["status"] == "not_connected"
         assert c["connected_at"] is None
         assert c["items"] == []
+
+
+def test_contacts_card_access_is_deterministic_off_darwin(client):
+    # Autouse seam forces platform='linux' -> is_supported() False on macOS + CI
+    # alike; an unsupported host is never probed, so access short-circuits to
+    # 'unknown' (frontend renders 'unsupported'), never the host's real FDA state.
+    card = next(c for c in client.get("/api/connectors").json()
+               if c["name"] == "macos_contacts")
+    assert card["auth_kind"] == "local"
+    assert card["configured"] is False         # seam is_supported() False off darwin
+    assert card["access"] == "unknown"         # unsupported host is not probed
+    assert card["status"] == "not_connected"
+
+
+def test_contacts_card_granted_when_reader_reports_a_store(client):
+    # Opt in deterministically (host-independent): platform="darwin" drives the
+    # seam's is_supported() -> True (so configured=True) on macOS dev + CI alike,
+    # and a fake COMPLETE snapshot makes probe_access() derive 'granted'. Consent
+    # (store.set_contacts_enabled) is the SEPARATE gate for status='connected'.
+    macos_contacts.configure(platform="darwin", fake_snapshot=ContactsSnapshot(
+        status=SnapshotStatus.COMPLETE_NONEMPTY,
+        people=[NormalizedPerson(source="macos_contacts", source_id="A",
+                                 display_name="Ada")],
+        stores_total=1, stores_read=1, store_ids=["local"]))
+    store.set_contacts_enabled(True, region="US")
+    card = next(c for c in client.get("/api/connectors").json()
+               if c["name"] == "macos_contacts")
+    assert card["configured"] is True          # seam-driven, not host sys.platform
+    assert card["access"] == "granted"
+    assert card["status"] == "connected"
 
 
 def test_moodle_always_configured_others_not_without_creds(client):

@@ -14,4 +14,13 @@ export default defineConfig({
       },
     },
   },
+  // Vitest (frontend unit/component tests). jsdom + Testing Library; the setup
+  // file registers jest-dom matchers and auto-cleans the DOM between tests.
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: './src/test/setup.js',
+    css: false,
+    include: ['src/**/*.test.{js,jsx}'],
+  },
 })

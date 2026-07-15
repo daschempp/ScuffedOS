@@ -28,7 +28,7 @@ has its own doc.
 | [fitness.md](fitness.md) | Recovery/strain/sleep + workouts (Whoop sync) | ⬜ Planned |
 | [finance.md](finance.md) | Accounts, budgets, transactions, net worth, holdings, subscriptions, bills, investment ledger — `/api/finance` | ✅ M7 slice-2 · live (Plaid, read-only) |
 | [email.md](email.md) | AI triage + draft replies over a synced inbox | ⬜ Planned |
-| [people.md](people.md) | Personal CRM — contacts, cadence, nudges, dates | ⬜ Planned |
+| [people.md](people.md) | Personal CRM — contacts (incl. local Apple Contacts import), relationship metadata — `/api/people` | ✅ M10 s1 · live (Apple Contacts, local, read-only) |
 | [school.md](school.md) | Moodle courses, deadlines, grades, announcements (read-only) — `/api/moodle` | 🔨 Building |
 
 ## Shared layer
@@ -41,7 +41,7 @@ has its own doc.
 
 | Doc | Covers |
 | --- | --- |
-| [privacy-policy.md](privacy-policy.md) | The user-facing privacy policy — data collected, service providers (Anthropic, OpenAI, Supabase, USDA, WHOOP), retention/deletion. Needs a public URL for the WHOOP developer portal. |
+| [privacy-policy.md](privacy-policy.md) | The user-facing privacy policy — data collected, service providers (Anthropic, OpenAI, the configured PostgreSQL database, USDA, WHOOP), retention/deletion. Needs a public URL for the WHOOP developer portal. |
 
 ## How these docs are organized
 
