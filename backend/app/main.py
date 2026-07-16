@@ -126,9 +126,23 @@ except ValueError:
     # signal.signal only works on the main thread; TestClient/threaded runs skip it.
     pass
 
+# The packaged Tauri webview loads from a custom-protocol origin (NOT the Vite
+# dev server), then fetches the sidecar over http://127.0.0.1:<port> — a cross-
+# origin request. Every api.js call sends Content-Type: application/json, which
+# forces a CORS preflight even on GETs, so an unlisted webview origin makes
+# WKWebView block *every* backend call (the Connectors panel is just where that
+# surfaces loudly). Allow the webview origins alongside the env-configured ones.
+# Platform origins: macOS/iOS `tauri://localhost`; Windows/Linux
+# `http://tauri.localhost`; Android `https://tauri.localhost`.
+_TAURI_WEBVIEW_ORIGINS = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=[*settings.cors_origins, *_TAURI_WEBVIEW_ORIGINS],
     allow_methods=["*"],
     allow_headers=["*"],
 )

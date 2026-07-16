@@ -31,5 +31,11 @@
       "../frontend/dist": "dist"
     }
   },
-  "plugins": {}
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["scuffedos"]
+      }
+    }
+  }
 }
