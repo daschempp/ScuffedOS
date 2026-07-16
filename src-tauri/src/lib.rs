@@ -292,11 +292,21 @@ pub fn run() {
                                     .expect("reqwest client");
                                 match client.get(&target).send() {
                                     Ok(resp) => eprintln!("[deep-link] forwarded OAuth callback ({})", resp.status()),
-                                    Err(e) => eprintln!("[deep-link] OAuth callback forward failed: {e}"),
+                                    // without_url(): reqwest's Display appends the
+                                    // request URL, which carries the live OAuth
+                                    // code and state. Keep them out of the log.
+                                    Err(e) => eprintln!("[deep-link] OAuth callback forward failed: {}", e.without_url()),
                                 }
                             });
                         }
-                        None => eprintln!("[deep-link] ignoring unrecognized deep link: {}", url.as_str()),
+                        None => {
+                            // Log the shape of the rejected link, never its query:
+                            // a malformed callback still carries a live code/state.
+                            let mut redacted = url.clone();
+                            redacted.set_query(None);
+                            redacted.set_fragment(None);
+                            eprintln!("[deep-link] ignoring unrecognized deep link: {redacted}");
+                        }
                     }
                 }
             });
