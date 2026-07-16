@@ -1,10 +1,10 @@
 # ScuffedOS Privacy Policy
 
-**Effective date:** July 7, 2026
+**Effective date:** July 13, 2026
 
 ScuffedOS is a personal assistant application operated by Dylan Schempp ("we," "us"). It combines tasks, calendar, habits, nutrition, notes, and connected health data behind a single AI assistant. ScuffedOS is a self-hosted application: in the current deployment, the operator and the sole user are the same person, and there are no third-party user accounts.
 
-This policy describes what data ScuffedOS stores, how it is used, and which service providers process it. It applies to the ScuffedOS application and any data obtained through connected services such as WHOOP, Gmail, Moodle, and Plaid.
+This policy describes what data ScuffedOS stores, how it is used, and which service providers process it. It applies to the ScuffedOS application and any data obtained through connected services such as WHOOP, Gmail, Moodle, Plaid, and macOS Contacts.
 
 ## 1. Information we collect
 
@@ -12,9 +12,9 @@ This policy describes what data ScuffedOS stores, how it is used, and which serv
 
 **Derived information.** After each assistant conversation, the app may extract short factual "memories" (for example, a stated preference or goal) and store them, along with vector embeddings of that text, so the assistant can recall relevant context later. Conversation history with the assistant is also stored so conversations can resume.
 
-**Connected service data (with your consent).** If you connect a WHOOP account, ScuffedOS retrieves your WHOOP data via the official WHOOP API after you authorize access through WHOOP's OAuth flow. Depending on the scopes you grant, this may include basic profile information, recovery scores, sleep data, strain and workout data, and related physiological measurements such as heart rate. If you connect a Gmail account, ScuffedOS reads your inbox messages via the Gmail API after you authorize access through Google's OAuth flow (read plus the modify/send scopes); it stores email metadata (sender, subject, snippet, and an AI-derived category and summary) but never the message bodies. Beyond reading, ScuffedOS acts on your mailbox only when you take an explicit action — sending, replying, forwarding, moving a message to Trash, starring, marking read/unread, or applying a label. If you connect a Moodle (school learning-management) account, ScuffedOS reads your course information read-only via the Moodle web-services API after you paste in an access token you obtain from your school's Moodle site; it stores course names, assignment due dates, assignment and grade metadata, and short announcement and notification summaries — never assignment files or the full text of course content. If you connect a bank or Coinbase account, ScuffedOS retrieves your financial data read-only through **Plaid** after you authorize each institution through Plaid's own hosted link flow; it stores account names/masks/types, balances, transaction metadata, and investment holdings (including crypto) — plus recurring subscription and bill streams; liabilities (loan and credit-card statement balances, minimum payments, next-payment due dates, and APRs); and investment transaction history — never your bank/Coinbase credentials. See Section 4 for how WHOOP, Gmail, Moodle, and Plaid data are handled.
+**Connected service data (with your consent).** If you connect a WHOOP account, ScuffedOS retrieves your WHOOP data via the official WHOOP API after you authorize access through WHOOP's OAuth flow. Depending on the scopes you grant, this may include basic profile information, recovery scores, sleep data, strain and workout data, and related physiological measurements such as heart rate. If you connect a Gmail account, ScuffedOS reads your inbox messages via the Gmail API after you authorize access through Google's OAuth flow (read plus the modify/send scopes); it stores email metadata (sender, subject, snippet, and an AI-derived category and summary) but never the message bodies. Beyond reading, ScuffedOS acts on your mailbox only when you take an explicit action — sending, replying, forwarding, moving a message to Trash, starring, marking read/unread, or applying a label. If you connect a Moodle (school learning-management) account, ScuffedOS reads your course information read-only via the Moodle web-services API after you paste in an access token you obtain from your school's Moodle site; it stores course names, assignment due dates, assignment and grade metadata, and short announcement and notification summaries — never assignment files or the full text of course content. If you connect a bank or Coinbase account, ScuffedOS retrieves your financial data read-only through **Plaid** after you authorize each institution through Plaid's own hosted link flow; it stores account names/masks/types, balances, transaction metadata, and investment holdings (including crypto) — plus recurring subscription and bill streams; liabilities (loan and credit-card statement balances, minimum payments, next-payment due dates, and APRs); and investment transaction history — never your bank/Coinbase credentials. If you enable **macOS Contacts**, ScuffedOS reads your local Contacts (AddressBook) database read-only after you grant the app Full Disk Access and acknowledge the storage disclosure; it stores contact names, phone numbers, email addresses, organization and job title, and contact photos. It never writes back to your Contacts and sends Contacts to no AI provider. See Section 4 for how WHOOP, Gmail, Moodle, Plaid, and macOS Contacts data are handled.
 
-**What we do not collect.** ScuffedOS contains no advertising, no third-party analytics, and no tracking technologies. We do not collect data about anyone other than the user of the app.
+**What we do not collect.** ScuffedOS contains no advertising, no third-party analytics, and no tracking technologies. ScuffedOS does not collect data about anyone other than the user of the app **except** the contact details you choose to import from your own macOS Contacts (names, phone numbers, email addresses, organization/title, and photos) if you enable that connector — those describe people you already have in your own Contacts, and are used only to power your CRM and (in a future slice) messaging features. We do not sell, share, or otherwise use imported contact data for any purpose beyond your own use of the app.
 
 ## 2. How we use information
 
@@ -34,7 +34,7 @@ ScuffedOS sends data to a small set of service providers, each for a specific fu
 | --- | --- | --- |
 | **Anthropic** (Claude API) | Powers the AI assistant, memory extraction, and email triage | Your messages to the assistant, conversation history, and data the assistant reads from your stored domains (tasks, calendar, health data, etc.) in order to respond. When you connect Gmail, each email's sender, subject, preview snippet, and a bounded body excerpt (~2 KB) are sent to Anthropic to classify it and generate a short summary |
 | **OpenAI** | Text embeddings for memory search (embeddings only — the assistant itself never calls OpenAI) | The text of stored memories |
-| **Supabase** | Managed Postgres database hosting | Structured app data: tasks, events, habits, nutrition logs, conversations, memories and their embeddings, synced WHOOP data, and email metadata (sender, subject, snippet, and AI-derived category/summary — no message bodies) |
+| **PostgreSQL database** (the configured server) | Structured app data storage | Tasks, events, habits, nutrition logs, conversations, memories and embeddings, synced WHOOP/finance/Moodle data, email metadata, and imported contact fields (names, phone numbers, emails, organization/title). The database may run locally or on a remote/self-hosted server; when remote, this data is transmitted to that server over TLS. Contact photos are NOT stored here — they stay on the backend host |
 | **WHOOP** | Health data source (only if you connect it) | OAuth authorization; ScuffedOS receives data from WHOOP, not the reverse |
 | **Google (Gmail)** | Email source — read and user-initiated actions (only if you connect it) | OAuth authorization; ScuffedOS reads your Gmail messages via the Gmail API. Message content is retrieved to display it and (subject + a bounded body excerpt) is sent to Anthropic for triage or, when you ask for an AI draft, to generate one — see Section 4. Actions you take (send, reply, forward, trash, star, read/unread, labels) are carried out via the Gmail API using your own account; sent mail is delivered through Gmail and appears in your Sent folder |
 | **Moodle** (school LMS, e.g. NC State WolfWare) | School source, read-only (only if you connect it) | A `wstoken` you provide; ScuffedOS reads your courses, deadlines, grades, and announcements via the Moodle web-services API to display them. Course data may be included in assistant context sent to Anthropic only when you ask the assistant about school — see Section 4 |
@@ -45,9 +45,9 @@ Anthropic and OpenAI process API data under their published API data-usage polic
 
 If you use voice dictation, audio is processed by your browser's built-in speech recognition, which may involve the browser vendor's speech service under that vendor's privacy policy. Only the resulting text transcript reaches ScuffedOS.
 
-File attachments and the memory change-history database are stored locally on the machine running the app, not with any cloud provider. Notifications are generated locally on-device.
+File attachments and the memory change-history database are stored locally on the machine running the app, not with any cloud provider. Notifications are generated locally on the backend host.
 
-## 4. WHOOP, Gmail, Moodle, and Plaid data
+## 4. WHOOP, Gmail, Moodle, Plaid, and macOS Contacts data
 
 If you choose to connect WHOOP:
 
@@ -112,10 +112,45 @@ initiates a transfer, or writes anything back to your bank or Coinbase.**
 
 Scuffed OS is not affiliated with Plaid, Coinbase, or your bank.
 
+### If you enable macOS Contacts
+
+ScuffedOS can import your local macOS Contacts so the People (CRM) screen shows
+your real contacts instead of sample data.
+
+- **Consent, gated twice.** Nothing is read until you explicitly enable this
+  connector **and** grant ScuffedOS Full Disk Access in macOS System Settings —
+  both are required. Enabling also requires acknowledging a storage
+  disclosure that explains where the data goes (below) before the first sync
+  runs.
+- **How it's read.** Your local Contacts (AddressBook) database is read
+  **read-only** and **one-way** — ScuffedOS never writes back to Apple
+  Contacts. Only fields you already have in Contacts are read: names, phone
+  numbers, email addresses, organization and job title, and photos.
+- **Where it's stored.** Contact names, phone numbers, email addresses, and
+  organization/title are written to the configured PostgreSQL database (which
+  may be remote — see Section 5; transmitted over TLS when it is). Contact
+  **photos are not put in the database** — they are stored as files on the
+  backend host running the app.
+- **No AI, no third parties.** Contacts data is sent to **no AI provider**
+  and to **no third-party Contacts API**. It is used only to populate your own
+  CRM.
+- **Revocation.** You can revoke access by turning off Full Disk Access for
+  ScuffedOS in System Settings, and/or by **Disconnecting** the connector
+  in-app (stops future syncing but keeps your existing CRM data — relationship
+  notes, pinned contacts, etc. — intact), or by using **Forget imported data**
+  (deletes the imported contacts, their handle index, and their photos; a
+  contact you had added relationship notes to is converted into a
+  manually-owned entry rather than losing that history).
+- **Retention.** Imported contact data persists until you Forget it or delete
+  an individual manually-owned entry. If access is revoked (Full Disk Access
+  turned off) without disconnecting or forgetting, ScuffedOS shows the
+  connector as **stale** and preserves your existing rows rather than
+  deleting them.
+
 ## 5. Data storage and security
 
-- App data is stored in a Postgres database hosted by Supabase; attachments and the memory history file are stored on the operator's machine.
-- Data is encrypted in transit (TLS) between the app, the database, and all service providers.
+- App data is stored in the configured PostgreSQL database, which may run locally or on a remote/self-hosted server; attachments, the memory history file, and imported contact photos are stored on the backend host running the app.
+- Data is encrypted in transit (TLS) between the app, the database, and all service providers. A non-loopback (remote) database connection requires TLS (`sslmode=require` or stronger); connection strings and credentials are never written to logs.
 - API credentials and OAuth tokens are stored server-side, never in the client. Static API keys come from server-side configuration; OAuth tokens obtained when you connect a service (such as WHOOP) are stored in the server-side database and are never exposed to the client.
 - In the packaged desktop app, API keys and OAuth tokens are stored on your Mac in a machine-bound, AES-256-GCM encrypted vault (`secrets.enc`) rather than in a database; the encryption key is derived from your machine's hardware identifier and wrapped in the macOS Keychain. These secrets never leave your machine.
 - Access to the database and the machine running the app is limited to the operator.
@@ -124,11 +159,11 @@ No system is perfectly secure, but as a single-user, self-hosted application, Sc
 
 ## 6. Data retention and deletion
 
-Data is retained until you delete it. ScuffedOS provides in-app deletion for every domain (tasks, events, habits, logs, memories, conversations), and the operator can delete any record — or all data — directly from the database at any time. Disconnecting WHOOP triggers deletion of synced WHOOP data and tokens as described in Section 4; disconnecting Gmail likewise deletes stored email metadata and Google OAuth tokens; disconnecting Moodle likewise deletes all stored Moodle data (courses, deadlines, assignments, grades, announcements, notifications) and your Moodle access token. Connected-institution data is deleted within 30 days of disconnecting a bank or Coinbase account linked through Plaid. For any deletion request, contact us at the address below and it will be honored within 30 days.
+Data is retained until you delete it. ScuffedOS provides in-app deletion for every domain (tasks, events, habits, logs, memories, conversations), and the operator can delete any record — or all data — directly from the database at any time. Disconnecting WHOOP triggers deletion of synced WHOOP data and tokens as described in Section 4; disconnecting Gmail likewise deletes stored email metadata and Google OAuth tokens; disconnecting Moodle likewise deletes all stored Moodle data (courses, deadlines, assignments, grades, announcements, notifications) and your Moodle access token. Connected-institution data is deleted within 30 days of disconnecting a bank or Coinbase account linked through Plaid. **Disconnecting macOS Contacts is not deletion** — it stops future syncing but keeps your already-imported contacts and CRM data; use **Forget imported data** within ScuffedOS to delete the imported contacts, handle index, and photos (see Section 4). For any deletion request, contact us at the address below and it will be honored within 30 days.
 
 ## 7. Your rights and choices
 
-You can access, correct, export, or delete your data at any time — in-app, via the assistant, or by direct database access. You can decline to connect WHOOP or Gmail (the rest of the app works without either), disable voice dictation by simply not using the microphone, and disconnect any integration at any time.
+You can access, correct, export, or delete your data at any time — in-app, via the assistant, or by direct database access. You can decline to connect WHOOP, Gmail, or macOS Contacts (the rest of the app works without any of them), disable voice dictation by simply not using the microphone, and disconnect any integration at any time. For macOS Contacts specifically, use **Forget imported data** (Section 4) to delete previously-imported contact data, not just Disconnect.
 
 ## 8. Children
 

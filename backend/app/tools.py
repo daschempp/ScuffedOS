@@ -408,6 +408,12 @@ def _get_fitness_status(args: dict):
             "providers": accounts}, None
 
 
+def _get_insights(args: dict):
+    cards = store.list_insights(_parse_date(args.get("date")))
+    return {"insights": [{"headline": c["headline"], "body": c["body"],
+                          "tone": c["tone"]} for c in cards]}, None
+
+
 def _log_workout(args: dict):
     data = {
         "name": args["name"],
@@ -804,6 +810,12 @@ TOOLS: list[dict] = [
          "date": {"type": "string", "description": "YYYY-MM-DD inside the week, default this week."}},
          "additionalProperties": False},
      "run": _get_fitness_week},
+    {"name": "get_insights",
+     "description": "Read today's derived body-readiness insights — the same coaching cards shown on the Insights tab (recovery/sleep/strain narrative). Call when the user asks for your read on how they're doing or what to do today given their recovery.",
+     "input_schema": {"type": "object", "properties": {
+         "date": {"type": "string", "description": "YYYY-MM-DD, default today."}},
+         "additionalProperties": False},
+     "run": _get_insights},
     {"name": "get_fitness_status",
      "description": "Check whether a wearable (WHOOP) is connected and when it last synced. Call before suggesting a sync or when the user asks if their device is linked.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},

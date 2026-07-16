@@ -118,6 +118,26 @@ class Settings(BaseSettings):
     finance_sync_seconds: int = 1800              # 30 min
     plaid_backfill_days: int = 90                 # first-sync transaction history window
 
+    # ---- M10 Contacts (local macOS AddressBook) ----
+    # ISO-3166 alpha-2 fallback for E.164 normalization when contacts_sync_state
+    # has not yet persisted a normalization_region. Task 5 upgrades the default
+    # to _default_region() (system-locale sniff); "US" keeps Task 3 self-contained.
+    contacts_default_region: str = "US"
+    # Background contacts sync loop: armed only when True (per-tick consent is a
+    # SEPARATE gate via contacts_sync_state.enabled). Defaults OFF (consent-gated).
+    contacts_sync_enabled: bool = False
+    contacts_sync_seconds: int = 21600           # 6h between background passes
+    # Contact-photo store dir: relative -> resolved UNDER app_support_dir (never
+    # ./data); absolute kept as-is. Resolved via contacts_photos_root().
+    contacts_photos_dir: str = "contact_photos"
+
+    def contacts_photos_root(self) -> str:
+        """Absolute contact-photos root (App Support + contacts_photos_dir). The
+        import is function-local to avoid a config <-> providers import cycle."""
+        from .providers import contact_photos
+
+        return contact_photos.resolve_root(self)
+
     # ---- M8 Ship / Tauri — managed local Postgres (packaged app only) ----
     # OFF by default: dev, CI, and the test suite are unchanged and use the
     # external DATABASE_URL exactly as today. The packaged .app sets this to 1,

@@ -199,9 +199,7 @@ export function FitnessScreen({ onOpenConnectors }) {
           </div>
           <div className="kit-insight" style={{ marginTop: 14 }}>
             <div className="kit-insight__icon"><Icon name="sparkles" /></div>
-            <p>{recovered
-              ? <>Recovery is high — a good day for a <strong>hard session</strong>. Want me to schedule one?</>
-              : <>Recovery is on the lower side — consider an <strong>easy day</strong>.</>}</p>
+            <p>Your full recovery, sleep and strain read is on the <strong>Insights</strong> tab.</p>
           </div>
         </Card>
       </div>

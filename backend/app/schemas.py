@@ -188,6 +188,106 @@ class MemoryUpdate(BaseModel):
     color: str | None = None
 
 
+# ---- People (M10) ---------------------------------------------------------
+class PhoneEntry(BaseModel):
+    value: str = Field(min_length=1)
+    label: str = ""
+    normalized: str | None = None
+
+
+class EmailEntry(BaseModel):
+    value: str = Field(min_length=1)
+    label: str = ""
+    normalized: str | None = None
+
+
+class PersonOut(BaseModel):
+    id: int
+    source: str
+    source_id: str
+    display_name: str
+    first_name: str
+    last_name: str
+    nickname: str
+    organization: str
+    job_title: str
+    phones: list[PhoneEntry]
+    emails: list[EmailEntry]
+    has_photo: bool
+    relationship: str | None = None
+    relationship_strength: int | None = None
+    notes: str | None = None
+    pinned: bool
+    last_contacted_at: datetime | None = None
+    removed_from_source_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PersonCreate(BaseModel):
+    display_name: str = Field(min_length=1)
+    first_name: str = ""
+    last_name: str = ""
+    nickname: str = ""
+    organization: str = ""
+    job_title: str = ""
+    phones: list[PhoneEntry] = []
+    emails: list[EmailEntry] = []
+    relationship: str | None = None
+    relationship_strength: int | None = None
+    notes: str | None = None
+    pinned: bool = False
+
+
+class PersonUpdate(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1)
+    first_name: str | None = None
+    last_name: str | None = None
+    nickname: str | None = None
+    organization: str | None = None
+    job_title: str | None = None
+    phones: list[PhoneEntry] | None = None
+    emails: list[EmailEntry] | None = None
+    relationship: str | None = None
+    relationship_strength: int | None = None
+    notes: str | None = None
+    pinned: bool | None = None
+    last_contacted_at: datetime | None = None
+
+
+class PeoplePage(BaseModel):
+    items: list[PersonOut]
+    next_cursor: str | None = None
+
+
+class SyncResultOut(BaseModel):
+    status: str
+    access: str
+    imported: int = 0
+    updated: int = 0
+    removed: int = 0
+    last_sync_at: datetime | None = None
+    last_error: str | None = None
+
+
+class ContactsStateOut(BaseModel):
+    enabled: bool
+    status: str
+    access: str
+    normalization_region: str | None = None
+    last_sync_at: datetime | None = None
+    last_error: str | None = None
+    enabled_at: datetime | None = None
+
+
+class ContactsEnableIn(BaseModel):
+    ack_storage_disclosure: bool = False
+
+
+class ContactsForgetIn(BaseModel):
+    confirm: bool = False
+
+
 # ---- Calendar ---------------------------------------------------------------
 class EventOccurrence(BaseModel):
     """One concrete occurrence — what GET /events returns. For a recurring
@@ -431,15 +531,23 @@ class ConnectorInfo(BaseModel):
     ProviderStatus.status (adds 'not_connected', which a provider_accounts row
     can never express). Tokens/scopes are NEVER included — same rule as
     _provider_account_dict."""
-    name: Literal["google", "whoop", "moodle", "plaid"]
+    name: Literal["google", "whoop", "moodle", "plaid", "macos_contacts"]
     label: str
-    auth_kind: Literal["oauth", "token", "link"]
+    auth_kind: Literal["oauth", "token", "link", "local"]
     configured: bool
     status: Literal["not_connected", "connected", "needs_reauth"]
     connected_at: datetime | None = None
     provider_user_id: str | None = None
     can_write_email: bool | None = None   # google only; None for the others
     items: List[ConnectorItem] = []
+    # macos_contacts only — the rest stay defaulted so the other four
+    # constructions (google/whoop/moodle/plaid) are unaffected.
+    access: Literal["granted", "denied", "unknown"] = "unknown"
+    enabled: bool = False
+    sync_status: str | None = None
+    last_sync_at: datetime | None = None
+    last_error: str | None = None
+    count: int | None = None
 
 
 # ---- Fitness read/write schemas (M4) ----------------------------------------
@@ -506,6 +614,23 @@ class FitnessWeek(BaseModel):
     days: List[FitnessWeekDay]
     avg_strain: float
     peak_day: Day | None
+
+
+class InsightCard(BaseModel):
+    id: int
+    domain: str
+    code: str
+    tone: str            # positive | neutral | caution
+    headline: str
+    body: str
+    signals: dict
+    source: str          # llm | rules
+
+
+class InsightsDay(BaseModel):
+    date: Day
+    has_data: bool
+    cards: List[InsightCard]
 
 
 # ---- Email schemas (M5) -----------------------------------------------------

@@ -59,3 +59,23 @@ def stream(*, model: str, system: str, messages: list, tools: list):
         messages=messages,
         tools=tools,
     )
+
+
+def complete(*, model: str, system: str, messages: list) -> str:
+    """One-shot, non-streaming completion — returns the reply's concatenated
+    text. For non-conversational callers (e.g. the insights phraser). Raises
+    RuntimeError when the LLM is disabled, so callers can fall back."""
+    if _override != "unset":
+        if _override is None:
+            raise RuntimeError("LLM is disabled")
+        return _override.complete(model=model, system=system, messages=messages)
+
+    global _client
+    if _client is None:
+        import anthropic
+
+        _client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    msg = _client.messages.create(
+        model=model, max_tokens=MAX_TOKENS, system=system, messages=messages,
+    )
+    return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text")

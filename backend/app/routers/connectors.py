@@ -2,13 +2,15 @@
 
 GET /api/connectors is a pure read-time projection: it left-joins the static
 connector catalog (_CATALOG below) over existing connection state —
-provider_accounts rows (Google/WHOOP/Moodle) and finance_items rows (Plaid) —
-and NEVER serializes tokens. No new tables; alembic head stays 0009.
+provider_accounts rows (Google/WHOOP/Moodle), finance_items rows (Plaid), and
+the contacts_sync_state row (macOS Contacts, M10) — and NEVER serializes
+tokens.
 
-The card SET comes from _CATALOG (always four), NOT providers.all_providers():
-the test autouse fixture configures an EMPTY registry, and Plaid has no
-provider_accounts writer at all. State is attached by matching the catalog name
-against each store dict's "provider" key (or, for Plaid, the finance items).
+The card SET comes from _CATALOG (always five), NOT providers.all_providers():
+the test autouse fixture configures an EMPTY registry, and Plaid/macOS Contacts
+have no provider_accounts writer at all. State is attached by matching the
+catalog name against each store dict's "provider" key (or, for Plaid, the
+finance items; for macOS Contacts, get_contacts_state()).
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ _CATALOG: list[tuple[str, str, str]] = [
     ("whoop", "WHOOP", "oauth"),
     ("moodle", "Moodle", "token"),
     ("plaid", "Plaid", "link"),
+    ("macos_contacts", "Apple Contacts", "local"),
 ]
 
 
@@ -42,6 +45,8 @@ def _configured(name: str) -> bool:
         return bool(settings.plaid_client_id) and bool(settings.plaid_secret)
     if name == "moodle":
         return True
+    if name == "macos_contacts":
+        return _contacts_configured()
     return False
 
 
@@ -73,14 +78,60 @@ def _plaid_connector() -> ConnectorInfo:
     )
 
 
+def _contacts_configured() -> bool:
+    # Platform support comes from the macos_contacts seam, NOT raw sys.platform,
+    # so configure(platform=…)/configure(fake_snapshot=…) drive the card's
+    # configured/access/status deterministically on macOS dev + CI alike
+    # (contract: Testing/CI seam). is_supported() honors an injected platform.
+    from ..providers import macos_contacts
+
+    return macos_contacts.is_supported()
+
+
+def _contacts_access() -> str:
+    from ..providers import macos_contacts
+
+    return macos_contacts.probe_access(
+        getattr(settings, "addressbook_root", macos_contacts.DEFAULT_ROOT)
+    )
+
+
+def _contacts_connector() -> ConnectorInfo:
+    """macOS Contacts (auth_kind='local'): configured/access come from the
+    macos_contacts seam (never store state); enabled/sync_status/last_sync_at/
+    last_error mirror the persisted consent row; count is the imported-people
+    total. Off a supported host (or FDA-ungated), the card never touches store
+    state and access stays 'unknown'."""
+    configured = _contacts_configured()
+    access = _contacts_access() if configured else "unknown"
+    state = store.get_contacts_state() if configured else {"enabled": False, "enabled_at": None}
+    status = "connected" if (configured and state.get("enabled") and access == "granted") \
+        else "not_connected"
+    count = store.count_people(source="macos_contacts") if configured else None
+    return ConnectorInfo(
+        name="macos_contacts", label="Apple Contacts", auth_kind="local",
+        configured=configured, status=status,
+        connected_at=state.get("enabled_at"), provider_user_id=None,
+        can_write_email=None, access=access, items=[],
+        enabled=bool(state.get("enabled", False)),
+        sync_status=state.get("status"),
+        last_sync_at=state.get("last_sync_at"),
+        last_error=state.get("last_error"),
+        count=count,
+    )
+
+
 @router.get("", response_model=list[ConnectorInfo])
 def list_connectors() -> list[ConnectorInfo]:
-    """All four connectors with their current connection state. No tokens."""
+    """All five connectors with their current connection state. No tokens."""
     accounts = {a["provider"]: a for a in store.list_provider_accounts()}
     out: list[ConnectorInfo] = []
     for name, label, auth_kind in _CATALOG:
         if name == "plaid":
             out.append(_plaid_connector())
+            continue
+        if name == "macos_contacts":
+            out.append(_contacts_connector())
             continue
         acc = accounts.get(name)
         if acc is None:
