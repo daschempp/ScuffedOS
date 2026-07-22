@@ -4,6 +4,7 @@ All against SQLite via the fresh_db fixture — no network, no providers.
 """
 from datetime import date, datetime, timedelta, timezone
 
+from app.config import settings
 from app.providers.base import NormalizedSnapshot, NormalizedWorkout, Tokens
 from app.store import store
 
@@ -407,6 +408,54 @@ def test_delete_provider_data_removes_synced_keeps_manual():
     remaining = store.list_workouts()
     assert [w["name"] for w in remaining] == ["Manual lift"]
     assert remaining[0]["source"] == "manual"
+
+
+def test_delete_provider_data_removes_derived_fitness_insights():
+    store.upsert_provider_account("whoop", _tokens())
+    store.upsert_insight(
+        day=DAY,
+        domain="fitness",
+        code="recovery_band",
+        tone="positive",
+        headline="Recovery is green",
+        body="Ready to go.",
+        signals={"recovery_pct": 75},
+        source="rules",
+    )
+    store.upsert_insight(
+        day=DAY,
+        domain="school",
+        code="deadline_load",
+        tone="neutral",
+        headline="Deadlines ahead",
+        body="Plan the week.",
+        signals={"count": 3},
+        source="rules",
+    )
+    original_owner = settings.owner
+    try:
+        settings.owner = "someone_else"
+        store.upsert_insight(
+            day=DAY,
+            domain="fitness",
+            code="recovery_band",
+            tone="neutral",
+            headline="Another owner's recovery",
+            body="Keep this card.",
+            signals={"recovery_pct": 50},
+            source="rules",
+        )
+    finally:
+        settings.owner = original_owner
+
+    assert store.delete_provider_data("whoop") is True
+    assert store.list_insights(DAY, domain="fitness") == []
+    assert [i["code"] for i in store.list_insights(DAY, domain="school")] == ["deadline_load"]
+    try:
+        settings.owner = "someone_else"
+        assert [i["code"] for i in store.list_insights(DAY, domain="fitness")] == ["recovery_band"]
+    finally:
+        settings.owner = original_owner
 
 
 def test_delete_provider_data_absent_returns_false():

@@ -1,5 +1,5 @@
 """Rules are pure: synthetic snapshot dicts in, Signals out. No DB, no LLM."""
-from datetime import date
+from datetime import date, timedelta
 
 from app.insights import rules
 
@@ -98,8 +98,32 @@ def test_primed_underused_is_positive():
 
 
 def test_sleep_streak_without_low_quality_is_caution():
-    history = [{"sleep_hours": 5.2}, {"recovery_pct": 60}]
-    sigs = rules.run_rules(_ctx({"recovery_pct": 60, "sleep_hours": 5.5}, history))
+    history = [
+        {"day": TODAY - timedelta(days=2), "recovery_pct": 60},
+        {"day": TODAY - timedelta(days=1), "sleep_hours": 5.2},
+    ]
+    sigs = rules.run_rules(_ctx({
+        "day": TODAY, "recovery_pct": 60, "sleep_hours": 5.5,
+    }, history))
     sleep = next(s for s in sigs if s.code == "sleep_performance")
     assert sleep.tone == "caution"
     assert sleep.facts["short_nights"] >= 2
+
+
+def test_nonconsecutive_short_nights_do_not_form_streak():
+    history = [
+        {"day": TODAY - timedelta(days=2), "sleep_hours": 5.0},
+        {"day": TODAY - timedelta(days=1), "sleep_hours": 8.0},
+    ]
+    sigs = rules.run_rules(_ctx({"day": TODAY, "recovery_pct": 60, "sleep_hours": 5.5}, history))
+    assert "sleep_performance" not in _codes(sigs)
+
+
+def test_missing_calendar_day_breaks_short_sleep_streak():
+    history = [{"day": TODAY - timedelta(days=2), "sleep_hours": 5.0}]
+
+    sigs = rules.run_rules(_ctx({
+        "day": TODAY, "recovery_pct": 60, "sleep_hours": 5.5,
+    }, history))
+
+    assert "sleep_performance" not in _codes(sigs)

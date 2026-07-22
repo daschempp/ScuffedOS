@@ -44,6 +44,15 @@ def test_has_insight(client):
     assert store.has_insight(TODAY) is True
 
 
+def test_has_insight_filters_by_code(client):
+    store.upsert_insight(day=TODAY, domain="fitness", code="sleep_performance",
+                         tone="caution", headline="h", body="b",
+                         signals={}, source="rules")
+
+    assert store.has_insight(TODAY, "fitness", "sleep_performance") is True
+    assert store.has_insight(TODAY, "fitness", "recovery_band") is False
+
+
 def test_list_snapshots_window_prefers_whoop(client):
     d2 = TODAY - timedelta(days=2)
     store.upsert_snapshot(NormalizedSnapshot(source="whoop", day=d2, recovery_pct=60))

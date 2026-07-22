@@ -4,6 +4,7 @@ never call this — only the fitness sync hook and POST /api/insights/refresh do
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import date, datetime
 
 from ..store import store
@@ -14,6 +15,7 @@ log = logging.getLogger("scuffed_os.insights")
 
 DOMAIN = "fitness"
 BASELINE_DAYS = 7
+_AUTO_GENERATION_LOCK = threading.Lock()
 
 
 def _today() -> date:
@@ -42,12 +44,17 @@ def generate_for_day(day: date) -> int:
 
 def maybe_generate_today() -> int:
     """Gated generation for the sync hook: only when today's recovery is scored
-    and no insight exists yet for today. Returns cards written (0 if skipped)."""
-    day = _today()
-    if store.has_insight(day, DOMAIN):
-        return 0
-    window = store.list_snapshots(day, 0)          # today only
-    today = next((s for s in window if s["day"] == day), None)
-    if not today or today.get("recovery_pct") is None:
-        return 0                                    # wait for recovery to score
-    return generate_for_day(day)
+    and no recovery anchor exists yet for today. A pre-recovery manual refresh
+    may have cached other cards, but must not suppress the anchored daily read.
+    Concurrent sync ticks in this backend process are serialized so they cannot
+    both clear the gate and duplicate the day's LLM call. Returns cards written
+    (0 if skipped)."""
+    with _AUTO_GENERATION_LOCK:
+        day = _today()
+        if store.has_insight(day, DOMAIN, "recovery_band"):
+            return 0
+        window = store.list_snapshots(day, 0)          # today only
+        today = next((s for s in window if s["day"] == day), None)
+        if not today or today.get("recovery_pct") is None:
+            return 0                                    # wait for recovery to score
+        return generate_for_day(day)
