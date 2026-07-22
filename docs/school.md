@@ -1,6 +1,6 @@
 # School (Moodle) — Architecture
 
-> Status: **building** (M6 slice-1) · Last updated: 2026-07-04 · Owner: _Dylan_
+> Status: **implemented** (M6 slice-1) · Last updated: 2026-07-21 · Owner: _Dylan_
 >
 > Part of the [backend overview](backend-overview.md). A read-only view of the student's
 > Moodle learning-management data — courses, deadlines, grades, and announcements — that
@@ -16,8 +16,8 @@ read time so they appear on Home/Calendar/Tasks as **read-only** markers.
 
 ## Surface / current state
 
-Building in M6 slice-1 (this plan). The screen is served from the DB — every `/api/moodle/*`
-GET reads stored rows; only `POST /api/moodle/connect` (validate the pasted token) and
+M6 slice-1 is implemented. The screen is served from the DB — every `/api/moodle/*` GET
+reads stored rows; only `POST /api/moodle/connect` (validate the pasted token) and
 `POST /api/moodle/sync` (the tick) reach Moodle.
 
 | Method | Path | Purpose |
@@ -53,12 +53,13 @@ and short HTML summaries (stripped for display). See [data-store.md](data-store.
 
 ## How it _should_ function
 
-- [ ] **Sync pipeline** (`moodle_sync.py`, a clone of `email_sync.py`) that upserts the six
+- [x] **Sync pipeline** (`moodle_sync.py`, a clone of `email_sync.py`) that upserts the six
       record types idempotently and flips the account to `needs_reauth` on an auth error.
-- [ ] **Read-time Calendar/Tasks merge** — deadlines/assignments projected into the existing
+- [x] **Read-time Calendar/Tasks merge** — deadlines/assignments projected into the existing
       output shapes, never physical rows, so those tables need no schema change or write-guards.
-- [ ] **Privacy** — token stored server-side only; content bodies/files fetched live, never
-      stored; disconnect deletes all Moodle data within 30 days.
+- [x] **Privacy** — token stored server-side only; course files and full page bodies are not
+      requested or stored; source links open in Moodle; disconnect immediately removes the
+      account and synced Moodle rows.
 
 ## External integrations
 

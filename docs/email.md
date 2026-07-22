@@ -1,6 +1,6 @@
 # Email — Architecture
 
-> Status: **built** (M5 — live Gmail sync, AI triage + draft) · Last updated: 2026-07-11 · Owner: _TBD_
+> Status: **built** (M5 — live Gmail sync, AI triage + draft) · Last updated: 2026-07-21 · Owner: _TBD_
 >
 > Part of the [backend overview](backend-overview.md). AI triage + draft replies over a
 > synced inbox — the most LLM-heavy surface after the assistant.
@@ -8,7 +8,8 @@
 ## Responsibility
 
 Sync the inbox, **triage** each message (categorize + AI summary), and generate **draft
-replies** in selectable tones. Serve the two-pane inbox/reading UI and support archive.
+replies** on demand. Serve the two-pane inbox/reading UI and user-initiated
+send, reply, forward, label, flag, and Trash actions.
 
 ## Current state
 
@@ -18,29 +19,34 @@ flags, labels, send and AI draft; `app/email_sync.py` runs the background Gmail 
 generates replies — all over `app/providers/google.py`. Bodies are never stored; they're
 fetched live on demand. `frontend/src/screens/EmailScreen.jsx` renders the live synced inbox.
 
-## Data model (from the prototype)
+## Data model
 
 | Entity | Fields the UI uses | Notes |
 | --- | --- | --- |
 | **Email** | `from`, `time`, `subject`, `snippet`, `unread`, `category` | Synced from a provider. |
 | **Category** | `Needs reply` \| `FYI` | AI triage output; drives inbox grouping + "4 need you". |
 | **Summary** | `string[]` of bullets | AI-generated per message. |
-| **Drafts** | `{ Friendly, Brief, Formal }` | AI-generated reply variants by tone; regenerate/edit/send. |
+| **Draft** | generated text | Generated on demand, editable before send; not precomputed on sync. |
 
-## Proposed surface (TODO — confirm)
+## Surface
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/api/email/inbox` | Triaged messages grouped by category. |
+| `GET` | `/api/email/labels` | Gmail labels available to apply. |
 | `GET` | `/api/email/{id}` | Message + AI summary. |
-| `POST` | `/api/email/{id}/draft` | Generate/regenerate a reply for a tone. |
-| `POST` | `/api/email/{id}/send` | Send a (possibly edited) reply. |
-| `POST` | `/api/email/{id}/archive` | Archive. |
-| `POST` | `/api/email/sync` | Pull from provider (or webhook). |
+| `POST` | `/api/email/draft` | Generate a compose/reply draft from user instructions. |
+| `POST` | `/api/email/send` | Send a new message through Gmail. |
+| `POST` | `/api/email/{id}/reply` | Send a threaded reply. |
+| `POST` | `/api/email/{id}/forward` | Forward a message. |
+| `POST` | `/api/email/{id}/flags` | Confirm read/unread and star changes with Gmail. |
+| `POST` | `/api/email/{id}/labels` | Confirm label changes with Gmail. |
+| `POST` | `/api/email/{id}/trash` | Trash in Gmail, then delete the local row. |
+| `POST` | `/api/email/sync` | Run a Gmail pull now. |
 
 ## Dependencies & interactions
 
-- **Assistant / LLM (core).** Triage summaries and tone drafts are LLM outputs — the
+- **Assistant / LLM (core).** Triage summaries and requested drafts are LLM outputs — the
   same model seam as [assistant.md](assistant.md). Share one LLM client/config.
 - **Email → Tasks.** A "Needs reply" message maps cleanly to a task ("Reply to Priya
   about Lighthouse" already exists in the seed tasks) — consider a "make task from email"
@@ -53,18 +59,19 @@ fetched live on demand. `frontend/src/screens/EmailScreen.jsx` renders the live 
 
 ## External integrations
 
-- **Email provider** (Gmail API / IMAP+SMTP) — OAuth, sync (history/webhook), sending.
-  Decide read-only triage vs. full send, and how much of the body we store vs. fetch.
+- **Gmail API** — OAuth, scheduled pull sync, live body fetch, labels/flags/trash, and
+  send/reply/forward. Stored rows contain metadata, snippets, categories, and summaries;
+  full message bodies are fetched on demand and are not persisted.
 
 ## How it _should_ function
 
-- [ ] **Sync pipeline** + a triage step (LLM) that assigns category + summary.
-- [ ] **Draft generation** on demand vs. precomputed; caching of summaries/drafts.
-- [ ] **Send path** with edited content, threading, and "from" identity.
-- [ ] **Privacy** — message content is sensitive; what's stored vs. fetched live, and is
-      it sent to the LLM?
+- [x] **Sync pipeline** + an LLM triage step that assigns category + summary.
+- [x] **Draft generation** on demand; triage summaries are cached, drafts remain editable.
+- [x] **Send path** for compose, threaded reply, and forward.
+- [x] **Privacy boundary** — full bodies are fetched live, never stored, and bounded message
+      content reaches the LLM only for triage or a user-requested draft.
 
 ## Open questions / future work
 
-- One LLM service shared with the assistant, or a dedicated email-AI module?
-- How are user edits to a draft reconciled with regenerate?
+- Direct Email → Tasks/Calendar/People projections are not built.
+- Push/webhook sync and richer offline body access remain future work.

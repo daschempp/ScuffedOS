@@ -15,7 +15,7 @@ has its own doc.
 
 ## Function docs
 
-✅ = backend exists today · ⬜ = planned (renders sample data in its React screen for now)
+✅ = implemented and API-backed · ⬜ = planned
 
 | Doc | Function | Status |
 | --- | --- | --- |
@@ -25,11 +25,12 @@ has its own doc.
 | [calendar.md](calendar.md) | Events + recurrence + "Up next" — `/api/calendar` | ✅ Built |
 | [habits.md](habits.md) | Habit definitions + daily completion log / streaks — `/api/habits` | ✅ Built |
 | [nutrition.md](nutrition.md) | Food + water log + macro targets + food DB — `/api/nutrition` | ✅ Built |
-| [fitness.md](fitness.md) | Recovery/strain/sleep + workouts (Whoop sync) | ⬜ Planned |
-| [finance.md](finance.md) | Accounts, budgets, transactions, net worth, holdings, subscriptions, bills, investment ledger — `/api/finance` | ✅ M7 slice-2 · live (Plaid, read-only) |
-| [email.md](email.md) | AI triage + draft replies over a synced inbox | ⬜ Planned |
-| [people.md](people.md) | Personal CRM — contacts (incl. local Apple Contacts import), relationship metadata — `/api/people` | ✅ M10 s1 · live (Apple Contacts, local, read-only) |
-| [school.md](school.md) | Moodle courses, deadlines, grades, announcements (read-only) — `/api/moodle` | 🔨 Building |
+| [fitness.md](fitness.md) | Recovery/strain/sleep + workouts — `/api/fitness` | ✅ M4 · live WHOOP sync |
+| [fitness.md](fitness.md) | Derived daily coaching cards — `/api/insights` | ✅ Fitness Insights slice 1 |
+| [finance.md](finance.md) | Accounts, budgets, transactions, net worth, holdings, subscriptions, bills, investment ledger — `/api/finance` | ✅ M7 s2 · Plaid reads + local budget writes; production validation outstanding |
+| [email.md](email.md) | Gmail inbox, AI triage, draft/reply actions — `/api/email` | ✅ M5 · live Gmail sync |
+| [people.md](people.md) | Personal CRM — contacts (incl. local Apple Contacts import), relationship metadata — `/api/people` | ✅ M10 s1 · implemented; signed-bundle FDA acceptance outstanding |
+| [school.md](school.md) | Moodle courses, deadlines, grades, announcements (read-only) — `/api/moodle` | ✅ M6 s1 · live Moodle sync |
 
 ## Shared layer
 
@@ -41,23 +42,22 @@ has its own doc.
 
 | Doc | Covers |
 | --- | --- |
-| [privacy-policy.md](privacy-policy.md) | The user-facing privacy policy — data collected, service providers (Anthropic, OpenAI, the configured PostgreSQL database, USDA, WHOOP), retention/deletion. Needs a public URL for the WHOOP developer portal. |
+| [privacy-policy.md](privacy-policy.md) | The user-facing privacy policy — data collected, AI/storage providers, connected services, and retention/deletion. Needs a public URL for the WHOOP developer portal. |
 
 ## How these docs are organized
 
 Every function doc follows the same skeleton so they're easy to scan and diff:
 
 1. **Responsibility** — what this function is for, in a sentence or two.
-2. **Surface / current state** — endpoints today, or "planned" + where the sample data lives.
-3. **Data model** — the shapes involved (for planned functions, extracted from the prototype).
+2. **Surface / current state** — endpoints and implementation status today.
+3. **Data model** — the persisted and API-facing shapes involved.
 4. **Dependencies & interactions** — what it calls and what calls it.
 5. **How it _should_ function** — the target design you're authoring. ← the point of these docs
-6. **External integrations** — where relevant (Whoop, Gmail, Calendar, bank…).
+6. **External integrations** — where relevant (WHOOP, Gmail, Moodle, Plaid, Apple Contacts).
 7. **Open questions / future work** — what's undecided.
 
-For built functions, the current-state sections are seeded from real code; for planned
-ones, the data model is extracted from the corresponding React screen. Anything marked
-`TODO` is a prompt, not a decision.
+Current-state sections should reflect real code. Anything marked `TODO` or explicitly
+listed as future work is not an implementation claim.
 
 ## Source layout these docs describe
 
@@ -65,12 +65,14 @@ ones, the data model is extracted from the corresponding React screen. Anything 
 backend/
 ├── requirements.txt       # runtime deps (requirements-dev.txt adds pytest)
 ├── pytest.ini
-├── alembic/               # migrations (0001 schema · 0002 mem0 · 0003 local domains)
+├── alembic/               # migrations 0001–0011 (core through People + Insights)
 ├── data/                  # local artifacts: mem0 history db, attachments/ (gitignored)
 ├── tests/                 # pytest suite (SQLite default; TEST_DATABASE_URL for PG)
 └── app/
-    ├── main.py            # app wiring: CORS, routers, lifespan (reminder tick), /api/health
+    ├── main.py            # app wiring: CORS, routers, lifespan loops, /api/health
     ├── config.py          # env-backed settings (.env supported)
+    ├── secrets.py         # machine-bound vault for API keys/client credentials
+    ├── localdb.py         # packaged app PostgreSQL lifecycle
     ├── errors.py          # consistent {"error": {code, message}} envelope
     ├── schemas.py         # Pydantic request/response models
     ├── db.py / models.py  # SQLAlchemy engine helpers + table models
@@ -83,16 +85,19 @@ backend/
     ├── memory_engine.py   # self-hosted Mem0 (Claude extraction, OpenAI embedder)
     ├── assistant.py       # the tool-loop engine behind /api/assistant
     ├── tools.py           # the assistant's tool surface (read+write per domain)
-    ├── seeds.py           # sample payloads for still-planned domains (fitness, finance)
+    ├── *_sync.py          # Gmail, WHOOP, Moodle, Plaid, Contacts pull loops
+    ├── providers/         # provider adapters + normalized contracts
+    ├── insights/          # deterministic fitness rules, phrasing, generation gate
     └── routers/
         ├── assistant.py   # chat + SSE stream + conversation resume
         ├── tasks.py       # tasks + reminders + file attachments
         ├── memory.py      # second-brain CRUD (Mem0-synced)
         ├── calendar.py    # events + occurrences + up-next (M3)
         ├── habits.py      # habits + completion toggles (M3)
-        └── nutrition.py   # meals/water/targets/week + food search (M3)
-# still-planned functions (fitness, finance, email, people) render sample data
-# in frontend/src/screens/*.jsx until their milestones (M4-M6)
+        ├── nutrition.py   # meals/water/targets/week + food search (M3)
+        ├── fitness.py / insights.py
+        ├── email.py / moodle.py / finance.py / people.py
+        └── settings.py / connectors.py / oauth.py
 ```
 
-> Status: current as of M3 · Last updated: 2026-06-10
+> Status: current through M10 + Fitness Insights · Last updated: 2026-07-21

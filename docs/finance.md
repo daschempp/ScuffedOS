@@ -1,25 +1,26 @@
 # Finance — Architecture
 
-> Status: **building** (M7 slice-2 shipped) · Last updated: 2026-07-06 · Owner: _Dylan_
+> Status: **implemented** (M7 slice-2) · Last updated: 2026-07-21 · Owner: _Dylan_
 >
-> Part of the [backend overview](backend-overview.md). A **read-only**, multi-institution
-> view of the user's real bank and Coinbase accounts via **Plaid** — balances, net worth,
-> transactions, budgets, investment holdings (including crypto), subscriptions, and bills.
+> Part of the [backend overview](backend-overview.md). A multi-institution view of linked
+> bank and Coinbase accounts via **Plaid** — read-only external balances,
+> transactions, holdings, subscriptions, and bills, plus writable local budget limits.
 
 ## Responsibility
 
 Own the user's money: balances and income/spend summaries, budget categories,
-transactions, net-worth breakdown, and investment holdings — synced read-only from Plaid.
-Serve the dashboard figures the assistant quotes ("you've spent $1,840 in June").
+transactions, net-worth breakdown, and investment holdings — synced read-only from Plaid —
+plus local budget limits. Serve the dashboard figures the assistant quotes ("you've spent
+$1,840 in June").
 Subscriptions and bills are live as of slice 2, sourced from Plaid recurring streams
 and liabilities.
 
 ## Surface / current state
 
-Building in M7 slice-2. The screen is served from the DB — every `/api/finance/*` GET
-reads stored rows; Plaid is only reached to link an institution (Hosted Link) and on
-sync. **Summary, Net worth, Recent transactions, Budgets, Holdings, Subscriptions, and
-Bills are live.** Subscriptions and Bills are derived from Plaid's
+M7 slice-2 is implemented. The screen is served from the DB — every
+`/api/finance/*` GET reads stored rows; Plaid is only reached to link an institution
+(Hosted Link) and on sync. **Summary, Net worth, Recent transactions, Budgets, Holdings,
+Subscriptions, and Bills are implemented.** Subscriptions and Bills are derived from Plaid's
 `/transactions/recurring/get` and `/liabilities/get`; bills/renewals also appear on the
 Calendar via a read-time merge (no notifications yet — deferred to slice 3). Holdings
 now includes an investment transaction history ledger from
@@ -69,7 +70,7 @@ computed from accounts + holdings at read time, not stored. See [data-store.md](
 
 ## External integrations
 
-- **Plaid** (Production, `PLAID_ENV`) — Hosted Link connect flow (no `react-plaid-link`,
+- **Plaid** (environment selected by `PLAID_ENV`) — Hosted Link connect flow (no `react-plaid-link`,
   no public callback URL); reads accounts, transactions, and investment holdings.
   **Coinbase crypto** is covered through Plaid's Investments product (holdings whose
   security type is `cryptocurrency`), not a dedicated Coinbase API. Read-only this slice —
