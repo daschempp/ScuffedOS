@@ -31,7 +31,7 @@ system; the rest are local domains persisted in Postgres. Where a status below r
 | Insights | [fitness.md](fitness.md) | ✅ Built | Derived WHOOP-style coaching over fitness data, generated automatically after a scored recovery; manual refresh is available |
 | Email | [email.md](email.md) | ✅ Built (M5) | Live **Gmail** sync + AI triage + draft replies |
 | School | [school.md](school.md) | ✅ Live (M6 s1, read-only) | Live **Moodle** (WolfWare): courses, deadlines, grades, announcements |
-| Finance | [finance.md](finance.md) | ✅ Built (M7 s2; external data read-only) | **Plaid** implementation: accounts, budgets, transactions, net worth, holdings, and bills; real production validation remains outstanding |
+| Finance | [finance.md](finance.md) | ✅ Implemented (M7 s2; Plaid data read-only, local budgets writable; production-pull validation outstanding) | **Plaid** implementation: accounts, budgets, transactions, net worth, holdings, and bills; real production validation remains outstanding |
 | People | [people.md](people.md) | ✅ Built (M10 s1) | Postgres CRM + local **Apple Contacts** import (read-only, off by default) |
 | _Data store_ | [data-store.md](data-store.md) | ✅ Built | Configured Postgres + pgvector + SQLAlchemy/Alembic store + Pydantic schemas |
 
@@ -169,7 +169,8 @@ sequenceDiagram
 ## External integrations
 
 Several functions are integration-first — much of their data originates outside the app.
-All of the below are **built and live**:
+All of the below are **implemented**; see the function docs for live-production and
+packaged-app acceptance caveats:
 
 | Function | External system | Shape |
 | --- | --- | --- |

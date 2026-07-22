@@ -7,9 +7,10 @@
 
 ## Responsibility
 
-Sync the inbox, **triage** each message (categorize + AI summary), and generate **draft
-replies** on demand. Serve the two-pane inbox/reading UI and user-initiated
-send, reply, forward, label, flag, and Trash actions.
+Sync the inbox, **triage** each message (categorize + AI summary), and generate **new,
+reply, and forward drafts from free-form instructions and optional notes**. Serve the
+two-pane inbox/reading UI and user-initiated send, reply, forward, label, flag, and Trash
+actions.
 
 ## Current state
 
@@ -26,7 +27,7 @@ fetched live on demand. `frontend/src/screens/EmailScreen.jsx` renders the live 
 | **Email** | `from`, `time`, `subject`, `snippet`, `unread`, `category` | Synced from a provider. |
 | **Category** | `Needs reply` \| `FYI` | AI triage output; drives inbox grouping + "4 need you". |
 | **Summary** | `string[]` of bullets | AI-generated per message. |
-| **Draft** | generated text | Generated on demand, editable before send; not precomputed on sync. |
+| **Draft** | generated text | Generated on demand from free-form instructions and optional notes; editable before send; not precomputed or persisted. |
 
 ## Surface
 
@@ -35,7 +36,7 @@ fetched live on demand. `frontend/src/screens/EmailScreen.jsx` renders the live 
 | `GET` | `/api/email/inbox` | Triaged messages grouped by category. |
 | `GET` | `/api/email/labels` | Gmail labels available to apply. |
 | `GET` | `/api/email/{id}` | Message + AI summary. |
-| `POST` | `/api/email/draft` | Generate a compose/reply draft from user instructions. |
+| `POST` | `/api/email/draft` | Generate a new/reply/forward draft from free-form instructions and optional notes. |
 | `POST` | `/api/email/send` | Send a new message through Gmail. |
 | `POST` | `/api/email/{id}/reply` | Send a threaded reply. |
 | `POST` | `/api/email/{id}/forward` | Forward a message. |
@@ -46,8 +47,8 @@ fetched live on demand. `frontend/src/screens/EmailScreen.jsx` renders the live 
 
 ## Dependencies & interactions
 
-- **Assistant / LLM (core).** Triage summaries and requested drafts are LLM outputs — the
-  same model seam as [assistant.md](assistant.md). Share one LLM client/config.
+- **Assistant / LLM (core).** Triage summaries and instruction-driven drafts are LLM
+  outputs — the same model seam as [assistant.md](assistant.md). Share one LLM client/config.
 - **Email → Tasks.** A "Needs reply" message maps cleanly to a task ("Reply to Priya
   about Lighthouse" already exists in the seed tasks) — consider a "make task from email"
   action. See [tasks.md](tasks.md).
