@@ -10,7 +10,7 @@ Thresholds live here as named constants — the single place to tune (spec §11)
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 # ---- tunable thresholds -----------------------------------------------------
 RECOVERY_GREEN = 67          # WHOOP bands: >=67 green, 34-66 yellow, <34 red
@@ -37,7 +37,7 @@ class Signal:
 class Ctx:
     day: date
     today: dict | None
-    history: list[dict] = field(default_factory=list)   # prior-day snapshot dicts
+    history: list[dict] = field(default_factory=list)   # prior days, oldest first
 
     def val(self, field_name: str):
         return self.today.get(field_name) if self.today else None
@@ -102,11 +102,19 @@ def _strain_recovery_balance(ctx: Ctx) -> Signal | None:
 def _sleep_performance(ctx: Ctx) -> Signal | None:
     sq = ctx.val("sleep_quality_pct")
     hrs = ctx.val("sleep_hours")
-    nights = ([ctx.today] if ctx.today else []) + ctx.history
-    short_nights = sum(
-        1 for n in nights
-        if n.get("sleep_hours") is not None and n["sleep_hours"] < SHORT_SLEEP_HRS
-    )
+    short_nights = 0
+    expected_day = ctx.day
+    # A streak ends at the first normal, missing, or non-adjacent night.
+    nights = ([ctx.today] if ctx.today else []) + list(reversed(ctx.history))
+    for night in nights:
+        night_day = night.get("day")
+        if night_day is not None and night_day != expected_day:
+            break
+        sleep_hours = night.get("sleep_hours")
+        if sleep_hours is None or sleep_hours >= SHORT_SLEEP_HRS:
+            break
+        short_nights += 1
+        expected_day -= timedelta(days=1)
     low_quality = sq is not None and sq < SLEEP_LOW_PCT
     if not low_quality and short_nights < 2:
         return None

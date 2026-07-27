@@ -1629,9 +1629,10 @@ class Store:
     def delete_provider_data(self, provider: str) -> bool:
         """Disconnect: delete the provider_accounts row + that provider's
         daily_snapshots and workouts (source == provider). Manual workouts
-        are preserved (their source is 'manual'). Returns True iff an account
-        existed. Deletion is the user-facing guarantee, so the router calls
-        this even when the remote revoke fails."""
+        are preserved (their source is 'manual'); WHOOP-derived fitness
+        insights are removed with their source data. Returns True iff an
+        account existed. Deletion is the user-facing guarantee, so the router
+        calls this even when the remote revoke fails."""
         from .config import settings
 
         with self._session() as s, s.begin():
@@ -1651,6 +1652,12 @@ class Store:
                 .where(Workout.source == provider)
             ):
                 s.delete(w)
+            if provider == "whoop":
+                s.execute(
+                    delete(Insight)
+                    .where(Insight.owner == settings.owner)
+                    .where(Insight.domain == "fitness")
+                )
             return existed
 
     # ---- emails (M5) ----
@@ -3589,16 +3596,24 @@ class Store:
             ).all()
             return [_insight_dict(r) for r in rows]
 
-    def has_insight(self, day: date, domain: str = "fitness") -> bool:
+    def has_insight(
+        self,
+        day: date,
+        domain: str = "fitness",
+        code: str | None = None,
+    ) -> bool:
         from .config import settings
 
         with self._session() as s:
-            return s.scalars(
+            query = (
                 select(Insight.id)
                 .where(Insight.owner == settings.owner)
                 .where(Insight.domain == domain)
                 .where(Insight.day == day)
-            ).first() is not None
+            )
+            if code is not None:
+                query = query.where(Insight.code == code)
+            return s.scalars(query).first() is not None
 
     @_retry_integrity
     def prune_insights(self, day: date, domain: str, keep_codes) -> int:

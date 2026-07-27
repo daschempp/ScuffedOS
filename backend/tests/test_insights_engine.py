@@ -1,4 +1,5 @@
 """Engine: rules+phraser+cache, and the once-a-day generation gate."""
+import threading
 from datetime import date, timedelta
 
 from app import llm
@@ -44,6 +45,69 @@ def test_maybe_generate_runs_once_then_skips(client):
     llm.configure(None)
     assert engine.maybe_generate_today() >= 1
     assert engine.maybe_generate_today() == 0      # already has today's insight
+
+
+def test_maybe_generate_serializes_concurrent_sync_ticks(monkeypatch):
+    generated = threading.Event()
+    simultaneous_checks = threading.Barrier(2)
+    generation_calls = []
+    results = []
+
+    def has_recovery_anchor(day, domain, code):
+        already_generated = generated.is_set()
+        try:
+            simultaneous_checks.wait(timeout=0.2)
+        except threading.BrokenBarrierError:
+            pass
+        return already_generated
+
+    monkeypatch.setattr(engine, "_today", lambda: TODAY)
+    monkeypatch.setattr(store, "has_insight", has_recovery_anchor)
+    monkeypatch.setattr(
+        store,
+        "list_snapshots",
+        lambda day, days_back: [{"day": day, "recovery_pct": 75}],
+    )
+
+    def generate(day):
+        generation_calls.append(day)
+        generated.set()
+        return 1
+
+    monkeypatch.setattr(engine, "generate_for_day", generate)
+
+    start = threading.Barrier(3)
+
+    def run_tick():
+        start.wait()
+        results.append(engine.maybe_generate_today())
+
+    threads = [threading.Thread(target=run_tick) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert generation_calls == [TODAY]
+    assert sorted(results) == [0, 1]
+
+
+def test_maybe_generate_runs_after_pre_recovery_manual_refresh(client):
+    """A partial manual read must not block the recovery-anchored daily read."""
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=TODAY - timedelta(days=1), sleep_hours=5.0,
+    ))
+    store.upsert_snapshot(NormalizedSnapshot(source="whoop", day=TODAY, sleep_hours=5.0))
+    assert engine.generate_for_day(TODAY) == 1
+    assert {c["code"] for c in store.list_insights(TODAY)} == {"sleep_performance"}
+
+    store.upsert_snapshot(NormalizedSnapshot(
+        source="whoop", day=TODAY, recovery_pct=75, sleep_hours=5.0,
+    ))
+    assert engine.maybe_generate_today() >= 1
+    assert "recovery_band" in {c["code"] for c in store.list_insights(TODAY)}
 
 
 def test_regenerate_prunes_cards_that_stopped_firing(client):
