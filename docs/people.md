@@ -1,11 +1,11 @@
 # People (Personal CRM) — Architecture
 
-> Status: **implemented (M10 s1)** · Last updated: 2026-07-13
+> Status: **implemented (M10 s1, plus the assistant People tools)** · Last updated: 2026-08-19
 >
 > Part of the [backend overview](backend-overview.md). A personal CRM: contacts
 > imported read-only from macOS Contacts, CRM-native relationship metadata
 > (relationship, strength, notes, pinned, last-contacted), and manually-added
-> people — all behind `/api/people`.
+> people — all behind `/api/people` and the assistant's People tools.
 
 ## Responsibility
 
@@ -135,12 +135,59 @@ consumed anywhere in this slice.
   (`~/Library/Application Support/ScuffedOS` by default) under which photos
   and other local backend-host artifacts live.
 
-## No AI
+## Assistant access (no gate)
 
-This slice sends Contacts data to **no AI provider** and to **no third-party
-Contacts API**. Contact data is used only to populate the CRM screen and the
-`resolve_handle` seam; nothing about a person is included in assistant
-context in this slice.
+Contacts still reach **no third-party Contacts API**, and sync itself sends
+nothing outward — it writes to the configured database and stops. Contact data
+*does* reach **Anthropic**: five People tools live in `app/tools.py`
+(`list_people`, `get_person`, `create_person`, `update_person`, `log_contact`),
+and because they sit in `TOOLS` they ship in `DEFINITIONS` on **every**
+assistant turn. There is **no opt-in gate** — the earlier plan for opt-in
+assistant access to CRM data was never built, and enabling the Contacts
+connector is the only decision the user makes. A tool only runs when the
+user's own request drives the model to call it, so this is request-scoped, not
+background upload.
+
+Two serializers bound what crosses the seam:
+
+- **`_compact_person`** — the list row, and the base of every other result:
+  `id`, `display_name`, `source`, then `nickname` / `organization` /
+  `job_title` / `relationship` when set, `relationship_strength`, `pinned`
+  when true, `last_contacted_at`, and `notes` truncated to
+  `_PERSON_NOTES_CHARS` (200). **No phones, no emails.**
+- **`_person_detail`** — `get_person` and every write result: the compact row
+  plus `phones` and `emails` as `{value, label}`, `has_photo`, and `notes`
+  re-truncated to `_PERSON_DETAIL_NOTES_CHARS` (1000), which overrides the
+  list cap.
+
+Deliberately withheld: photo bytes (`has_photo` is a bare flag; `photo_key`
+never leaves the store), the `normalized` twin on each phone/email entry (the
+handle index stays local), `source_id`, `first_name`/`last_name`, and the
+`removed_from_source_at` / `created_at` / `updated_at` bookkeeping.
+`list_people` also returns `total_people` — an unfiltered count — so address-book
+size is disclosed even on a one-hit search.
+
+Writes go through the same ownership rule as the API: `_PERSON_CRM_FIELDS`
+(`relationship`, `relationship_strength`, `notes`, `pinned`) plus
+`last_contacted_at` via `log_contact`. `update_person` refuses the **whole**
+call if it touches identity on a non-`manual` row, and there is deliberately no
+delete tool. The user-facing disclosure lives in
+[privacy-policy.md](privacy-policy.md) §4.
+
+**The seam is not the last hop.** "Request-scoped" bounds when a *tool* runs,
+not where the resulting conversation text lands. Every turn also drives
+`memory_engine`: `assistant._system_prompt` calls `search(message)` (embeds the
+raw user message) and the router fires `capture_turn(message, final_text)` in a
+background thread. Mem0 is configured with an **Anthropic** extraction LLM and
+an **OpenAI** embedder, so the exchange is embedded by OpenAI, extracted by
+Anthropic, and each extracted fact embedded and stored. Two consequences worth
+holding onto: contacts do reach a **second provider** (OpenAI) whenever contact
+text surfaces in the user's message or the assistant's reply — the "no third-party
+Contacts API" claim above is about Contacts APIs, not about providers in
+general — and because `search` runs on every turn, a contact-derived memory can
+be re-sent to Anthropic on later, unrelated turns. `capture_turn` receives only
+the user message and the final assistant text, so raw `_person_detail` payloads
+(phones, emails) never enter the memory pipeline directly.
 
 ## Source-aware CRUD
 
@@ -160,8 +207,10 @@ context in this slice.
 
 ## Dependencies & interactions
 
-- **Assistant → People.** Not wired to assistant context in this slice (see
-  "No AI" above); a future slice may add opt-in assistant access to CRM data.
+- **Assistant → People.** Wired, ungated: `list_people` / `get_person` read the
+  CRM and `create_person` / `update_person` / `log_contact` write its app-native
+  fields, on every turn (see "Assistant access (no gate)" above). The opt-in
+  gate this doc once anticipated does not exist.
 - **People ↔ Email.** Email senders are contacts; a future slice could update
   `last_contacted_at` from sent/received mail. See [email.md](email.md).
 - **People → Calendar.** Important dates (birthdays/anniversaries) remain
