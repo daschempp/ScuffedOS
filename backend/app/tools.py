@@ -1,6 +1,7 @@
 """The assistant's tool surface (review D2): read + write over every built
 domain — tasks, memories, calendar, habits, nutrition (M3), fitness (M4),
-finance (M7, reads + local budget writes only — no Plaid writes).
+finance (M7, reads + local budget writes only — no Plaid writes), people
+(M10, CRM-owned fields only — the contacts sync owns identity).
 
 Each tool pairs a Claude tool definition with an executor. Write executors
 also return an "action card" — the UI's receipt of what actually executed,
@@ -13,6 +14,10 @@ import json
 from datetime import date, datetime, timedelta
 
 from . import email_draft, fitness_sync, food_db, memory_engine, providers, recurrence
+# Single source of truth for "which person fields the contacts sync owns" — the
+# People tools honour the same rule the HTTP API does, so it must not be a copy
+# that can drift out of step with the router's.
+from .routers.people import _IDENTITY_FIELDS
 from .store import store
 
 _GROUPS = ["Today", "Upcoming", "Someday"]
@@ -606,6 +611,132 @@ def _reallocate_budget(args: dict):
         "Budget moved", f"${args['amount']} {args['from_category']} → {args['to_category']}")
 
 
+# ---- people / CRM (real from M10) -------------------------------------------
+# Deliberately no delete tool: deleting a contact from chat is destructive by
+# accident, and a synced row would resurrect on the next sync anyway. Removal
+# stays on the People screen (manual rows) / the Disconnect-Forget lifecycle.
+
+# The only fields this tool surface may write. Everything else on a person is
+# either sync-owned identity or store-managed bookkeeping. Tool args skip the
+# API's Pydantic layer (see _clamp), so this allowlist — not the input schema —
+# is what actually keeps identity out of the patch.
+_PERSON_CRM_FIELDS = ("relationship", "relationship_strength", "notes", "pinned")
+_PERSON_NOTES_CHARS = 200        # list row
+_PERSON_DETAIL_NOTES_CHARS = 1000
+
+
+def _people_action(title: str, meta: str) -> dict:
+    return {"icon": "users", "title": title, "meta": meta,
+            "cta": "Open people", "screen": "people"}
+
+
+def _compact_person(p: dict) -> dict:
+    """List row for the model: who they are plus CRM state. No phones/emails and
+    no photo plumbing — get_person is where those belong."""
+    out = {"id": p["id"], "display_name": p["display_name"], "source": p["source"]}
+    for key in ("nickname", "organization", "job_title", "relationship"):
+        if p[key]:
+            out[key] = p[key]
+    if p["relationship_strength"] is not None:
+        out["relationship_strength"] = p["relationship_strength"]
+    if p["pinned"]:
+        out["pinned"] = True
+    if p["last_contacted_at"]:
+        out["last_contacted_at"] = p["last_contacted_at"].isoformat()
+    if p["notes"]:
+        out["notes"] = p["notes"][:_PERSON_NOTES_CHARS]
+    return out
+
+
+def _person_detail(p: dict) -> dict:
+    """One person in full — still bounded: contact entries lose their `normalized`
+    twin, notes are capped, and the photo is a flag rather than bytes."""
+    out = _compact_person(p)
+    out["phones"] = [{"value": e.get("value"), "label": e.get("label", "")}
+                     for e in p["phones"]]
+    out["emails"] = [{"value": e.get("value"), "label": e.get("label", "")}
+                     for e in p["emails"]]
+    out["has_photo"] = p["has_photo"]
+    if p["notes"]:
+        out["notes"] = p["notes"][:_PERSON_DETAIL_NOTES_CHARS]
+    return out
+
+
+def _entries(values) -> list[dict]:
+    """Chat gives phone numbers and addresses as plain strings; the store wants
+    {value,label} entries."""
+    return [{"value": v, "label": ""} for v in (values or []) if v]
+
+
+def _list_people(args: dict):
+    q = args.get("q")
+    page = store.list_people(q=q, limit=args.get("limit") or 25)
+    return {"people": [_compact_person(p) for p in page["items"]],
+            "more": page["next_cursor"] is not None,
+            "total_people": store.count_people()}, None
+
+
+def _get_person(args: dict):
+    person = store.get_person(args["person_id"])
+    if person is None:
+        return {"error": f"No person with id {args['person_id']}."}, None
+    return _person_detail(person), None
+
+
+def _create_person(args: dict):
+    data = {"display_name": args.get("display_name") or ""}
+    for key in ("nickname", "organization", "job_title", *_PERSON_CRM_FIELDS):
+        if args.get(key) is not None:
+            data[key] = args[key]
+    for key in ("phones", "emails"):
+        if args.get(key):
+            data[key] = _entries(args[key])
+    try:
+        person = store.create_person(data)
+    except ValueError:
+        return {"error": "A person needs a name — ask the user who this is."}, None
+    return {"person": _person_detail(person)}, _people_action(
+        "Contact added", person["display_name"]
+    )
+
+
+def _update_person(args: dict):
+    person = store.get_person(args["person_id"])
+    if person is None:
+        return {"error": f"No person with id {args['person_id']}."}, None
+    # Same ownership rule the API enforces (routers/people.py): on an imported row
+    # the sync owns identity. Refuse the whole call rather than quietly applying
+    # the half of it we're allowed to — the model needs to tell the user why.
+    if person["source"] != "manual" and (_IDENTITY_FIELDS & args.keys()):
+        return {"error": "Imported contact identity is read-only; edit it in "
+                         "Apple Contacts. Only relationship, relationship_strength, "
+                         "notes and pinned are editable here."}, None
+    patch = {k: args[k] for k in _PERSON_CRM_FIELDS if k in args}
+    if not patch:
+        return {"error": "Nothing to update — pass at least one of relationship, "
+                         "relationship_strength, notes or pinned."}, None
+    updated = store.update_person(args["person_id"], patch)
+    if updated is None:
+        return {"error": f"No person with id {args['person_id']}."}, None
+    return {"person": _person_detail(updated)}, _people_action(
+        "Contact updated", f"{updated['display_name']} · {', '.join(patch)}"
+    )
+
+
+def _log_contact(args: dict):
+    person = store.get_person(args["person_id"])
+    if person is None:
+        return {"error": f"No person with id {args['person_id']}."}, None
+    when = _parse_dt(args["when"]) if args.get("when") else datetime.now().astimezone()
+    updated = store.update_person(args["person_id"], {"last_contacted_at": when})
+    if updated is None:
+        return {"error": f"No person with id {args['person_id']}."}, None
+    return {"person": _person_detail(updated)}, _people_action(
+        "Contact logged", f"{updated['display_name']} · "
+                          f"{when.astimezone().strftime('%b %-d')}"
+    )
+
+
 # ---- task reminders (real from M3) -------------------------------------------
 
 def _add_reminder(args: dict):
@@ -927,6 +1058,48 @@ TOOLS: list[dict] = [
          "amount": {"type": "number"}, "month": {"type": "string"}},
          "required": ["from_category", "to_category", "amount"], "additionalProperties": False},
      "run": _reallocate_budget},
+    {"name": "list_people",
+     "description": "Browse or search the user's contacts (their CRM). Call this to find someone's id before get_person/update_person/log_contact, or when the user asks who they know. ALWAYS pass q when the user names someone or quotes their email or phone number — q searches the whole address book, while an unfiltered list only returns the first page of it.",
+     "input_schema": {"type": "object", "properties": {
+         "q": {"type": "string", "description": "Substring of name, nickname, organization or job title. A q containing any letter ALSO matches an email from the START of the address ('ada' and 'ada@gmail.com' both find ada@gmail.com; 'gmail.com' finds nobody). A q of digits/punctuation only matches its digits anywhere in a phone number ('555-0134' finds +15555550134), and is ignored for phones below 3 digits."},
+         "limit": {"type": "integer", "description": "How many to return (default 25, max 200)."}},
+         "additionalProperties": False},
+     "run": _list_people},
+    {"name": "get_person",
+     "description": "Read one person's full CRM detail — phones, emails, organization, how the user knows them, notes, and when they last spoke. Call after list_people to open someone by id.",
+     "input_schema": {"type": "object", "properties": {"person_id": {"type": "integer"}},
+                      "required": ["person_id"], "additionalProperties": False},
+     "run": _get_person},
+    {"name": "create_person",
+     "description": "Add someone to the CRM by hand. Call when the user mentions a person who isn't in their contacts yet ('add my new landlord Priya, 555-0134'). Contacts synced from Apple Contacts arrive on their own — use list_people first so you don't create a duplicate.",
+     "input_schema": {"type": "object", "properties": {
+         "display_name": {"type": "string", "description": "How the user refers to them, e.g. 'Priya Raman'."},
+         "nickname": _STRING, "organization": _STRING, "job_title": _STRING,
+         "phones": {"type": "array", "items": _STRING},
+         "emails": {"type": "array", "items": _STRING},
+         "relationship": {"type": "string", "description": "How the user knows them, e.g. Friend, Family, Landlord."},
+         "relationship_strength": {"type": "integer", "description": "1 (distant) to 5 (closest)."},
+         "notes": _STRING,
+         "pinned": {"type": "boolean"}},
+         "required": ["display_name"], "additionalProperties": False},
+     "run": _create_person},
+    {"name": "update_person",
+     "description": "Update what the user knows ABOUT someone: relationship, relationship_strength, notes, pinned (find the id with list_people). Names, phone numbers, emails and organization come from Apple Contacts on synced people and can't be changed here — tell the user to edit those in Apple Contacts.",
+     "input_schema": {"type": "object", "properties": {
+         "person_id": {"type": "integer"},
+         "relationship": {"type": "string", "description": "How the user knows them, e.g. Friend, Family, Landlord."},
+         "relationship_strength": {"type": "integer", "description": "1 (distant) to 5 (closest)."},
+         "notes": {"type": "string", "description": "Replaces the existing notes — read them with get_person first if you're adding to them."},
+         "pinned": {"type": "boolean"}},
+         "required": ["person_id"], "additionalProperties": False},
+     "run": _update_person},
+    {"name": "log_contact",
+     "description": "Record that the user was in touch with someone. Call whenever they mention reaching out ('I called mom today', 'caught up with Sam on Friday') — it stamps last contacted so the CRM can surface who they've gone quiet on.",
+     "input_schema": {"type": "object", "properties": {
+         "person_id": {"type": "integer"},
+         "when": {"type": "string", "description": "ISO datetime; defaults to now (user's local time if no offset)."}},
+         "required": ["person_id"], "additionalProperties": False},
+     "run": _log_contact},
 ]
 
 DEFINITIONS = [{k: t[k] for k in ("name", "description", "input_schema")} for t in TOOLS]

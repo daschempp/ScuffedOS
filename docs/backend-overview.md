@@ -88,8 +88,8 @@ New functions should follow the built ones (`routers/tasks.py` + `store.py` +
 
 ## How the functions interact
 
-Two infra pieces are shared by everyone, and the **assistant is a hub** for the domains
-that currently expose tools. People remains screen-only.
+Two infra pieces are shared by everyone, and the **assistant is a hub** — every feature
+domain now exposes tools.
 
 **Shared infrastructure**
 
@@ -112,7 +112,7 @@ flowchart TD
     A -->|"remember / search_memory"| M["memory"]
     A -->|"get_inbox / draft_email"| E["email"]
     A -->|"get_courses / get_grades"| Sc["school"]
-    P["people<br/>screen only — no assistant tool yet"]
+    A -->|"list_people / update_person / log_contact"| P["people"]
 ```
 
 Since M2 the assistant acts **server-side** through its tool loop (`app/tools.py`). Local
@@ -125,8 +125,10 @@ delete, reminders, recurrence), memory, calendar (`create_event`/`update_event`/
 (`get_courses`/`get_deadlines`/`get_grades`), and finance — read-only for synced bank data
 (`get_finance_summary`, `get_transactions`,
 `get_networth`, `get_holdings`), but with writable app-native budgets (`set_budget`,
-`reallocate_budget`). People is currently read-through-screen only — no assistant tool
-yet. Every executed write returns an **action card** deep-linking to its screen. See
+`reallocate_budget`). People reads through `list_people`/`get_person` and writes only the
+app-native CRM layer (`create_person`, `update_person`, `log_contact`) — identity on
+imported contacts belongs to the Apple Contacts sync, and there is no delete tool.
+Every executed write returns an **action card** deep-linking to its screen. See
 [assistant.md](assistant.md).
 
 **Direct cross-domain links** (independent of the assistant)
@@ -249,5 +251,4 @@ workouts remain writable. Still open: sync-cadence tuning and backfill windows.
   plus explicit `POST /api/<fn>/sync`; no webhooks.
 - **Calendar import.** Calendar is local-only today; pulling in Google Calendar (or any
   external calendar) is unbuilt and would need a new OAuth scope.
-- **Assistant reach into People.** Every other domain has tools; People does not yet.
 - **Error model & `/api` versioning** once a second client consumes the surface.
