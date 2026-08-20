@@ -76,14 +76,6 @@ function syncBanner(c) {
   return null
 }
 
-function matches(p, q) {
-  if (!q.trim()) return true
-  const hay = [p.display_name, p.organization, p.job_title,
-    ...(p.emails || []).map((e) => e.value),
-    ...(p.phones || []).map((ph) => ph.value)].filter(Boolean).join(' ').toLowerCase()
-  return hay.includes(q.trim().toLowerCase())
-}
-
 function Field({ label, required, children }) {
   return (
     <label className="kit-field">
@@ -265,24 +257,45 @@ function PersonDetail({ person, onChanged, onDeleted }) {
 
 export function CRMScreen({ onOpenConnectors }) {
   const [people, setPeople] = React.useState(null)
+  const [nextCursor, setNextCursor] = React.useState(null)
   const [contacts, setContacts] = React.useState(null)   // the macos_contacts connector card, or null
   const [error, setError] = React.useState('')
-  const [q, setQ] = React.useState('')
-  const [selectedId, setSelectedId] = React.useState(null)
+  const [q, setQ] = React.useState('')                   // what’s in the box
+  const [query, setQuery] = React.useState('')           // debounced — what the server was asked for
+  // The whole person, not just an id: a search or a later page can leave the
+  // open detail pane's person off the list without closing the pane.
+  const [selected, setSelected] = React.useState(null)
   const [creating, setCreating] = React.useState(false)
   const [syncing, setSyncing] = React.useState(false)
+  const [loadingMore, setLoadingMore] = React.useState(false)
+  const [moreError, setMoreError] = React.useState('')
   const [notice, setNotice] = React.useState('')
+  const requestSeq = React.useRef(0)
+
+  // A Contacts import runs to hundreds of people, so the list is server-paged and
+  // server-searched: the client only ever holds the pages it asked for. Every
+  // request takes a ticket and only the newest ticket may write the list, so a
+  // slow answer for a query the user has already typed past — or a "load more"
+  // that lands after a new search — is dropped instead of clobbering the screen.
+  const fetchPage = React.useCallback(async (cursor) => {
+    const ticket = (requestSeq.current += 1)
+    const page = await api.listPeople({ q: query.trim() || undefined, cursor: cursor || undefined })
+    if (ticket !== requestSeq.current) return null   // a newer request owns the list
+    const items = page?.items || []
+    setPeople((prev) => (cursor ? [...(prev || []), ...items] : items))
+    setNextCursor(page?.next_cursor || null)
+    // Keep an open detail pane pointed at the freshest copy of its person; a
+    // person who isn’t on this page keeps the copy we already have.
+    setSelected((cur) => (cur ? items.find((p) => p.id === cur.id) || cur : null))
+    return items
+  }, [query])
 
   const refresh = React.useCallback(async () => {
     try {
-      const [page, cards] = await Promise.all([
-        api.listPeople(),
+      const [items, cards] = await Promise.all([
+        fetchPage(null),
         api.getConnectors().catch(() => []),
       ])
-      const items = page?.items || []
-      setPeople(items)
-      // TODO(slice 2): store page.next_cursor + a "load more" control; slice 1
-      // pages once (default limit) and does not paginate further.
       setContacts((cards || []).find((k) => k.name === 'macos_contacts') || null)
       setError('')
       return items
@@ -290,8 +303,21 @@ export function CRMScreen({ onOpenConnectors }) {
       setError(e?.message || 'Couldn’t load your people.')
       throw e
     }
-  }, [])
+  }, [fetchPage])
 
+  // Hold the keystrokes for a beat before asking the server: 250ms coalesces
+  // typing into one request without the list feeling laggy behind the box.
+  React.useEffect(() => {
+    const id = setTimeout(() => setQuery(q), 250)
+    return () => clearTimeout(id)
+  }, [q])
+
+  // A cursor belongs to the query that produced it. Retiring it the moment the
+  // query changes keeps "load more" from appending the old query's next page
+  // onto results for the new one while the new first page is still in flight.
+  React.useEffect(() => { setNextCursor(null) }, [query])
+
+  // Mount, and again on every debounced query change (refresh is keyed to it).
   React.useEffect(() => { refresh().catch(() => {}) }, [refresh])
 
   // Refetch when the user returns to the app/tab: a background startup sync or a
@@ -315,6 +341,14 @@ export function CRMScreen({ onOpenConnectors }) {
     const id = setInterval(() => { refresh().catch(() => {}) }, 2500)
     return () => clearInterval(id)
   }, [syncStatus, refresh])
+
+  const loadMore = React.useCallback(async () => {
+    if (!nextCursor || loadingMore) return
+    setLoadingMore(true); setMoreError('')
+    try { await fetchPage(nextCursor) }
+    catch (e) { setMoreError(e?.message || 'Couldn’t load more people.') }
+    finally { setLoadingMore(false) }
+  }, [nextCursor, loadingMore, fetchPage])
 
   const runSync = React.useCallback(async () => {
     setSyncing(true); setNotice('Syncing contacts…')
@@ -346,16 +380,24 @@ export function CRMScreen({ onOpenConnectors }) {
   }
 
   const banner = syncBanner(contacts)
-  const filtered = (people || []).filter((p) => matches(p, q))
-  const selected = (people || []).find((p) => p.id === selectedId) || null
-  const emptyAll = (people || []).length === 0
-  const noMatches = !emptyAll && filtered.length === 0
+  const rows = people || []
+  // `query`, not `q`: these describe the list actually on screen, which lags the
+  // box by the debounce — so clearing the box can’t flash the onboarding empty
+  // state over a search that simply found nobody.
+  const searching = !!query.trim()
+  const emptyAll = !searching && rows.length === 0
+  const noMatches = searching && rows.length === 0
+  // "50+ contacts" while a further page is waiting: the count is what we hold,
+  // not what the server has.
+  const more = !!nextCursor
+  const one = rows.length === 1 && !more
+  const eyebrow = `${rows.length}${more ? '+' : ''} ${searching ? (one ? 'match' : 'matches') : (one ? 'contact' : 'contacts')}`
 
   return (
     <div className="kit-grid" style={{ gridTemplateColumns: '1.5fr 1fr' }}>
       <Card
         title="People"
-        eyebrow={`${(people || []).length} ${(people || []).length === 1 ? 'contact' : 'contacts'}`}
+        eyebrow={eyebrow}
         action={
           <div className="kit-inline" style={{ gap: 8 }}>
             <div className="kit-search" style={{ width: 180 }}>
@@ -363,7 +405,7 @@ export function CRMScreen({ onOpenConnectors }) {
               <input aria-label="Search people" placeholder="Search people"
                 value={q} onChange={(e) => setQ(e.target.value)} />
             </div>
-            <IconButton label="New person" onClick={() => { setCreating(true); setSelectedId(null) }}>
+            <IconButton label="New person" onClick={() => { setCreating(true); setSelected(null) }}>
               <Icon name="plus" />
             </IconButton>
           </div>
@@ -390,21 +432,40 @@ export function CRMScreen({ onOpenConnectors }) {
           </Card>
         )}
 
+        {/* A refresh that fails once rows are on screen mustn't take the pane over
+            — the rows we hold are still useful — but it can't pass silently either:
+            after a failed search the list answers the *previous* query, so without
+            this the stale rows read as the result for what was just typed. */}
+        {error && (
+          <Card variant="flat" role="alert"
+            style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, background: 'var(--surface-sunken)' }}>
+            <span className="kit-statline__ico" style={TONE_TINT.clay}><Icon name="alert-triangle" /></span>
+            <div style={{ flex: 1 }}>
+              <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>{error}</p>
+              <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>
+                Showing the people that loaded last{searching ? ` — not results for “${query}”.` : '.'}
+              </p>
+            </div>
+            <Button variant="secondary" size="sm" iconLeft={<Icon name="refresh-cw" />}
+              onClick={() => refresh().catch(() => {})}>Retry</Button>
+          </Card>
+        )}
+
         {emptyAll ? (
-          <EmptyPeople contacts={contacts} onAdd={() => { setCreating(true); setSelectedId(null) }} onOpenConnectors={onOpenConnectors} />
+          <EmptyPeople contacts={contacts} onAdd={() => { setCreating(true); setSelected(null) }} onOpenConnectors={onOpenConnectors} />
         ) : noMatches ? (
           <div className="kit-stack" style={{ alignItems: 'center', padding: 24, textAlign: 'center', gap: 8 }}>
             <Icon name="search" />
-            <p className="kit-row__title">No matches for “{q}”</p>
+            <p className="kit-row__title">No matches for “{query}”</p>
             <Button variant="ghost" size="sm" onClick={() => setQ('')}>Clear search</Button>
           </div>
         ) : (
           <ul className="kit-stack" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-            {filtered.map((p) => (
+            {rows.map((p) => (
               <li key={p.id}>
-                <button type="button" className="kit-person" aria-pressed={p.id === selectedId}
+                <button type="button" className="kit-person" aria-pressed={p.id === selected?.id}
                   style={{ width: '100%', background: 'none', border: 0, textAlign: 'left', cursor: 'pointer' }}
-                  onClick={() => { setSelectedId(p.id); setCreating(false) }}>
+                  onClick={() => { setSelected(p); setCreating(false) }}>
                   <Avatar name={p.display_name} tint={tintFor(p)}
                     src={p.has_photo ? api.personPhotoUrl(p.id) : undefined} />
                   <div className="kit-person__main">
@@ -422,15 +483,26 @@ export function CRMScreen({ onOpenConnectors }) {
             ))}
           </ul>
         )}
+
+        {more && (
+          <div className="kit-stack" style={{ alignItems: 'center', gap: 6, marginTop: 12 }}>
+            <Button variant="secondary" size="sm" disabled={loadingMore} onClick={loadMore}>
+              {loadingMore ? 'Loading…' : 'Load more'}
+            </Button>
+            {moreError && (
+              <p role="alert" className="kit-muted" style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{moreError}</p>
+            )}
+          </div>
+        )}
       </Card>
 
       <div className="kit-col">
         {creating ? (
           <PersonEditor key="new" onCancel={() => setCreating(false)}
-            onSaved={async (created) => { setCreating(false); await refresh(); setSelectedId(created.id) }} />
+            onSaved={async (created) => { setCreating(false); setSelected(created); await refresh() }} />
         ) : selected ? (
           <PersonDetail key={selected.id} person={selected} onChanged={refresh}
-            onDeleted={async () => { setSelectedId(null); await refresh() }} />
+            onDeleted={async () => { setSelected(null); await refresh() }} />
         ) : (
           <Card title="Details" variant="sunken">
             <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>
