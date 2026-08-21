@@ -53,6 +53,46 @@ describe('ConnectorsPanel — macOS Contacts (local)', () => {
     await waitFor(() => expect(api.enableContacts).toHaveBeenCalledTimes(1))
   })
 
+  // The disclosure is the text the user ticks before the FIRST sync, so it has to
+  // match what the backend actually does. backend/app/tools.py ships five People
+  // tools (list_people/get_person/create_person/update_person/log_contact) whose
+  // payloads carry contact fields to Anthropic on any assistant turn about people,
+  // and capture() feeds the turn to Mem0 (OpenAI embedder). There is deliberately
+  // no second consent gate on that — enabling the import IS the opt-in.
+  it('discloses that contact fields reach the AI provider, with no separate opt-in', async () => {
+    api.getConnectors.mockResolvedValue([localCard()])
+    render(<ConnectorsPanel onOpenKeys={() => {}} />)
+
+    const disclosure = await screen.findByText(/read locally and read-only from the macOS Contacts app/i)
+    expect(disclosure).toHaveTextContent(/Anthropic/)
+    expect(disclosure).toHaveTextContent(/phone numbers/i)
+    expect(disclosure).toHaveTextContent(/OpenAI/)
+    // No gate may be implied: enabling the import is the whole consent.
+    expect(disclosure).toHaveTextContent(/only opt-in/i)
+    expect(disclosure).toHaveTextContent(/no separate AI switch/i)
+  })
+
+  it('never claims contacts are withheld from AI providers or third parties', async () => {
+    api.getConnectors.mockResolvedValue([localCard()])
+    render(<ConnectorsPanel onOpenKeys={() => {}} />)
+
+    const text = (await screen.findByText(/read locally and read-only from the macOS Contacts app/i)).textContent
+    // Fails if the pre-People-tools wording ("Contacts are never sent to any AI
+    // provider or third-party service.") is ever reinstated in any form.
+    expect(text).not.toMatch(/never sent to any/i)
+    expect(text).not.toMatch(/never (sent|shared|leave|leaves|transmitted|uploaded)/i)
+  })
+
+  it('names the AI sharing in the acknowledgement the user actually ticks', async () => {
+    api.getConnectors.mockResolvedValue([localCard()])
+    render(<ConnectorsPanel onOpenKeys={() => {}} />)
+
+    const ack = await screen.findByRole('checkbox', { name: /acknowledge/i })
+    expect(ack.getAttribute('aria-label')).toMatch(/AI provider/i)
+    expect(screen.getByText(/I understand where my contact data is stored/i))
+      .toHaveTextContent(/AI provider/i)
+  })
+
   it('is exempt from the not-configured API-keys gate when unsupported on this device', async () => {
     api.getConnectors.mockResolvedValue([localCard({
       configured: false, access: 'unknown', sync_status: 'disabled',

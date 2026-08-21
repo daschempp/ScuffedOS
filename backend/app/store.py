@@ -580,6 +580,59 @@ def _decode_cursor(cursor: str) -> tuple[str | None, int | None]:
         return None, None
 
 
+_HANDLE_MIN_DIGITS = 3
+_LIKE_ESCAPE = "\\"
+
+
+def _escape_like(ql: str) -> str:
+    """Neutralize LIKE metacharacters in user text so a query means itself.
+
+    Every pattern built from `q` MUST go through this and be matched with
+    escape=_LIKE_ESCAPE. Unescaped, `%` and `_` are pattern syntax the user never
+    asked for: "%com" expands to "%com%", which is exactly the substring search
+    the email prefix rule removed, and "_da" matches any character before "da".
+    Half-escaping is worse than none -- it just moves the hole to whichever
+    clause was skipped.
+    """
+    return (ql.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)   # the escape char first, or we double our own
+              .replace("%", _LIKE_ESCAPE + "%")
+              .replace("_", _LIKE_ESCAPE + "_"))
+
+
+def _handle_search_pattern(ql: str) -> tuple[str, str | None] | None:
+    """(LIKE pattern, required handle kind) for the canonical person_handle keys,
+    or None to skip handles entirely. A kind of None means any kind. The pattern
+    is escaped and must be applied with escape=_LIKE_ESCAPE.
+
+    A query carrying letters is an EMAIL search and matches the stored key as a
+    PREFIX. An address is identifying on the left and shared on the right, so a
+    substring match on "gmail" (or even "co") returned every person on that
+    domain -- the whole address book, from a query that identifies nobody. The
+    prefix covers what people actually type: a local part, or a pasted address,
+    which is its own prefix. The cost is that the tail of an address is not a
+    search key; a domain stays reachable through the organization field.
+    The kind filter matters because short codes are stored as the literal
+    "short:<n>" (app.identity), so an unscoped prefix made "sh" return every
+    contact carrying one. (A prefix needs no substring/regex support beyond LIKE,
+    so SQLite and Postgres behave identically -- but note it does NOT buy an
+    index scan on Postgres: person_handle.value has a default-collation btree,
+    which LIKE 'x%' can only use under varchar_pattern_ops. True on SQLite,
+    not on the deployed Postgres.)
+
+    A query of digits and punctuation only is a phone search, and the stored keys
+    are E.164 -- "555-123" can only find "+15551234567" once the punctuation is
+    stripped and the fragment is matched anywhere in the number, which happens
+    HERE because neither backend gives us a portable regex. Digits are matched
+    across every kind so a short code stays findable by its number. Below
+    _HANDLE_MIN_DIGITS a fragment matches nearly every stored number, so such a
+    query is not treated as a phone search at all.
+    """
+    if any(c.isalpha() for c in ql):
+        return f"{_escape_like(ql)}%", "email"
+    digits = "".join(c for c in ql if c in "0123456789")   # digits need no escaping
+    return (f"%{digits}%", None) if len(digits) >= _HANDLE_MIN_DIGITS else None
+
+
 def _clean_name(v, maxlen: int = 256) -> str:
     return str(v or "").strip()[:maxlen]
 
@@ -1983,7 +2036,9 @@ class Store:
     def list_people(self, *, include_removed: bool = False, q: str | None = None,
                     limit: int = 50, cursor: str | None = None) -> dict:
         """Deterministic (display_name, id) keyset page. Bounded search `q`
-        (case-insensitive substring over name/nickname/organization/job title).
+        (case-insensitive substring over name/nickname/organization/job title,
+        plus email addresses by prefix and phone numbers by digit fragment via
+        the person_handle index -- see _handle_search_pattern).
         Returns {"items": [...], "next_cursor": str | None}."""
         from .config import settings
 
@@ -1991,15 +2046,37 @@ class Store:
         stmt = select(Person).where(Person.owner == settings.owner)
         if not include_removed:
             stmt = stmt.where(Person.removed_from_source_at.is_(None))
-        ql = (q or "").strip()[:100]
+        ql = (q or "").strip()[:100].lower()
         if ql:
-            like = f"%{ql.lower()}%"
-            stmt = stmt.where(or_(
-                func.lower(Person.display_name).like(like),
-                func.lower(Person.nickname).like(like),
-                func.lower(Person.organization).like(like),
-                func.lower(Person.job_title).like(like),
-            ))
+            # `q` is literal text everywhere: escape it ONCE, here, and pass
+            # escape= on every clause below -- see _escape_like.
+            like = f"%{_escape_like(ql)}%"
+            clauses = [
+                func.lower(Person.display_name).like(like, escape=_LIKE_ESCAPE),
+                func.lower(Person.nickname).like(like, escape=_LIKE_ESCAPE),
+                func.lower(Person.organization).like(like, escape=_LIKE_ESCAPE),
+                func.lower(Person.job_title).like(like, escape=_LIKE_ESCAPE),
+            ]
+            # Emails/phones live in JSON columns neither backend can search
+            # portably, so search the canonical person_handle index instead. Its
+            # values are already lower-cased/E.164 by app.identity, hence no
+            # lower() here (which would also throw away the index). EXISTS rather
+            # than a join: a person carrying three matching handles must still
+            # come back as ONE row, and a joined duplicate would also corrupt the
+            # keyset page size.
+            handle_match = _handle_search_pattern(ql)
+            if handle_match is not None:
+                handle_like, handle_kind = handle_match
+                handle_q = (
+                    select(PersonHandle.id)
+                    .where(PersonHandle.person_id == Person.id)
+                    .where(PersonHandle.owner == settings.owner)
+                    .where(PersonHandle.value.like(handle_like, escape=_LIKE_ESCAPE))
+                )
+                if handle_kind is not None:
+                    handle_q = handle_q.where(PersonHandle.kind == handle_kind)
+                clauses.append(handle_q.exists())
+            stmt = stmt.where(or_(*clauses))
         if cursor:
             cname, cid = _decode_cursor(cursor)
             if cname is not None:

@@ -17,6 +17,7 @@ working.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from pathlib import Path
 
@@ -58,6 +59,11 @@ def _get():
             _engine = False
             return None
         try:
+            # mem0's telemetry module reads MEM0_TELEMETRY at import time and
+            # defaults it ON, which ships usage events to a PostHog endpoint. The
+            # privacy policy promises no third-party analytics, so opt out before
+            # the import rather than weakening the promise. Must stay above it.
+            os.environ.setdefault("MEM0_TELEMETRY", "False")
             from mem0 import Memory
 
             Path(settings.mem0_history_path).parent.mkdir(parents=True, exist_ok=True)

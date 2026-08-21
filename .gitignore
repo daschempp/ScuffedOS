@@ -33,3 +33,13 @@ src-tauri/icons/icon.icns
 
 # graphify knowledge-graph output (local tooling, regenerable)
 graphify-out/
+
+# Local agent tooling scratch (not part of the app):
+# .agents/ duplicates the tracked .claude/skills/ and vendors a node_modules;
+# .superpowers/ is per-session review diffs, task briefs, and port/token files;
+# .beans/ + .beans.yml are the local task-tracker's config and store.
+.agents/
+.superpowers/
+.beans/
+.beans.yml
+backend/.beans.yml

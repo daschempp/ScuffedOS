@@ -38,15 +38,22 @@ async function openExternal(url) {
   window.open(url, '_blank', 'noopener')
 }
 
-// Storage disclosure shown BEFORE the user can enable the Contacts import. It is
-// deliberately explicit that structured contact fields land in the configured
-// PostgreSQL database, which MAY be remote (contract "Persistence & Privacy").
+// Storage + sharing disclosure shown BEFORE the user can enable the Contacts
+// import. Deliberately explicit on both counts: structured contact fields land in
+// the configured PostgreSQL database, which MAY be remote (contract "Persistence &
+// Privacy"), AND the People tools in backend/app/tools.py hand those same fields to
+// Anthropic on any assistant turn about contacts. Enabling the import is the only
+// opt-in there is — there is no second gate on assistant access, so this copy must
+// not imply one.
 const CONTACTS_DISCLOSURE = 'Your contacts’ names, phone numbers, email addresses, '
   + 'organization and photos are read locally and read-only from the macOS Contacts app. '
   + 'The structured fields are then saved to the PostgreSQL database this app is configured '
   + 'to use — which may run on this Mac or on a remote/self-hosted server; when it is remote, '
-  + 'that contact data travels over the network to it. Photos stay on this Mac. Contacts are '
-  + 'never sent to any AI provider or third-party service.'
+  + 'that contact data travels over the network to it. Photos stay on this Mac. When you ask '
+  + 'the assistant about your contacts it sends what it needs to answer — names, organization, '
+  + 'phone numbers, email addresses and any notes you add — to Anthropic, and with assistant '
+  + 'memory on that exchange is also embedded by OpenAI. Turning this on is the only opt-in '
+  + 'for that; there is no separate AI switch.'
 
 // FDA System Settings deep link (macOS): Privacy & Security → Full Disk Access.
 const FDA_DEEP_LINK = 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'
@@ -123,9 +130,9 @@ function ContactsLocalCard({ c, refresh, setError }) {
         </Card>
         <label className="kit-inline" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer' }}>
           <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)}
-            aria-label="Acknowledge that contacts are stored in the configured PostgreSQL database" />
+            aria-label="Acknowledge where contact data is stored and that it is sent to the AI provider when you ask the assistant about your contacts" />
           <span className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>
-            I understand where my contact data is stored.
+            I understand where my contact data is stored and when it’s sent to the AI provider.
           </span>
         </label>
         <div className="kit-inline" style={{ gap: 8 }}>
@@ -164,8 +171,9 @@ function ContactsLocalCard({ c, refresh, setError }) {
       {confirmForget ? (
         <Card variant="flat" style={{ background: 'var(--clay-100)' }}>
           <p className="kit-row__title" style={{ fontSize: 'var(--text-sm)' }}>
-            Delete every imported contact and photo from ScuffedOS? People you’ve added notes or a
-            relationship to are kept as manual contacts; the rest are removed. This can’t be undone.
+            Delete every imported contact and photo from ScuffedOS? People you’ve added your own
+            details to — notes, a relationship, a pin or a logged contact — are kept as manual
+            contacts; the rest are removed. This can’t be undone.
           </p>
           <div className="kit-inline" style={{ gap: 8, marginTop: 8 }}>
             <Button variant="primary" size="sm" disabled={busy === 'forget'} onClick={forget}>
