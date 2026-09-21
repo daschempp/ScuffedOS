@@ -26,6 +26,13 @@ const importedPerson = {
   created_at: '2026-07-13T00:00:00Z', updated_at: '2026-07-13T00:00:00Z',
 }
 
+const contactsCard = (over = {}) => ({
+  name: 'macos_contacts', label: 'Apple Contacts', auth_kind: 'local', configured: true,
+  status: 'connected', access: 'denied', enabled: true, sync_status: 'ready',
+  last_sync_at: null, last_error: null, count: 0, items: [],
+  ...over,
+})
+
 beforeEach(() => {
   vi.clearAllMocks()
   api.getConnectors.mockResolvedValue([])   // no contacts card by default
@@ -63,5 +70,28 @@ describe('CRMScreen', () => {
 
     // CRM-native field IS editable
     expect(screen.getByLabelText(/relationship/i)).toBeInTheDocument()
+  })
+
+  it('shows the Full Disk Access banner (not "unsupported") when access is denied but sync_status is unsupported', async () => {
+    // The backend never writes sync_status 'unsupported' (apply_contacts_snapshot
+    // only ever records ready|error|stale|access_denied|disabled), so projecting
+    // it here could only ever mislabel a denied Mac as an unsupported device.
+    api.listPeople.mockResolvedValue({ items: [importedPerson], next_cursor: null })
+    api.getConnectors.mockResolvedValue([contactsCard({ sync_status: 'unsupported' })])
+    render(<CRMScreen />)
+
+    expect(await screen.findByText(/full disk access is off/i)).toBeInTheDocument()
+    expect(screen.queryByText(/contacts import isn.t available on this device/i)).toBeNull()
+  })
+
+  it('still shows the unavailable banner when configured is false, regardless of sync_status', async () => {
+    api.listPeople.mockResolvedValue({ items: [importedPerson], next_cursor: null })
+    api.getConnectors.mockResolvedValue([
+      contactsCard({ configured: false, sync_status: 'unsupported' }),
+    ])
+    render(<CRMScreen />)
+
+    expect(await screen.findByText(/contacts import isn.t available on this device/i))
+      .toBeInTheDocument()
   })
 })

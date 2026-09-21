@@ -30,11 +30,13 @@ const TONE_TINT = {
 }
 
 // probe_access (Design Contract) returns only granted|denied|unknown; 'unsupported'
-// is a frontend projection for a non-macOS host or an UNSUPPORTED_SCHEMA snapshot,
-// kept distinct so we never mislabel it "denied".
+// is a frontend projection for a non-macOS host (configured === false), kept
+// distinct so we never mislabel it "denied". The backend never emits sync_status
+// 'unsupported' (apply_contacts_snapshot only ever writes ready|error|stale|
+// access_denied|disabled), so sync_status is not consulted here.
 function contactsCapability(c) {
   if (!c) return 'unknown'
-  if (c.configured === false || c.sync_status === 'unsupported') return 'unsupported'
+  if (c.configured === false) return 'unsupported'
   return c.access || 'unknown'
 }
 

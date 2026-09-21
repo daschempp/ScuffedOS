@@ -130,9 +130,12 @@ consumed anywhere in this slice.
   21600s / 6h). The background loop is **always started** — there is no env
   kill-switch (the packaged app has no way to set one) — and **every tick is
   consent-gated** by `contacts_sync_state.enabled`: with consent off a tick
-  reads nothing at all. The loop sleeps one full interval before its first
-  tick, because `POST /api/people/contacts/enable` already kicks the first
-  sync itself.
+  reads nothing at all. The loop sleeps before its first tick, because `POST
+  /api/people/contacts/enable` already kicks the first sync itself — but that
+  first sleep is capped at `contacts_sync.FIRST_TICK_DELAY_SECONDS` (60s), so a
+  desktop app that is only open for minutes a day still refreshes; every later
+  tick is a full interval apart. On a non-macOS backend host a tick returns
+  `unsupported` without reading anything or touching sync state.
 - `addressbook_root` — the local macOS AddressBook directory the reader and
   the Full-Disk-Access probe open (`ADDRESSBOOK_ROOT`, default
   `~/Library/Application Support/AddressBook`); mirrors the reader's

@@ -95,7 +95,9 @@ async def lifespan(_: FastAPI):
     if settings.finance_sync_enabled:
         finance_task = asyncio.create_task(finance_sync.run_loop())
     # No flag: the contacts loop always runs. Every tick is consent-gated by
-    # contacts_sync_state.enabled, and the first one is an interval away.
+    # contacts_sync_state.enabled, and the first one is at least
+    # contacts_sync.FIRST_TICK_DELAY_SECONDS away (or one interval, if shorter),
+    # so startup — and every TestClient lifespan — stays free of AddressBook reads.
     contacts_task = asyncio.create_task(contacts_sync.run_loop())
     yield
     for task in (reminder_task, fitness_task, email_task, moodle_task, finance_task, contacts_task):

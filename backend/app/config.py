@@ -125,7 +125,9 @@ class Settings(BaseSettings):
     contacts_default_region: str = "US"
     # Background contacts sync loop: ALWAYS started (there is no env kill-switch —
     # the packaged app could not set one); every tick is consent-gated by
-    # contacts_sync_state.enabled, and the first tick happens one interval in.
+    # contacts_sync_state.enabled. This is the gap BETWEEN passes; the first tick
+    # happens after contacts_sync.FIRST_TICK_DELAY_SECONDS (60s) or this interval,
+    # whichever is shorter, so a short session still gets a pass.
     contacts_sync_seconds: int = 21600           # 6h between background passes
     # Local macOS AddressBook root the reader/probe open (env ADDRESSBOOK_ROOT).
     # Mirrors providers.macos_contacts.DEFAULT_ROOT verbatim — config must NOT

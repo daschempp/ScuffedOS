@@ -30,6 +30,18 @@ def _snap(status, people=()):
                             stores_total=1, stores_read=1, store_ids=["local"])
 
 
+def _pretend_macos_host(monkeypatch):
+    """Declare a macOS backend host for tick().
+
+    The autouse suite seam installs platform='linux' for every test, and tick()
+    short-circuits to 'unsupported' there (there is no AddressBook on a non-macOS
+    host). A test that exercises a real sync pass must therefore say it is on a
+    Mac. Only the platform seam is stubbed, so whatever fake_snapshot is installed
+    — including the autouse default — stays in place.
+    """
+    monkeypatch.setattr(macos_contacts, "is_supported", lambda: True)
+
+
 def test_default_state_is_disabled_noop(monkeypatch):
     # Consent defaults OFF: tick must NOT touch the AddressBook at all.
     def must_not_read(*a, **k):
@@ -38,9 +50,37 @@ def test_default_state_is_disabled_noop(monkeypatch):
     monkeypatch.setattr(macos_contacts, "read_snapshot", must_not_read)
     result = contacts_sync.tick()
     assert result.status == "disabled"
+    # ...and consent-off wins over the platform gate below: this host is 'linux'
+    # (the suite seam) yet the result is 'disabled', not 'unsupported'.
+
+
+def test_tick_on_a_non_macos_host_is_unsupported_and_leaves_state_untouched(monkeypatch):
+    """A backend host that is not macOS has no AddressBook at all. Before this
+    gate, consent-on + a non-macOS host fell through to read_snapshot(), whose
+    _store_paths() returns [] -> MISSING_STORE -> the store wrote status='error'
+    on EVERY interval. 'unsupported' is a pure read: no snapshot, no state write."""
+    macos_contacts.configure(platform="linux",
+                             fake_snapshot=_snap(SnapshotStatus.ACCESS_DENIED))
+    store.set_contacts_enabled(True, region="US", now=NOW)
+    before = store.get_contacts_state()
+
+    def must_not_read(*a, **k):
+        raise AssertionError("read_snapshot must not run on a non-macOS host")
+
+    monkeypatch.setattr(macos_contacts, "read_snapshot", must_not_read)
+
+    result = contacts_sync.tick(NOW)
+
+    assert result.status == "unsupported"
+    assert result.access == "unknown"
+    after = store.get_contacts_state()
+    assert after["status"] == before["status"]          # no error written
+    assert after["last_error"] == before["last_error"]
+    assert after["last_sync_at"] == before["last_sync_at"]
 
 
 def test_complete_snapshot_delegates_to_apply(monkeypatch):
+    _pretend_macos_host(monkeypatch)
     monkeypatch.setattr(store, "get_contacts_state", lambda: {
         "enabled": True, "normalization_region": "US", "access": "granted",
         "last_sync_at": None,
@@ -66,6 +106,7 @@ def test_complete_snapshot_delegates_to_apply(monkeypatch):
 def test_unreachable_database_is_error_never_empty(monkeypatch):
     from sqlalchemy.exc import OperationalError
 
+    _pretend_macos_host(monkeypatch)
     monkeypatch.setattr(store, "get_contacts_state", lambda: {
         "enabled": True, "normalization_region": "US", "access": "granted",
         "last_sync_at": None,
@@ -92,6 +133,7 @@ def test_state_read_failure_is_error_and_never_crashes(monkeypatch):
 
 
 def test_access_denied_snapshot_flows_through_apply(monkeypatch):
+    _pretend_macos_host(monkeypatch)
     monkeypatch.setattr(store, "get_contacts_state", lambda: {
         "enabled": True, "normalization_region": "US", "access": "granted",
         "last_sync_at": None,
@@ -124,6 +166,7 @@ def test_4e_tick_survives_a_crashing_reader(monkeypatch):
     """read_snapshot() classifies rather than raising, but a reader BUG must not
     crash the loop either: tick substitutes an IO_ERROR snapshot, which the store
     maps to status 'error' and records as 'reader failed' — writing no rows."""
+    _pretend_macos_host(monkeypatch)
     store.set_contacts_enabled(True, region="US", now=NOW)
 
     def boom(*a, **k):
@@ -144,6 +187,7 @@ def test_4e_tick_survives_a_crashing_reader(monkeypatch):
 def test_4g_tick_reads_the_configured_addressbook_root(monkeypatch):
     from app.config import settings as app_settings
 
+    _pretend_macos_host(monkeypatch)
     monkeypatch.setattr(app_settings, "addressbook_root", "/tmp/addressbook-under-test")
     monkeypatch.setattr(store, "get_contacts_state", lambda: {
         "enabled": True, "normalization_region": "US", "access": "granted",
@@ -181,9 +225,11 @@ class _RecordingTick:
 
 
 def test_4i_run_loop_sleeps_before_the_first_tick(monkeypatch):
-    """The enable endpoint already kicks the first sync, so the loop must WAIT one
-    interval before ticking — that keeps every TestClient lifespan and app startup
-    free of AddressBook reads now that the loop is always started."""
+    """The enable endpoint already kicks the first sync, so the loop must WAIT
+    before ticking — that keeps every TestClient lifespan and app startup free of
+    AddressBook reads now that the loop is always started. The wait is capped at
+    FIRST_TICK_DELAY_SECONDS (see the test below); this one only pins that the
+    loop does not tick immediately."""
     from app.config import settings as app_settings
 
     fake = _RecordingTick()
@@ -200,6 +246,36 @@ def test_4i_run_loop_sleeps_before_the_first_tick(monkeypatch):
             await task                          # stops cleanly on cancel
 
     asyncio.run(drive())
+
+
+@pytest.mark.parametrize("interval, expected_first_delay", [(3600, 60), (0.01, 0.01)])
+def test_4i_run_loop_caps_the_first_delay_at_a_minute(monkeypatch, interval,
+                                                      expected_first_delay):
+    """The FIRST delay is min(FIRST_TICK_DELAY_SECONDS, contacts_sync_seconds), not
+    a full interval: a desktop app opened for minutes a day would never reach a 6h
+    first pass. A shorter configured interval still wins — the cap only shortens."""
+    from app.config import settings as app_settings
+
+    class _StopLoop(Exception):
+        """Ends run_loop from inside its first sleep, with no real waiting."""
+
+    delays: list[float] = []
+
+    async def fake_sleep(delay, *args, **kwargs):
+        delays.append(delay)
+        raise _StopLoop
+
+    contacts_sync.configure(_RecordingTick())
+    monkeypatch.setattr(app_settings, "contacts_sync_seconds", interval)
+    monkeypatch.setattr(contacts_sync.asyncio, "sleep", fake_sleep)
+
+    async def drive():
+        with pytest.raises(_StopLoop):
+            await contacts_sync.run_loop()
+
+    asyncio.run(drive())
+    assert delays == [expected_first_delay]     # the first sleep, before any tick
+    assert contacts_sync.FIRST_TICK_DELAY_SECONDS == 60
 
 
 def test_4i_run_loop_ticks_each_interval_and_survives_a_raising_tick(monkeypatch):
