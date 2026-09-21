@@ -79,7 +79,7 @@ def tick(now: datetime | None = None) -> SyncResult:
     region = state.get("normalization_region") or settings.contacts_default_region
     try:
         snapshot = macos_contacts.read_snapshot(
-            getattr(settings, "addressbook_root", macos_contacts.DEFAULT_ROOT),
+            settings.addressbook_root,
             region=region,
             photos_dir=settings.contacts_photos_root(),
             enabled=True,
@@ -106,16 +106,19 @@ async def trigger() -> SyncResult:
 
 
 async def run_loop() -> None:
-    """Background loop. Gated by settings.contacts_sync_enabled (started only when
-    true) AND, per tick, by contacts_sync_state.enabled (tick() no-ops when off)."""
+    """Background loop. ALWAYS started (there is no env kill-switch — the packaged
+    app has no way to set one); the ONLY gate is per-tick consent, since tick()
+    no-ops without ever touching the AddressBook while contacts_sync_state.enabled
+    is False. Sleeps a full interval BEFORE the first tick: the enable endpoint
+    already kicks the first sync, and this keeps app startup (and every TestClient
+    lifespan) free of AddressBook reads."""
     logger.info("contacts sync loop started (every %ss)", settings.contacts_sync_seconds)
     while True:
+        await asyncio.sleep(settings.contacts_sync_seconds)
         try:
-            if settings.contacts_sync_enabled:
-                result = await asyncio.to_thread(tick)
-                if result.status == "ok" and (result.imported or result.updated or result.removed):
-                    logger.info("contacts sync: +%d ~%d -%d",
-                                result.imported, result.updated, result.removed)
+            result = await asyncio.to_thread(tick)
+            if result.status == "ok" and (result.imported or result.updated or result.removed):
+                logger.info("contacts sync: +%d ~%d -%d",
+                            result.imported, result.updated, result.removed)
         except Exception:
             logger.exception("contacts sync tick failed")
-        await asyncio.sleep(settings.contacts_sync_seconds)

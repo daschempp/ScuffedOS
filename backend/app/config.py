@@ -123,10 +123,15 @@ class Settings(BaseSettings):
     # has not yet persisted a normalization_region. Task 5 upgrades the default
     # to _default_region() (system-locale sniff); "US" keeps Task 3 self-contained.
     contacts_default_region: str = "US"
-    # Background contacts sync loop: armed only when True (per-tick consent is a
-    # SEPARATE gate via contacts_sync_state.enabled). Defaults OFF (consent-gated).
-    contacts_sync_enabled: bool = False
+    # Background contacts sync loop: ALWAYS started (there is no env kill-switch —
+    # the packaged app could not set one); every tick is consent-gated by
+    # contacts_sync_state.enabled, and the first tick happens one interval in.
     contacts_sync_seconds: int = 21600           # 6h between background passes
+    # Local macOS AddressBook root the reader/probe open (env ADDRESSBOOK_ROOT).
+    # Mirrors providers.macos_contacts.DEFAULT_ROOT verbatim — config must NOT
+    # import the provider (that would drag sqlite/provider imports into every
+    # settings consumer), so a test asserts the two literals stay equal.
+    addressbook_root: str = "~/Library/Application Support/AddressBook"
     # Contact-photo store dir: relative -> resolved UNDER app_support_dir (never
     # ./data); absolute kept as-is. Resolved via contacts_photos_root().
     contacts_photos_dir: str = "contact_photos"

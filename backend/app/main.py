@@ -84,7 +84,6 @@ async def lifespan(_: FastAPI):
     email_task: asyncio.Task | None = None
     moodle_task: asyncio.Task | None = None
     finance_task: asyncio.Task | None = None
-    contacts_task: asyncio.Task | None = None
     if settings.reminders_enabled:
         reminder_task = asyncio.create_task(reminders.run_loop())
     if settings.fitness_sync_enabled:
@@ -95,8 +94,9 @@ async def lifespan(_: FastAPI):
         moodle_task = asyncio.create_task(moodle_sync.run_loop())
     if settings.finance_sync_enabled:
         finance_task = asyncio.create_task(finance_sync.run_loop())
-    if settings.contacts_sync_enabled:
-        contacts_task = asyncio.create_task(contacts_sync.run_loop())
+    # No flag: the contacts loop always runs. Every tick is consent-gated by
+    # contacts_sync_state.enabled, and the first one is an interval away.
+    contacts_task = asyncio.create_task(contacts_sync.run_loop())
     yield
     for task in (reminder_task, fitness_task, email_task, moodle_task, finance_task, contacts_task):
         if task is not None:

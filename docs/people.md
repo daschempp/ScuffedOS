@@ -1,6 +1,6 @@
 # People (Personal CRM) — Architecture
 
-> Status: **implemented (M10 s1)** · Last updated: 2026-07-13
+> Status: **implemented (M10 s1)** · Last updated: 2026-09-21
 >
 > Part of the [backend overview](backend-overview.md). A personal CRM: contacts
 > imported read-only from macOS Contacts, CRM-native relationship metadata
@@ -36,7 +36,10 @@ layer owns relationship fields (`relationship`, `relationship_strength`,
   `ready` / `access_denied` / `stale` / `error`); the persisted `access`
   (Full Disk Access read state, tracked **separately** from `status`:
   `granted` / `denied` / `unknown`); `normalization_region` (persisted at
-  `enable` time); `last_sync_at`; `last_error`. Distinct from both: `POST
+  `enable` time, and **never overwritten** by a later enable); `last_sync_at`
+  (the last **successful** pass — a partial apply does not advance it, and
+  leaves `access` at `granted` because the read itself succeeded);
+  `last_error`. Distinct from both: `POST
   /api/people/sync` returns an **ephemeral**, non-persisted `SyncResult.status`
   (`ok` / `empty` / `access_denied` / `unsupported` / `partial` / `error` /
   `disabled`) describing the outcome of that one sync attempt only.
@@ -123,10 +126,17 @@ consumed anywhere in this slice.
 
 ## Config
 
-- `contacts_sync_enabled` — persisted consent flag mirror (see
-  `contacts_sync_state.enabled`, the source of truth).
 - `contacts_sync_seconds` — interval between background sync passes (default
-  21600s / 6h).
+  21600s / 6h). The background loop is **always started** — there is no env
+  kill-switch (the packaged app has no way to set one) — and **every tick is
+  consent-gated** by `contacts_sync_state.enabled`: with consent off a tick
+  reads nothing at all. The loop sleeps one full interval before its first
+  tick, because `POST /api/people/contacts/enable` already kicks the first
+  sync itself.
+- `addressbook_root` — the local macOS AddressBook directory the reader and
+  the Full-Disk-Access probe open (`ADDRESSBOOK_ROOT`, default
+  `~/Library/Application Support/AddressBook`); mirrors the reader's
+  `DEFAULT_ROOT` and lets tests point at a fixture tree.
 - `contacts_default_region` — default region for phone-number
   canonicalization at `enable` time (default `US`).
 - `contacts_photos_dir` — relative photo-store directory name, resolved under

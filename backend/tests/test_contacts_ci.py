@@ -46,13 +46,18 @@ def _snap(status: SnapshotStatus, people: list[NormalizedPerson]) -> ContactsSna
     )
 
 
-def test_real_contacts_probing_disabled_by_default():
+def test_real_contacts_probing_disabled_by_default(monkeypatch):
     # The autouse conftest seam forces a non-darwin platform, so a probe never
     # opens the real AddressBook regardless of the host OS.
     assert macos_contacts.probe_access() == "denied"
-    # ...and the background sync loop is not armed under test.
-    from app.config import settings
-    assert settings.contacts_sync_enabled is False
+    # ...and with consent off (the default), a tick reads NOTHING — that consent
+    # gate, not an env flag, is what keeps the always-running background loop
+    # off a dev box's real AddressBook.
+    def _must_not_read(*a, **k):
+        raise AssertionError("read_snapshot must not run while consent is off")
+
+    monkeypatch.setattr(macos_contacts, "read_snapshot", _must_not_read)
+    assert contacts_sync.tick(NOW).status == "disabled"
 
 
 def test_default_autouse_seam_blocks_real_addressbook_read(monkeypatch):
