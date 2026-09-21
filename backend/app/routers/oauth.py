@@ -50,6 +50,22 @@ def _consume_state(state: str) -> tuple[str, str] | None:
     return _STATES.pop(state, None)
 
 
+def _consume_state_where(provider: str, predicate) -> str | None:
+    """Pop the first pending state issued for `provider` that satisfies
+    `predicate(state)`, returning that state — or None when none matches.
+
+    For a redirect that hands the state back verbatim, _consume_state is the
+    lookup. Moodle's launch flow does not: the browser comes back with only an
+    md5 over (wwwroot + passport), so the pending state has to be found by
+    testing candidates. Same one-time-use guarantee — a match is popped, and
+    the pop is what decides the winner, so two concurrent callbacks racing on
+    the same blob cannot both be handed the same state."""
+    for state, (name, _verifier) in list(_STATES.items()):
+        if name == provider and predicate(state) and _STATES.pop(state, None) is not None:
+            return state
+    return None
+
+
 def _status_dict() -> dict:
     accounts = store.list_provider_accounts()
     return {

@@ -176,7 +176,7 @@ packaged-app acceptance caveats:
 | --- | --- | --- |
 | Fitness | **WHOOP** API (OAuth) | Recovery/strain/sleep/vitals/workouts ingest (read-only). |
 | Email | **Gmail** API (OAuth) | Inbox sync + send; scopes `gmail.readonly` + `gmail.modify` + `gmail.send`. |
-| School | **Moodle** (WolfWare, pasted token) | Courses/deadlines/grades/announcements (read-only). |
+| School | **Moodle** (WolfWare, browser sign-in or pasted token) | Courses/deadlines/grades/announcements (read-only). |
 | Finance | **Plaid** | Accounts/transactions/holdings/balances (read-only). |
 | People | **Apple Contacts** (local, Full-Disk-Access) | One-way, read-only contact import; off by default. |
 
