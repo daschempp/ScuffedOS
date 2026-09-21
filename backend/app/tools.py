@@ -1085,7 +1085,7 @@ TOOLS: list[dict] = [
          "required": ["display_name"], "additionalProperties": False},
      "run": _create_person},
     {"name": "update_person",
-     "description": "Update what the user knows ABOUT someone: relationship, relationship_strength, notes, pinned (find the id with list_people). Names, phone numbers, emails and organization come from Apple Contacts on synced people and can't be changed here — tell the user to edit those in Apple Contacts.",
+     "description": "Update what the user knows ABOUT someone: relationship, relationship_strength, notes, pinned (find the id with list_people). Identity — name, phone numbers, emails, organization — can't be changed by this tool for anyone: imported contacts are edited in Apple Contacts, manual people in the People screen.",
      "input_schema": {"type": "object", "properties": {
          "person_id": {"type": "integer"},
          "relationship": {"type": "string", "description": "How the user knows them, e.g. Friend, Family, Landlord."},
