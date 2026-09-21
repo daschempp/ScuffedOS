@@ -381,6 +381,57 @@ def test_cli_fails_cleanly_when_the_interpreter_is_missing(tmp_path):
     assert "Traceback" not in result.stderr
 
 
+# ---- the interpreter subprocesses are isolated and write no bytecode ---------
+def test_import_smoke_ignores_a_module_supplied_only_by_pythonpath(tmp_path, monkeypatch):
+    """The smoke must audit the TREE, not the shell that runs the build.
+
+    A PYTHONPATH (or a user site-packages) carrying a stub of a missing
+    dependency made the smoke pass against a tree that does not have it — the
+    guard would then bless an .app that raises ImportError on the user's Mac. The
+    probe therefore runs isolated (`-I`), so an injected path is invisible.
+    """
+    stub_dir = tmp_path / "injected"
+    stub_dir.mkdir()
+    (stub_dir / "stub_only_via_pythonpath.py").write_text("VALUE = 1\n")
+    monkeypatch.setenv("PYTHONPATH", str(stub_dir))
+    monkeypatch.setattr(guard, "MODULES", ("stub_only_via_pythonpath",))
+
+    # sanity: the stub really is importable for a NON-isolated interpreter
+    reachable = subprocess.run(
+        [sys.executable, "-c", "import stub_only_via_pythonpath"],
+        capture_output=True, text=True,
+    )
+    assert reachable.returncode == 0, reachable.stderr
+
+    assert guard._failed_imports(sys.executable) == ["stub_only_via_pythonpath"]
+
+
+def test_interpreter_probes_run_isolated_and_write_no_bytecode(monkeypatch):
+    """Both interpreter subprocesses pass `-I` (ignore PYTHONPATH/PYTHONHOME/user
+    site) and `-B` (write no .pyc). Without `-B` every run re-creates the
+    `__pycache__` directories vendor-python.sh prunes — inside the .app, in the
+    [6b/7] check that runs immediately before signing."""
+    import types
+
+    calls: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(guard, "subprocess", types.SimpleNamespace(
+        run=fake_run, CalledProcessError=subprocess.CalledProcessError))
+
+    guard._purelib("/fake/py/bin/python3")
+    guard._failed_imports("/fake/py/bin/python3")
+
+    assert len(calls) == 2
+    for argv in calls:
+        assert argv[0] == "/fake/py/bin/python3"
+        assert argv[1:3] == ["-I", "-B"]
+        assert argv[3] == "-c"
+
+
 def test_smoke_modules_are_module_names_and_cover_phonenumbers():
     # The tuple holds MODULE names, not distribution names — the regression this
     # guard exists for is that `phonenumberslite` provides `phonenumbers`.

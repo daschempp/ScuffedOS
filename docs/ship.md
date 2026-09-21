@@ -47,13 +47,34 @@ stale tree ships:
   since that tree was built. Otherwise `rm -rf build/pgsql && bash
   scripts/vendor-postgres.sh`.
 
-`build-app.sh` enforces the Python half: step `[5b/7]` refuses to build against a
-`build/py` older than either input ("vendored Python is stale") and runs
-`scripts/check_vendored_deps.py` against it, and step `[6b/7]` runs the same
-check against the interpreter *inside the bundle* before signing, so an .app
-missing a dependency never reaches notarization. That guard was absent when the
-shipped app was rebuilt against a `build/py` vendored before `phonenumberslite`
-was added: contacts sync raised ImportError in the .app while every test passed.
+Both rules are enforced by `scripts/preflight-vendored-python.sh`, which refuses
+a missing `build/py.stamp`, a `build/py.stamp` older than `backend/requirements.txt`
+or `scripts/vendor-python.sh`, and — when `build/pgsql.stamp` exists — a
+`build/pgsql` older than `scripts/vendor-postgres.sh`. It then runs
+`scripts/check_vendored_deps.py` against `build/py/bin/python3`, because fresh
+timestamps do not prove a complete tree. It resolves every path from its own
+location, so the directory it is invoked from does not matter.
+
+Which path guards what:
+
+- **`cargo tauri build` run by hand** — `src-tauri/tauri.conf.json` sets
+  `build.beforeBuildCommand` to run the preflight, so the build refuses before
+  Tauri copies `build/py` into the bundle. This is the path the incident took:
+  the shipped app was rebuilt by hand against a `build/py` vendored before
+  `phonenumberslite` was added, and contacts sync raised ImportError in the .app
+  while every test passed. (`cargo tauri dev` has no such hook and is
+  unaffected — it bundles nothing.)
+- **`scripts/build-app.sh`** — step `[2/7]` always re-vendors `build/py` from
+  scratch, so the staleness rules cannot fire in a full run; step `[5b/7]` runs
+  the preflight anyway, as belt-and-braces and to keep one guard rather than two.
+- **before signing** — step `[6b/7]` runs `check_vendored_deps.py` against the
+  interpreter *inside the bundle*, which is coverage neither of the above gives:
+  an .app missing a dependency never reaches notarization.
+
+The checker runs the audited interpreter with `-I -B`, so a stub on the build
+machine's `PYTHONPATH` cannot fake a passing import smoke and the checks write no
+`__pycache__` into the tree they audit (`[6b/7]` runs inside the .app moments
+before it is signed).
 
 ## First launch (Gatekeeper / quarantine)
 

@@ -29,9 +29,11 @@ import subprocess
 import sys
 
 # Import smoke: modules whose absence breaks the app at runtime — the compiled
-# deps (a bad wheel imports as a broken .so rather than a missing distribution)
-# plus the ones a stale vendoring has historically dropped. These are MODULE
-# names, not distribution names.
+# deps (whose module name can differ from anything in requirements.txt) plus the
+# ones a stale vendoring has historically dropped. These are MODULE names, not
+# distribution names. The probe uses importlib.util.find_spec, which only LOCATES
+# a module: it never loads it, so a present-but-broken .so passes this check and
+# surfaces only at runtime. What it does catch is a module that is not there.
 MODULES = (
     "psycopg",
     "pydantic_core",
@@ -60,6 +62,16 @@ _EXTRA_MARKER_RE = re.compile(r"""extra\s*==\s*['"]([^'"]+)['"]""")
 _FOREIGN_PLATFORM_RE = re.compile(
     r"""sys_platform\s*==\s*['"](?!darwin)|platform_system\s*==\s*['"](?!Darwin)"""
 )
+
+# Flags for every subprocess run against the audited interpreter:
+#   -I  isolated: ignore PYTHONPATH/PYTHONHOME and the user site-packages, so the
+#       probes audit the TREE and not the shell that happens to run the build. A
+#       stub package on the build machine's PYTHONPATH would otherwise satisfy
+#       the import smoke for a dependency the tree does not have.
+#   -B  write no .pyc, so a check never re-creates the __pycache__ directories
+#       vendor-python.sh prunes — [6b/7] runs this INSIDE the .app, immediately
+#       before it is signed.
+_PROBE_FLAGS = ("-I", "-B")
 
 _PURELIB = "import sysconfig; print(sysconfig.get_paths()['purelib'])"
 
@@ -198,7 +210,10 @@ def missing_extra_distributions(
 def _purelib(python: str) -> str:
     """The site-packages directory `python` installs pure-Python packages into."""
     probe = subprocess.run(
-        [python, "-c", _PURELIB], capture_output=True, text=True, check=True
+        [python, *_PROBE_FLAGS, "-c", _PURELIB],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return probe.stdout.strip()
 
@@ -206,7 +221,7 @@ def _purelib(python: str) -> str:
 def _failed_imports(python: str) -> list[str]:
     """The MODULES that `python` cannot resolve."""
     smoke = subprocess.run(
-        [python, "-c", _SMOKE.format(modules=MODULES)],
+        [python, *_PROBE_FLAGS, "-c", _SMOKE.format(modules=MODULES)],
         capture_output=True,
         text=True,
         check=True,

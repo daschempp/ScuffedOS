@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.scuffedos.desktop",
   "build": {
-    "frontendDist": "../frontend/dist"
+    "frontendDist": "../frontend/dist",
+    "beforeBuildCommand": "ROOT=\"$(git rev-parse --show-toplevel)\" && bash \"$ROOT/scripts/preflight-vendored-python.sh\""
   },
   "app": {
     "windows": [

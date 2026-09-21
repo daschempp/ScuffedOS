@@ -11,15 +11,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build"
 TRIPLE="aarch64-apple-darwin"
 REQ="$ROOT/backend/requirements.txt"
-VENDOR_PY="$ROOT/scripts/vendor-python.sh"
-PY_STAMP="$BUILD/py.stamp"
 
 # Deps vendor-python.sh installs beyond requirements.txt (its EXTRA_DEPS).
 PY_EXTRA_ARGS=(--extra "uvicorn[standard]" --extra cryptography --extra keyring)
 
-# Assert an interpreter tree has every backend dependency installed. Run once
-# on build/py before bundling and once on the bundled copy afterwards, so a
-# vendored env missing a dep can neither be packaged nor signed.
+# Assert an interpreter tree has every backend dependency installed. Used at
+# [6b/7] on the interpreter INSIDE the bundle, so an .app missing a dep can
+# never be signed. The same check on build/py lives in
+# scripts/preflight-vendored-python.sh, which also owns the staleness rules and
+# which `cargo tauri build` runs by itself (tauri.conf.json beforeBuildCommand).
 check_vendored_py() {
   python3 "$ROOT/scripts/check_vendored_deps.py" \
     --requirements "$REQ" \
@@ -112,14 +112,11 @@ echo "==> [5/7] Build frontend"
 ( cd "$ROOT/frontend" && npm ci && npm run build )
 
 echo "==> [5b/7] Preflight: build/py is fresh and complete"
-# Tauri bundles build/py verbatim, so anything wrong with it ships. A build
-# that reuses a build/py older than requirements.txt (or than the vendoring
-# script) is the exact path that shipped an app without phonenumberslite.
-if [ ! -f "$PY_STAMP" ] || [ "$REQ" -nt "$PY_STAMP" ] || [ "$VENDOR_PY" -nt "$PY_STAMP" ]; then
-  echo "FAIL: vendored Python is stale — rm -rf build/py && bash scripts/vendor-python.sh"
-  exit 1
-fi
-check_vendored_py "$BUILD/py/bin/python3"
+# Belt-and-braces inside this script — [2/7] above always re-vendors, so the
+# staleness half cannot fire in a full run. The preflight exists as its own
+# script because the incident's path was a hand-run `cargo tauri build`, which
+# now runs it too via tauri.conf.json's beforeBuildCommand.
+bash "$ROOT/scripts/preflight-vendored-python.sh"
 
 echo "==> [6/7] cargo tauri build (.app only)"
 ( cd "$ROOT/src-tauri" && cargo tauri build --bundles app )
