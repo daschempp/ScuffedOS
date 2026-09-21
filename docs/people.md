@@ -165,7 +165,10 @@ never leaves the store), the `normalized` twin on each phone/email entry (the
 handle index stays local), `source_id`, `first_name`/`last_name`, and the
 `removed_from_source_at` / `created_at` / `updated_at` bookkeeping.
 `list_people` also returns `total_people` — an unfiltered count — so address-book
-size is disclosed even on a one-hit search.
+size is disclosed even on a one-hit search. Paging is cursor-based: the tool
+result carries `next_cursor` (the store's opaque keyset cursor, or `null` on
+the last page) instead of a bare `more` flag, so the model can hand it back as
+`cursor` on the next call to actually reach page two.
 
 Writes go through the same ownership rule as the API: `_PERSON_CRM_FIELDS`
 (`relationship`, `relationship_strength`, `notes`, `pinned`) plus

@@ -49,16 +49,38 @@ def test_list_people_search_hits_the_store_not_the_first_page():
 
     page, _ = _run("list_people", {"limit": 2})
     assert [p["display_name"] for p in page["people"]] == ["Aaron Ant", "Bea Bee"]
-    assert page["more"] is True
+    assert page["next_cursor"] is not None
     assert page["total_people"] == 5
 
     # Zelda is nowhere near the first page, so only a server-side q can find her.
     found, _ = _run("list_people", {"q": "zelda", "limit": 2})
     assert [p["display_name"] for p in found["people"]] == ["Zelda Zimmer"]
-    assert found["more"] is False
+    assert found["next_cursor"] is None
     # ...and search covers organization the same way the store's does.
     by_org, _ = _run("list_people", {"q": "acme", "limit": 2})
     assert [p["display_name"] for p in by_org["people"]] == ["Zelda Zimmer"]
+
+
+def test_list_people_pages_via_cursor():
+    """`more: true` alone was a dead end for the model — it needs an opaque
+    cursor it can hand back to actually reach page two."""
+    names = [f"Person {i:02d}" for i in range(5)]
+    for name in names:
+        store.create_person({"display_name": name})
+
+    first, _ = _run("list_people", {"limit": 2})
+    assert [p["display_name"] for p in first["people"]] == names[:2]
+    assert first["next_cursor"] is not None
+
+    second, _ = _run("list_people", {"limit": 2, "cursor": first["next_cursor"]})
+    assert [p["display_name"] for p in second["people"]] == names[2:4]
+    assert second["next_cursor"] is not None
+    # No overlap between consecutive pages.
+    assert not {p["id"] for p in first["people"]} & {p["id"] for p in second["people"]}
+
+    third, _ = _run("list_people", {"limit": 2, "cursor": second["next_cursor"]})
+    assert [p["display_name"] for p in third["people"]] == names[4:]
+    assert third["next_cursor"] is None
 
 
 def test_list_people_q_description_matches_the_handle_search_rules():
