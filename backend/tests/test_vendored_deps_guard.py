@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -21,8 +22,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "check_vendored_deps.py"
 REQUIREMENTS = REPO_ROOT / "backend" / "requirements.txt"
 
-# The extras vendor-python.sh installs beyond requirements.txt (its EXTRA_DEPS).
-EXTRA_DEPS = ("uvicorn[standard]", "cryptography", "keyring")
+# Verbatim from the installed psycopg 3.3.4 METADATA: the `binary` extra is
+# a separate distribution behind a compound marker, `test` must stay ignored,
+# and the last entry is an unconditional dependency with no marker at all.
+PSYCOPG_REQUIRES = (
+    'psycopg-binary==3.3.4; implementation_name != "pypy" and extra == "binary"',
+    'psycopg-pool; extra == "pool"',
+    'pytest>=6.2.5; extra == "test"',
+    "typing-extensions>=4.6",
+)
 
 
 def _load_guard():
@@ -105,12 +113,17 @@ def test_real_requirements_parse_and_include_phonenumberslite():
 
 
 # ---- distribution lookup -----------------------------------------------------
-def _fake_dist(site_packages: Path, name: str, version: str = "1.0") -> None:
+def _fake_dist(
+    site_packages: Path,
+    name: str,
+    version: str = "1.0",
+    requires: tuple[str, ...] = (),
+) -> None:
     info = site_packages / f"{name}-{version}.dist-info"
     info.mkdir(parents=True)
-    (info / "METADATA").write_text(
-        f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
-    )
+    lines = ["Metadata-Version: 2.1", f"Name: {name}", f"Version: {version}"]
+    lines += [f"Requires-Dist: {spec}" for spec in requires]
+    (info / "METADATA").write_text("\n".join(lines) + "\n")
 
 
 def test_missing_distributions_reports_only_the_absent_ones(tmp_path):
@@ -138,6 +151,94 @@ def test_missing_distributions_matches_on_distribution_not_module(tmp_path):
     ]
 
 
+def test_missing_distributions_ignores_a_dist_info_without_a_name(tmp_path):
+    # A .dist-info with no Name: (or no METADATA at all) must be skipped
+    # quietly: `metadata["Name"]` warns on 3.14 and will raise KeyError later,
+    # and a build-gating script cannot print on its success path.
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    _fake_dist(site_packages, "fastapi")
+    nameless = site_packages / "broken-1.0.dist-info"
+    nameless.mkdir()
+    (nameless / "METADATA").write_text("Metadata-Version: 2.1\nVersion: 1.0\n")
+    (site_packages / "nometa-1.0.dist-info").mkdir()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # the deprecation becomes a KeyError later
+        assert guard.missing_distributions(["fastapi"], str(site_packages)) == []
+
+
+# ---- extras are separate distributions ---------------------------------------
+def test_parse_requirements_keeps_the_extras_alongside_the_base_name():
+    assert guard.parse_requirements("psycopg[Binary, pool]>=3.2\nfastapi\n") == [
+        ("psycopg", ("binary", "pool")),
+        ("fastapi", ()),
+    ]
+
+
+def test_missing_extra_distributions_demands_what_an_extra_installs(tmp_path):
+    # psycopg[binary] installs psycopg AND psycopg-binary. Without the latter
+    # `import psycopg` still succeeds — the app only dies at the first connect,
+    # which is precisely the class of miss this guard exists to catch.
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    _fake_dist(site_packages, "psycopg", "3.3.4", requires=PSYCOPG_REQUIRES)
+    _fake_dist(site_packages, "psycopg-pool", "3.3.1")
+
+    missing = guard.missing_extra_distributions(
+        [("psycopg", ("binary", "pool"))], str(site_packages)
+    )
+
+    assert missing == ["psycopg-binary"]
+
+
+def test_missing_extra_distributions_ignores_extras_nobody_asked_for(tmp_path):
+    # psycopg declares pytest under its `test` extra and typing-extensions with
+    # no marker; neither may be demanded of the vendored tree.
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    _fake_dist(site_packages, "psycopg", "3.3.4", requires=PSYCOPG_REQUIRES)
+    _fake_dist(site_packages, "psycopg-pool", "3.3.1")
+
+    assert guard.missing_extra_distributions(
+        [("psycopg", ("pool",))], str(site_packages)
+    ) == []
+
+
+def test_missing_extra_distributions_respects_platform_gating(tmp_path):
+    # Verbatim shapes from uvicorn's `standard` extra. colorama is Windows-only
+    # and legitimately absent from a macOS-arm64 tree; uvloop is gated the other
+    # way and is a compiled dependency we must keep demanding.
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    _fake_dist(
+        site_packages,
+        "uvicorn",
+        "0.51.0",
+        requires=(
+            "colorama>=0.4; sys_platform == 'win32' and extra == 'standard'",
+            "uvloop>=0.15.1; sys_platform != 'win32' and extra == 'standard'",
+        ),
+    )
+
+    missing = guard.missing_extra_distributions(
+        [("uvicorn", ("standard",))], str(site_packages)
+    )
+
+    assert missing == ["uvloop"]
+
+
+def test_missing_extra_distributions_skips_a_requirement_whose_base_is_absent(tmp_path):
+    # The absent base is already reported by missing_distributions; resolving
+    # its extras is impossible and would only add noise.
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+
+    assert guard.missing_extra_distributions(
+        [("psycopg", ("binary",))], str(site_packages)
+    ) == []
+
+
 # ---- CLI ---------------------------------------------------------------------
 def test_cli_fails_and_names_every_missing_distribution(tmp_path):
     site_packages = tmp_path / "site-packages"
@@ -162,6 +263,44 @@ def test_cli_is_silent_and_succeeds_when_every_requirement_is_installed(tmp_path
     _fake_dist(site_packages, "phonenumberslite")
     req = tmp_path / "requirements.txt"
     req.write_text("fastapi>=0.115.0\nphonenumberslite\n")
+
+    result = _run_cli(
+        "--requirements", str(req), "--site-packages", str(site_packages)
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
+def test_cli_reports_an_extras_distribution_the_tree_lacks(tmp_path):
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    _fake_dist(site_packages, "psycopg", "3.3.4", requires=PSYCOPG_REQUIRES)
+    req = tmp_path / "requirements.txt"
+    req.write_text("psycopg[binary,pool]>=3.2\n")
+
+    result = _run_cli(
+        "--requirements", str(req), "--site-packages", str(site_packages)
+    )
+
+    assert result.returncode == 1
+    # The base distribution is present, so only the two extras are reported.
+    assert result.stderr.splitlines() == [
+        "missing extra distribution: psycopg-binary",
+        "missing extra distribution: psycopg-pool",
+    ]
+
+
+def test_cli_stays_silent_when_a_dist_info_has_no_name(tmp_path):
+    site_packages = tmp_path / "site-packages"
+    site_packages.mkdir()
+    _fake_dist(site_packages, "fastapi")
+    nameless = site_packages / "broken-1.0.dist-info"
+    nameless.mkdir()
+    (nameless / "METADATA").write_text("Metadata-Version: 2.1\nVersion: 1.0\n")
+    req = tmp_path / "requirements.txt"
+    req.write_text("fastapi\n")
 
     result = _run_cli(
         "--requirements", str(req), "--site-packages", str(site_packages)
@@ -202,11 +341,16 @@ def test_cli_rejects_a_requirements_file_it_cannot_verify(tmp_path):
 # ---- --python mode (what the build actually runs) ----------------------------
 def test_cli_python_mode_passes_against_an_interpreter_with_every_dependency():
     # Any environment that can run this suite installed requirements-dev.txt,
-    # which pulls in all of requirements.txt — so the real check must pass here.
+    # which is `-r requirements.txt` — so the real check must pass here, extras
+    # included: requirements.txt asks for psycopg[binary,pool], so this also
+    # proves the extras resolution works against a real installed tree.
+    # No --extra here: vendor-python.sh's uvicorn[standard] is a packaging-only
+    # dependency that dev/CI environments do not install.
     result = _run_cli(
         "--requirements", str(REQUIREMENTS),
         "--python", sys.executable,
-        *[arg for spec in EXTRA_DEPS for arg in ("--extra", spec)],
+        "--extra", "cryptography",
+        "--extra", "keyring",
     )
 
     assert result.returncode == 0, result.stderr

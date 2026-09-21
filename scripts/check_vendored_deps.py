@@ -10,8 +10,12 @@ after the last vendoring — this is exactly what happened to `phonenumberslite`
 This checker derives what must be present from requirements.txt itself, so it
 cannot go stale. It looks up *distributions*, not module imports, because the
 two names differ: the `phonenumberslite` distribution provides the
-`phonenumbers` module. An import smoke of the compiled/critical modules runs
-alongside it when an interpreter is given.
+`phonenumbers` module. Extras are resolved from the installed metadata and
+demanded too — `psycopg[binary]` installs `psycopg` *and* `psycopg-binary` as
+separate distributions, and without the latter `import psycopg` still succeeds
+while the first database connect fails. An import smoke of the
+compiled/critical modules runs alongside all of it when an interpreter is
+given.
 
 Python 3.11+, standard library only (it runs against the vendored interpreter,
 which has no dev tooling installed).
@@ -42,6 +46,21 @@ MODULES = (
 # PEP 508 project name: alphanumeric at both ends, `-`, `_` and `.` inside.
 _NAME_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
 
+# The `extra == "name"` clause of a Requires-Dist marker. Searched rather than
+# matched: real markers are compound, e.g. psycopg's
+# `implementation_name != "pypy" and extra == "binary"`.
+_EXTRA_MARKER_RE = re.compile(r"""extra\s*==\s*['"]([^'"]+)['"]""")
+
+# An extra's dependency pinned to a platform this build never targets (the app
+# is macOS arm64 only) is legitimately absent from the tree — uvicorn's
+# `colorama; sys_platform == 'win32' and extra == 'standard'` must not fail the
+# build. Deliberately narrow: an equality against a *named foreign* platform,
+# not a general marker evaluation, so uvloop's `sys_platform != 'win32'` is
+# still demanded.
+_FOREIGN_PLATFORM_RE = re.compile(
+    r"""sys_platform\s*==\s*['"](?!darwin)|platform_system\s*==\s*['"](?!Darwin)"""
+)
+
 _PURELIB = "import sysconfig; print(sysconfig.get_paths()['purelib'])"
 
 _SMOKE = """\
@@ -61,15 +80,29 @@ def _normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def parse_requirement_names(text: str) -> list[str]:
-    """Return the normalized project names in requirements-file `text`.
+def _parse_extras(rest: str) -> tuple[str, ...]:
+    """The normalized extras in the `[...]` clause following a project name."""
+    if not rest.startswith("["):
+        return ()
+    closing = rest.find("]")
+    if closing == -1:
+        raise ValueError(f"unterminated extras clause: {rest}")
+    return tuple(
+        _normalize(extra.strip())
+        for extra in rest[1:closing].split(",")
+        if extra.strip()
+    )
 
-    Extras, version specifiers, environment markers, comments and blank lines
-    are stripped. Option lines (`-r`, `-e`, `--...`) and URL requirements raise
+
+def parse_requirements(text: str) -> list[tuple[str, tuple[str, ...]]]:
+    """Return `(normalized name, normalized extras)` per requirement in `text`.
+
+    Version specifiers, environment markers, comments and blank lines are
+    stripped. Option lines (`-r`, `-e`, `--...`) and URL requirements raise
     ValueError instead of being skipped: this checker must never pass a file
     containing something it cannot verify.
     """
-    names: list[str] = []
+    requirements: list[tuple[str, tuple[str, ...]]] = []
     for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.split("#", 1)[0].strip()
         if not line:
@@ -81,18 +114,85 @@ def parse_requirement_names(text: str) -> list[str]:
         match = _NAME_RE.match(line)
         if not match:
             raise ValueError(f"line {lineno}: cannot parse a project name: {line}")
-        names.append(_normalize(match.group()))
-    return names
+        try:
+            extras = _parse_extras(line[match.end():])
+        except ValueError as exc:
+            raise ValueError(f"line {lineno}: {exc}") from None
+        requirements.append((_normalize(match.group()), extras))
+    return requirements
+
+
+def parse_requirement_names(text: str) -> list[str]:
+    """The normalized project names in requirements-file `text`, extras dropped."""
+    return [name for name, _ in parse_requirements(text)]
+
+
+def _installed(site_packages: str) -> dict[str, importlib.metadata.Distribution]:
+    """Installed distributions under `site_packages`, keyed by normalized name.
+
+    A .dist-info with no METADATA, or none carrying a `Name:`, is skipped:
+    `metadata["Name"]` would emit a DeprecationWarning on 3.14 — output on the
+    success path of a build-gating script — and raise KeyError on a later one.
+    """
+    index: dict[str, importlib.metadata.Distribution] = {}
+    for dist in importlib.metadata.distributions(path=[site_packages]):
+        name = dist.metadata.get("Name")
+        if name:
+            index.setdefault(_normalize(name), dist)
+    return index
 
 
 def missing_distributions(names: list[str], site_packages: str) -> list[str]:
     """The `names` with no installed distribution under `site_packages`."""
-    installed = {
-        _normalize(dist.metadata["Name"])
-        for dist in importlib.metadata.distributions(path=[site_packages])
-        if dist.metadata["Name"]
-    }
+    installed = _installed(site_packages)
     return [name for name in names if _normalize(name) not in installed]
+
+
+def _extra_dependencies(
+    dist: importlib.metadata.Distribution, extras: tuple[str, ...]
+) -> list[str]:
+    """The distributions `dist` declares for `extras` (one level, as installed).
+
+    Markers are otherwise ignored, except that a dependency gated to a foreign
+    platform is skipped — see `_FOREIGN_PLATFORM_RE`.
+    """
+    wanted = set(extras)
+    names: list[str] = []
+    for entry in dist.metadata.get_all("Requires-Dist", []):
+        requirement, _, marker = entry.partition(";")
+        found = _EXTRA_MARKER_RE.search(marker)
+        if found is None or _normalize(found.group(1)) not in wanted:
+            continue
+        if _FOREIGN_PLATFORM_RE.search(marker):
+            continue
+        match = _NAME_RE.match(requirement.strip())
+        if match:
+            names.append(_normalize(match.group()))
+    return names
+
+
+def missing_extra_distributions(
+    requirements: list[tuple[str, tuple[str, ...]]], site_packages: str
+) -> list[str]:
+    """The distributions a requirement's extras install that are absent.
+
+    Extras are separate distributions: `psycopg[binary,pool]` installs
+    `psycopg`, `psycopg-binary` and `psycopg-pool`. Checking only the base name
+    passes a tree that imports fine and then fails at the first connect, so the
+    extras are resolved from the *installed* base distribution's
+    `Requires-Dist` metadata — nothing to keep in sync by hand. A requirement
+    whose base is itself absent is skipped; `missing_distributions` reports it.
+    """
+    installed = _installed(site_packages)
+    missing: list[str] = []
+    for name, extras in requirements:
+        dist = installed.get(_normalize(name))
+        if dist is None or not extras:
+            continue
+        for required in _extra_dependencies(dist, extras):
+            if required not in installed and required not in missing:
+                missing.append(required)
+    return missing
 
 
 def _purelib(python: str) -> str:
@@ -131,11 +231,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         with open(args.requirements, encoding="utf-8") as handle:
-            names = parse_requirement_names(handle.read())
-        names += parse_requirement_names("\n".join(args.extra))
+            requirements = parse_requirements(handle.read())
+        requirements += parse_requirements("\n".join(args.extra))
     except (OSError, ValueError) as exc:
         print(f"cannot verify {args.requirements}: {exc}", file=sys.stderr)
         return 1
+    requirements = list(dict.fromkeys(requirements))
 
     problems: list[str] = []
     if args.python:
@@ -148,12 +249,17 @@ def main(argv: list[str] | None = None) -> int:
     else:
         site_packages = args.site_packages
 
+    names = list(dict.fromkeys(name for name, _ in requirements))
     problems += [
         f"missing distribution: {name}"
-        for name in missing_distributions(list(dict.fromkeys(names)), site_packages)
+        for name in missing_distributions(names, site_packages)
+    ]
+    problems += [
+        f"missing extra distribution: {name}"
+        for name in missing_extra_distributions(requirements, site_packages)
     ]
 
-    for problem in sorted(problems):
+    for problem in sorted(set(problems)):
         print(problem, file=sys.stderr)
     return 1 if problems else 0
 

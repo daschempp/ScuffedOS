@@ -121,7 +121,9 @@ echo "==> Vendored-dependency audit: every requirement is installed and imports"
 # EXTRA_DEPS above), so a dep added to requirements.txt can never be silently
 # absent from build/py — the failure mode that shipped an app without
 # phonenumberslite. Deriving the list beats the hard-coded module tuple this
-# replaced, which never learned about new deps.
+# replaced, which never learned about new deps. Extras count as the separate
+# distributions they are: psycopg[binary] without psycopg-binary still imports
+# and only dies at the first connect.
 EXTRA_ARGS=()
 for spec in "${EXTRA_DEPS[@]}"; do EXTRA_ARGS+=(--extra "$spec"); done
 python3 "$ROOT/scripts/check_vendored_deps.py" \
