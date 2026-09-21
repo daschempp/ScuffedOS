@@ -26,18 +26,20 @@ endpoint. `GET /api/oauth/connect/moodle` issues a one-time state and returns Mo
 mobile-app launch URL carrying it as the `passport`
 (`/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport=…&urlscheme=scuffedos`),
 which the app opens in the system browser. Once the user signs in, Moodle redirects to
-`scuffedos://token=<blob>`, where `blob = base64(md5(wwwroot + passport) ':::' wstoken
-[':::' privatetoken])`; the Tauri shell catches that deep link and replays the blob once to
+`<scheme>://token=<blob>`, where `<scheme>` is `scuffedos` when the site honors the
+requested `urlscheme` or `moodlemobile` (the official app's scheme, which Moodle's
+`tool_mobile/forcedurlscheme` setting forces by default) — the shell registers and
+accepts both — and `blob = base64(md5(wwwroot + passport) ':::' wstoken [':::'
+privatetoken])`; the Tauri shell catches that deep link and replays the blob once to
 `POST /auth/moodle/launch` as a JSON body, `{"token": "<blob>"}`. The blob carries the
 wstoken, so it travels in the body and never the URL — a query string would land in
-uvicorn's access log and from there in the sidecar's stderr drain. That endpoint finds the
-pending sign-in whose `md5(wwwroot + passport)` matches the blob's signature (the site root
-is compared trailing-slash-normalized, as Moodle signs with its own unslashed
-`$CFG->wwwroot`), burns it (single-use, success or
-failure), validates the token with `core_webservice_get_site_info`, persists it exactly as
-the paste flow does, and renders the same inline success/error page. A blob matching no
-pending sign-in persists nothing and leaves pending sign-ins untouched. Pasting a token
-remains as a manual fallback.
+uvicorn's access log and from there in the sidecar's stderr drain. That endpoint finds
+the pending sign-in whose `md5(wwwroot + passport)` matches the blob's signature (the
+site root is compared trailing-slash-normalized, as Moodle signs with its own unslashed
+`$CFG->wwwroot`), burns it (single-use, success or failure), validates the token with
+`core_webservice_get_site_info`, persists it exactly as the paste flow does, and renders
+the same inline success/error page. A blob matching no pending sign-in persists nothing
+and leaves pending sign-ins untouched. Pasting a token remains as a manual fallback.
 
 | Method | Path | Purpose |
 | --- | --- | --- |

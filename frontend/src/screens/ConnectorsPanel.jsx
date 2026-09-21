@@ -316,7 +316,7 @@ export function ConnectorsPanel({ onOpenKeys }) {
         <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Icon name="alert-triangle" />
           <p className="kit-muted">The secrets vault can’t be unlocked on this machine, so OAuth
-            connects are disabled until you re-enter keys in the API keys tab. Moodle (paste-token) still works.</p>
+            connects are disabled until you re-enter keys in the API keys tab. Moodle still works.</p>
         </Card>
       )}
 
