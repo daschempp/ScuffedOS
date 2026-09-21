@@ -1,13 +1,14 @@
 # Shipping ScuffedOS — the macOS desktop app (M8)
 
-ScuffedOS ships as a **double-clickable, unsigned `ScuffedOS.app`** for a single
-Apple-Silicon Mac. The app bundles its own Python runtime, PostgreSQL 17 +
-pgvector, and the FastAPI backend, so it runs the full dashboard offline with no
-terminal and no cloud database.
+ScuffedOS ships as a **double-clickable, Developer-ID-signed and notarized
+`ScuffedOS.app`** for a single Apple-Silicon Mac. The app bundles its own Python
+runtime, PostgreSQL 17 + pgvector, and the FastAPI backend, so it runs the full
+dashboard offline with no terminal and no cloud database.
 
-> **Scope:** personal daily-driver, macOS **arm64 only**, **unsigned** (no
-> Developer ID, no notarization, no DMG/auto-update, no Windows/Linux). See
-> `docs/superpowers/specs/2026-07-07-ship-tauri-design.md`.
+> **Scope:** personal daily-driver, macOS **arm64 only**, **signed + notarized**
+> with a Developer ID (no DMG, no auto-update, no Windows/Linux). A build with
+> `APPLE_SIGNING_IDENTITY` unset is unsigned and needs the quarantine bypass
+> below. See `docs/superpowers/specs/2026-07-07-ship-tauri-design.md`.
 
 ## Build (on an Apple-Silicon Mac)
 
@@ -15,27 +16,63 @@ Prerequisites: Xcode Command Line Tools, `uv` (0.11.19+), Rust (≥ 1.77.2) with
 `cargo-tauri` (`cargo install tauri-cli --version '^2'`), Node 18+.
 
 ```bash
+export APPLE_SIGNING_IDENTITY="Developer ID Application: Dylan Schempp (TEAMID)"
+export APPLE_NOTARY_KEYCHAIN_PROFILE=scuffedos-notary   # xcrun notarytool store-credentials
 bash scripts/build-app.sh
 ```
 
 This vendors PostgreSQL 17.10.0 + pgvector 0.8.4 (`scripts/vendor-postgres.sh`),
 true-installs CPython 3.14.5 + backend deps incl. `cryptography` and `keyring`
 (`scripts/vendor-python.sh`), builds the launcher stub, renders the icon, builds
-the frontend, and runs `cargo tauri build`. Output:
+the frontend, runs `cargo tauri build`, and — with both variables above exported
+— signs, notarizes and staples via `scripts/sign-notarize.sh`. With
+`APPLE_SIGNING_IDENTITY` unset that last stage is skipped and the output is
+unsigned. Output:
 
 ```
 src-tauri/target/release/bundle/macos/ScuffedOS.app   (~250–350 MB)
 ```
 
+## Incremental rebuild
+
+`scripts/build-app.sh` always re-vendors both runtimes, so running it end to end
+is the safe path. When re-running `cargo tauri build` by hand, the vendored trees
+may be reused **only** under these rules — Tauri bundles them verbatim, so a
+stale tree ships:
+
+- **`build/py`** — reuse only if `backend/requirements.txt` **and**
+  `scripts/vendor-python.sh` are both older than `build/py.stamp`. Otherwise
+  `rm -rf build/py && bash scripts/vendor-python.sh`.
+- **`build/pgsql`** — reuse only if `scripts/vendor-postgres.sh` is unchanged
+  since that tree was built. Otherwise `rm -rf build/pgsql && bash
+  scripts/vendor-postgres.sh`.
+
+`build-app.sh` enforces the Python half: step `[5b/7]` refuses to build against a
+`build/py` older than either input ("vendored Python is stale") and runs
+`scripts/check_vendored_deps.py` against it, and step `[6b/7]` runs the same
+check against the interpreter *inside the bundle* before signing, so an .app
+missing a dependency never reaches notarization. That guard was absent when the
+shipped app was rebuilt against a `build/py` vendored before `phonenumberslite`
+was added: contacts sync raised ImportError in the .app while every test passed.
+
 ## First launch (Gatekeeper / quarantine)
 
-The app is unsigned, so the first launch needs a one-time bypass:
+A signed + notarized build opens with a normal double-click — Gatekeeper
+validates the stapled ticket offline, with no prompt and no bypass. Verify with:
+
+```bash
+spctl -a -vvv /Applications/ScuffedOS.app   # → accepted / Notarized Developer ID
+```
+
+An **unsigned** build (`APPLE_SIGNING_IDENTITY` unset) still needs a one-time
+bypass on first launch:
 
 - **Right-click the app → Open → Open** (do this once; subsequent launches are
   a normal double-click), or
 - `xattr -dr com.apple.quarantine /path/to/ScuffedOS.app`
 
-Ad-hoc signing does **not** remove quarantine — this step is expected.
+Ad-hoc signing does **not** remove quarantine — only Developer ID + notarization
+does.
 
 ## Per-user data layout
 
