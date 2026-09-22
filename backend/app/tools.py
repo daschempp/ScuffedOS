@@ -670,9 +670,9 @@ def _entries(values) -> list[dict]:
 
 def _list_people(args: dict):
     q = args.get("q")
-    page = store.list_people(q=q, limit=args.get("limit") or 25)
+    page = store.list_people(q=q, limit=args.get("limit") or 25, cursor=args.get("cursor"))
     return {"people": [_compact_person(p) for p in page["items"]],
-            "more": page["next_cursor"] is not None,
+            "next_cursor": page["next_cursor"],
             "total_people": store.count_people()}, None
 
 
@@ -1059,10 +1059,11 @@ TOOLS: list[dict] = [
          "required": ["from_category", "to_category", "amount"], "additionalProperties": False},
      "run": _reallocate_budget},
     {"name": "list_people",
-     "description": "Browse or search the user's contacts (their CRM). Call this to find someone's id before get_person/update_person/log_contact, or when the user asks who they know. ALWAYS pass q when the user names someone or quotes their email or phone number — q searches the whole address book, while an unfiltered list only returns the first page of it.",
+     "description": "Browse or search the user's contacts (their CRM). Call this to find someone's id before get_person/update_person/log_contact, or when the user asks who they know. ALWAYS pass q when the user names someone or quotes their email or phone number — q searches the whole address book, while an unfiltered list only returns the first page of it. The result's next_cursor is non-null when there's another page — pass it back as cursor to keep paging; null means you've seen everyone who matches.",
      "input_schema": {"type": "object", "properties": {
          "q": {"type": "string", "description": "Substring of name, nickname, organization or job title. A q containing any letter ALSO matches an email from the START of the address ('ada' and 'ada@gmail.com' both find ada@gmail.com; 'gmail.com' finds nobody). A q of digits/punctuation only matches its digits anywhere in a phone number ('555-0134' finds +15555550134), and is ignored for phones below 3 digits."},
-         "limit": {"type": "integer", "description": "How many to return (default 25, max 200)."}},
+         "limit": {"type": "integer", "description": "How many to return (default 25, max 200)."},
+         "cursor": {"type": "string", "description": "Opaque next_cursor from a previous list_people call — pass it back to fetch the next page. Omit for the first page."}},
          "additionalProperties": False},
      "run": _list_people},
     {"name": "get_person",
@@ -1084,7 +1085,7 @@ TOOLS: list[dict] = [
          "required": ["display_name"], "additionalProperties": False},
      "run": _create_person},
     {"name": "update_person",
-     "description": "Update what the user knows ABOUT someone: relationship, relationship_strength, notes, pinned (find the id with list_people). Names, phone numbers, emails and organization come from Apple Contacts on synced people and can't be changed here — tell the user to edit those in Apple Contacts.",
+     "description": "Update what the user knows ABOUT someone: relationship, relationship_strength, notes, pinned (find the id with list_people). Identity — name, phone numbers, emails, organization — can't be changed by this tool for anyone: imported contacts are edited in Apple Contacts, manual people in the People screen.",
      "input_schema": {"type": "object", "properties": {
          "person_id": {"type": "integer"},
          "relationship": {"type": "string", "description": "How the user knows them, e.g. Friend, Family, Landlord."},

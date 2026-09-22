@@ -42,8 +42,11 @@ R8) — the model can't deep-link to a screen that doesn't exist.
   nutrition (`get_nutrition_today`, `search_food` (USDA), `log_meal`,
   `log_water`) — all real from M3 — plus fitness (WHOOP, M4), email
   (Gmail read + AI draft, M5), school (Moodle courses/deadlines/grades, M6,
-  read-only) and finance (Plaid reads + local budget writes, M7). Every tool
-  result is live data — no SAMPLE payloads. Write executors return the action card. Tool errors go
+  read-only), finance (Plaid reads + local budget writes, M7) and people
+  (`list_people`/`get_person`/`create_person`/`update_person`/`log_contact`,
+  M10 — CRM-field writes only, identity is read-only and there's no delete
+  tool; see [people.md](people.md)'s "Assistant access (no gate)" section).
+  Every tool result is live data — no SAMPLE payloads. Write executors return the action card. Tool errors go
   back to the model (`{"error": …}` in the tool result), not to the user.
   Naive datetimes from the model are interpreted as the user's local time.
 - **`app/assistant.py`** — the loop: build system prompt (persona + current
