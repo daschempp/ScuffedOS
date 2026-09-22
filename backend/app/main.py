@@ -161,6 +161,7 @@ app.include_router(nutrition.router)
 app.include_router(fitness.router)
 app.include_router(oauth.router)
 app.include_router(oauth.auth_router)
+app.include_router(moodle.launch_router)   # /auth/moodle/launch, outside /api
 app.include_router(email.router)
 app.include_router(moodle.router)
 app.include_router(finance.router)

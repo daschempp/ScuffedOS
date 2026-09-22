@@ -79,9 +79,61 @@ fn wait_for_health(port: u16) -> bool {
     false
 }
 
+/// Longest Moodle launch blob we accept. The real thing is a couple of hundred
+/// chars (`base64(md5(wwwroot+passport):::wstoken[:::privatetoken])`); this is a
+/// cheap sanity bound, not a protocol limit.
+const MAX_LAUNCH_BLOB_LEN: usize = 4096;
+
+/// Extract the token blob from a Moodle sign-in launch link
+/// (`scuffedos://token=<blob>` or `moodlemobile://token=<blob>`).
+///
+/// Matched on the raw string, not on a parsed host/path: these are non-special
+/// schemes, so `url` splits `moodlemobile://token=abc/def==` into host
+/// `token=abc` + path `/def==`. It round-trips verbatim, but `host_str()` alone
+/// would silently truncate the blob.
+///
+/// `None` unless the blob is non-empty, at most `MAX_LAUNCH_BLOB_LEN` chars and
+/// entirely within the standard base64 alphabet `[A-Za-z0-9+/=]` — which also
+/// makes the byte length above a char count.
+fn moodle_launch_blob(deep_link: &str) -> Option<&str> {
+    let blob = deep_link
+        .strip_prefix("scuffedos://token=")
+        .or_else(|| deep_link.strip_prefix("moodlemobile://token="))?;
+    let ok = !blob.is_empty()
+        && blob.len() <= MAX_LAUNCH_BLOB_LEN
+        && blob
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='));
+    ok.then_some(blob)
+}
+
+/// Map a Moodle sign-in launch deep link (`scuffedos://token=<blob>` or
+/// `moodlemobile://token=<blob>`) to the loopback call the backend serves:
+/// `POST http://127.0.0.1:{port}/auth/moodle/launch` with the JSON body
+/// `{"token":"<blob>"}`. Returns `(url, json_body)`, or `None` for anything else
+/// — which is also what rejects every non-launch `moodlemobile` link.
+///
+/// The blob rides in the body, never the query string. The sidecar runs uvicorn
+/// with its default access log, whose request line (path *and* query) goes to
+/// stdout, and `run()` below drains that stdout into our stderr as `[backend] …`
+/// — so a `?token=` forward would print the whole secret on every sign-in. A
+/// POST body is not access-logged.
+///
+/// The body is assembled with `serde_json` rather than string interpolation, and
+/// `moodle_launch_blob` has already constrained the blob to `[A-Za-z0-9+/=]`, so
+/// nothing in it can break out of the JSON string.
+fn moodle_launch_forward(deep_link: &str, port: u16) -> Option<(String, String)> {
+    let blob = moodle_launch_blob(deep_link)?;
+    let url = format!("http://127.0.0.1:{port}/auth/moodle/launch");
+    let body = serde_json::json!({ "token": blob }).to_string();
+    Some((url, body))
+}
+
 /// Map an incoming `scuffedos://oauth/callback?provider=<p>&<oauth query>` deep
 /// link to the loopback OAuth callback the backend serves:
-/// `http://127.0.0.1:{port}/auth/{p}/callback?<oauth query minus provider>`.
+/// `http://127.0.0.1:{port}/auth/{p}/callback?<oauth query minus provider>`,
+/// fetched with a GET. The Moodle launch hop is a separate shape and a separate
+/// transport; see `moodle_launch_forward`.
 ///
 /// Returns `None` for anything that is not our exact scheme/host/path, or whose
 /// `provider` is missing/empty/not lowercase-ascii (a path-injection guard — the
@@ -120,6 +172,42 @@ fn forward_target_url(deep_link: &str, port: u16) -> Option<String> {
         }
         Some(_) => target.to_string(),
     })
+}
+
+/// Everything after `<scheme>:`, with the optional `//` authority marker
+/// removed. Works for cannot-be-a-base URLs (`scuffedos:token=…`, no authority,
+/// so no host at all) as well as the usual `scheme://…` form.
+fn after_scheme(url_str: &str) -> &str {
+    let rest = url_str.split_once(':').map_or("", |(_, rest)| rest);
+    rest.strip_prefix("//").unwrap_or(rest)
+}
+
+/// Render a deep link for logging with its secrets removed. Default-DENY: a
+/// shape we do not positively recognize is collapsed, not printed.
+///
+/// A rejected link still carries live credentials, and where they sit depends on
+/// the shape — an OAuth callback hides its code and state in the query, while a
+/// Moodle launch link is secret from the first character after the scheme. So:
+///
+/// * anything whose post-scheme text begins with `token` — any case, `=` literal
+///   or percent-encoded, `//` present or not — becomes `<scheme>://token=<redacted>`;
+/// * the one recognized OAuth shape prints as `scuffedos://oauth/callback`;
+/// * everything else becomes `<scheme>://<redacted>`, because an unknown shape
+///   may carry a secret in its host or path just as easily as in its query.
+///
+/// Only the scheme is ever echoed verbatim, and `url` has already normalized
+/// that to a lowercase ASCII token.
+fn redact_deep_link(url: &reqwest::Url) -> String {
+    let scheme = url.scheme();
+    let rest = after_scheme(url.as_str());
+    if rest.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("token")) {
+        return format!("{scheme}://token=<redacted>");
+    }
+    // `scuffedos://oauth/callback` parses to host "oauth", path "/callback".
+    if scheme == "scuffedos" && url.host_str() == Some("oauth") && url.path() == "/callback" {
+        return "scuffedos://oauth/callback".to_string();
+    }
+    format!("{scheme}://<redacted>")
 }
 
 /// Resolve ~/Library/Application Support/ScuffedOS/logs/<name>.
@@ -259,53 +347,79 @@ pub fn run() {
             let child = Arc::new(Mutex::new(Some(child)));
             app.manage(Backend { child: child.clone(), port });
 
-            // Forward WHOOP's scuffedos:// OAuth callback into the loopback
-            // callback the backend serves. The deep-link plugin delivers these
-            // here, including the cold-start launch URL (macOS buffers it and
-            // replays it to on_open_url). WHOOP needs a public https redirect
-            // (its dashboard rejects loopback), so the public bounce page hops
-            // the code back in via this scheme. The backend's one-time CSRF
-            // state check rejects any forged deep link, so firing for any
-            // incoming scuffedos:// URL is safe.
+            // Forward recognized deep links into the loopback endpoints the
+            // backend serves. The plugin delivers these here, including the
+            // cold-start launch URL (macOS buffers it and replays it to
+            // on_open_url). Two hops ride this channel:
+            //
+            //   * WHOOP OAuth callback (`scuffedos://oauth/callback?…`). WHOOP
+            //     needs a public https redirect (its dashboard rejects
+            //     loopback), so the public bounce page hops the code back in
+            //     via this scheme.
+            //   * Moodle sign-in launch (`scuffedos://token=<blob>`, or
+            //     `moodlemobile://token=<blob>` when the site forces the
+            //     official app's scheme). Moodle redirects the browser here
+            //     with the signed token blob once the user has signed in. This
+            //     one POSTs the blob as a JSON body so it never reaches the
+            //     backend's access log — and from there our stderr drain.
+            //
+            // The backend's one-time state check rejects any forged deep link,
+            // so firing for any recognized incoming URL is safe.
             let dl_handle = app.handle().clone();
             app.deep_link().on_open_url(move |event| {
                 let port = dl_handle.state::<Backend>().port;
                 for url in event.urls() {
-                    match forward_target_url(url.as_str(), port) {
-                        Some(target) => {
+                    // A POST body for the Moodle launch, a plain GET for the
+                    // OAuth callback. The launch shape is checked first; the two
+                    // never both match.
+                    let forward = moodle_launch_forward(url.as_str(), port)
+                        .map(|(target, body)| (target, Some(body)))
+                        .or_else(|| forward_target_url(url.as_str(), port).map(|t| (t, None)));
+                    match forward {
+                        Some((target, body)) => {
                             let h = dl_handle.clone();
                             std::thread::spawn(move || {
                                 // Gate on backend health BEFORE the single
                                 // forward: on a cold start the sidecar may not be
                                 // listening yet. The state token is one-time, so
-                                // we must NOT retry the GET itself — wait for
+                                // we must NOT retry the request itself — wait
                                 // health, then fire exactly once. reqwest::blocking
                                 // must run off the UI/tokio thread (mirrors the
                                 // health-gate worker at lib.rs:239).
                                 if !wait_for_health(h.state::<Backend>().port) {
-                                    eprintln!("[deep-link] backend not healthy; dropping OAuth callback forward");
+                                    eprintln!("[deep-link] backend not healthy; dropping forward");
                                     return;
                                 }
                                 let client = reqwest::blocking::Client::builder()
                                     .timeout(Duration::from_secs(30))
                                     .build()
                                     .expect("reqwest client");
-                                match client.get(&target).send() {
-                                    Ok(resp) => eprintln!("[deep-link] forwarded OAuth callback ({})", resp.status()),
+                                let req = match body {
+                                    Some(json) => client
+                                        .post(&target)
+                                        .header("content-type", "application/json")
+                                        .body(json),
+                                    None => client.get(&target),
+                                };
+                                match req.send() {
+                                    Ok(resp) => eprintln!("[deep-link] forwarded deep link ({})", resp.status()),
                                     // without_url(): reqwest's Display appends the
                                     // request URL, which carries the live OAuth
-                                    // code and state. Keep them out of the log.
-                                    Err(e) => eprintln!("[deep-link] OAuth callback forward failed: {}", e.without_url()),
+                                    // code and state. Keep it out of the log. (The
+                                    // launch blob is in the body, which Display
+                                    // never touches.)
+                                    Err(e) => eprintln!("[deep-link] deep link forward failed: {}", e.without_url()),
                                 }
                             });
                         }
                         None => {
-                            // Log the shape of the rejected link, never its query:
-                            // a malformed callback still carries a live code/state.
-                            let mut redacted = url.clone();
-                            redacted.set_query(None);
-                            redacted.set_fragment(None);
-                            eprintln!("[deep-link] ignoring unrecognized deep link: {redacted}");
+                            // Log the shape of the rejected link, never its
+                            // secrets: a malformed callback still carries a live
+                            // code/state, and a launch link is all secret.
+                            eprintln!(
+                                "[deep-link] ignoring unrecognized deep link: {}",
+                                redact_deep_link(&url)
+                            );
                         }
                     }
                 }
@@ -390,7 +504,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::forward_target_url;
+    use super::{forward_target_url, moodle_launch_forward, redact_deep_link};
 
     #[test]
     fn maps_whoop_callback_to_loopback_preserving_code_and_state() {
@@ -453,5 +567,144 @@ mod tests {
             forward_target_url("scuffedos://oauth/callback?provider=..%2Fetc&code=x", 8000),
             None,
         );
+    }
+
+    // ---- Moodle launch hop: `<scheme>://token=<blob>` ----
+
+    /// The forward the launch hop must produce: a POST that keeps the blob out
+    /// of the request line (and so out of the backend's access log).
+    fn want_launch(port: u16) -> Option<(String, String)> {
+        Some((
+            format!("http://127.0.0.1:{port}/auth/moodle/launch"),
+            r#"{"token":"YWJj+/ZGVm=="}"#.to_string(),
+        ))
+    }
+
+    #[test]
+    fn maps_scuffedos_launch_token_to_a_post_with_a_json_body() {
+        assert_eq!(
+            moodle_launch_forward("scuffedos://token=YWJj+/ZGVm==", 54321),
+            want_launch(54321),
+        );
+    }
+
+    #[test]
+    fn maps_moodlemobile_launch_token_to_a_post_with_a_json_body() {
+        // Sites that force the official app's scheme redirect to moodlemobile://.
+        assert_eq!(
+            moodle_launch_forward("moodlemobile://token=YWJj+/ZGVm==", 8000),
+            want_launch(8000),
+        );
+    }
+
+    #[test]
+    fn launch_forward_never_puts_the_blob_in_the_url() {
+        // The whole point of the POST: a query string would land in uvicorn's
+        // access log, which the sidecar drain re-emits to our stderr.
+        let (url, body) = moodle_launch_forward("scuffedos://token=YWJj+/ZGVm==", 8000).unwrap();
+        assert!(!url.contains("YWJj"), "blob leaked into the URL: {url}");
+        assert!(!url.contains('?'), "launch forward must have no query: {url}");
+        assert!(body.contains("YWJj+/ZGVm=="), "body must carry the raw blob");
+    }
+
+    #[test]
+    fn maps_launch_link_after_a_url_parse_round_trip() {
+        // The handler hands us `url.as_str()` from the deep-link plugin's parsed
+        // `Url`, so pin that the blob survives parse + reserialize untouched —
+        // raw-string inputs alone would not catch the url crate re-encoding it.
+        let url = reqwest::Url::parse("moodlemobile://token=YWJj+/ZGVm==").unwrap();
+        assert_eq!(moodle_launch_forward(url.as_str(), 8000), want_launch(8000));
+    }
+
+    #[test]
+    fn rejects_empty_launch_blob() {
+        assert_eq!(moodle_launch_forward("scuffedos://token=", 8000), None);
+        assert_eq!(moodle_launch_forward("moodlemobile://token=", 8000), None);
+    }
+
+    #[test]
+    fn rejects_launch_blob_outside_base64_alphabet() {
+        assert_eq!(
+            moodle_launch_forward("scuffedos://token=YWJj?ZGVm", 8000),
+            None
+        );
+        assert_eq!(
+            moodle_launch_forward("scuffedos://token=YWJj ZGVm", 8000),
+            None
+        );
+        assert_eq!(
+            moodle_launch_forward("moodlemobile://token=YWJj%2FZGVm", 8000),
+            None
+        );
+        // The alphabet check is also what keeps the hand-built JSON body safe.
+        assert_eq!(
+            moodle_launch_forward(r#"scuffedos://token=a","x":"b"#, 8000),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_overlong_launch_blob() {
+        let at_limit = "A".repeat(4096);
+        assert!(moodle_launch_forward(&format!("scuffedos://token={at_limit}"), 8000).is_some());
+        let too_long = "A".repeat(4097);
+        assert_eq!(
+            moodle_launch_forward(&format!("scuffedos://token={too_long}"), 8000),
+            None,
+        );
+    }
+
+    #[test]
+    fn rejects_non_launch_moodlemobile_links() {
+        // The moodlemobile scheme is accepted for the `token=` launch only, and
+        // neither forward claims it — the handler consults both in turn.
+        let link = "moodlemobile://oauth/callback?provider=whoop&code=x";
+        assert_eq!(moodle_launch_forward(link, 8000), None);
+        assert_eq!(forward_target_url(link, 8000), None);
+    }
+
+    #[test]
+    fn the_two_forwards_do_not_overlap() {
+        // A launch link must never fall through into the OAuth GET branch.
+        assert_eq!(forward_target_url("scuffedos://token=YWJj+/ZGVm==", 8000), None);
+        assert_eq!(
+            moodle_launch_forward("scuffedos://oauth/callback?provider=whoop&code=x", 8000),
+            None,
+        );
+    }
+
+    // ---- Logging redaction ----
+
+    #[test]
+    fn redact_deep_link_hides_the_launch_blob() {
+        // Default-deny: detection must not hinge on the exact lowercase spelling
+        // of `token`, on the `=` being literal rather than percent-encoded, or on
+        // the `//` being present (a cannot-be-a-base URL has no host at all).
+        for raw in [
+            "moodlemobile://token=YWJj/ZGVm==",
+            "scuffedos://token=YWJj/ZGVm==",
+            "scuffedos://TOKEN=YWJj/ZGVm==",
+            "scuffedos://token%3DYWJj/ZGVm==",
+            "scuffedos:token=YWJj/ZGVm==",
+        ] {
+            let url = reqwest::Url::parse(raw).unwrap();
+            let want = format!("{}://token=<redacted>", url.scheme());
+            let got = redact_deep_link(&url);
+            assert_eq!(got, want, "for {raw}");
+            assert!(!got.contains("YWJj"), "blob leaked for {raw}: {got}");
+        }
+    }
+
+    #[test]
+    fn redact_deep_link_allows_only_the_oauth_callback_shape() {
+        // The one recognized shape keeps scheme+host+path; its query is dropped.
+        let url = reqwest::Url::parse("scuffedos://oauth/callback?provider=whoop&code=x").unwrap();
+        assert_eq!(redact_deep_link(&url), "scuffedos://oauth/callback");
+        // Anything else is redacted wholesale rather than printed: an unknown
+        // shape may carry a secret anywhere, including the host and path.
+        let url = reqwest::Url::parse("scuffedos://YWJj/ZGVm?x=1").unwrap();
+        assert_eq!(redact_deep_link(&url), "scuffedos://<redacted>");
+        let url = reqwest::Url::parse("https://evil.example/p?code=YWJj").unwrap();
+        assert_eq!(redact_deep_link(&url), "https://<redacted>");
     }
 }

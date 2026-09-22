@@ -190,6 +190,7 @@ export function ConnectorsPanel({ onOpenKeys }) {
   const [busy, setBusy] = React.useState('')          // name/item currently acting
   const [confirming, setConfirming] = React.useState('')  // name or item_id awaiting confirm
   const [moodleToken, setMoodleToken] = React.useState('')
+  const [showMoodlePaste, setShowMoodlePaste] = React.useState(false)
   const [pendingLink, setPendingLink] = React.useState(null)  // {link_token} | {reauthItemId} after a Plaid button
   const [linkMsg, setLinkMsg] = React.useState('')
 
@@ -317,7 +318,7 @@ export function ConnectorsPanel({ onOpenKeys }) {
         <Card variant="flat" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <Icon name="alert-triangle" />
           <p className="kit-muted">The secrets vault can’t be unlocked on this machine, so OAuth
-            connects are disabled until you re-enter keys in the API keys tab. Moodle (paste-token) still works.</p>
+            connects are disabled until you re-enter keys in the API keys tab. Moodle still works.</p>
         </Card>
       )}
 
@@ -371,20 +372,35 @@ export function ConnectorsPanel({ onOpenKeys }) {
                 {c.status !== 'connected' && (
                   <>
                     <p className="kit-muted" style={{ fontSize: 'var(--text-sm)' }}>
-                      {c.status === 'needs_reauth' ? 'Your key expired — paste a fresh one.' : 'Paste your Moodle security key (wstoken).'}
+                      {c.status === 'needs_reauth'
+                        ? 'Your Moodle key expired — sign in again to get a fresh one.'
+                        : 'Sign in with your school account in your browser; ScuffedOS receives your Moodle key automatically.'}
                     </p>
-                    <ol className="kit-muted" style={{ fontSize: 'var(--text-sm)', margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
-                      <li>Open Moodle → your profile → <b>Preferences</b> → <b>Security keys</b>.</li>
-                      <li>Copy the key for the <b>Moodle mobile web service</b>.</li>
-                      <li>Paste it below and Connect.</li>
-                    </ol>
                     <div className="kit-inline" style={{ gap: 8 }}>
-                      <input type="password" autoComplete="off" placeholder="Paste wstoken"
-                        value={moodleToken} onChange={(e) => setMoodleToken(e.target.value)}
-                        style={{ flex: 1, padding: '8px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--paper-300)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)' }} />
-                      <Button variant="primary" size="sm" disabled={busy === 'moodle' || !moodleToken.trim()}
-                        onClick={connectMoodle}>Connect</Button>
+                      <Button variant="primary" size="sm" disabled={busy === c.name}
+                        onClick={() => connectOAuth(c.name)}>Sign in to Moodle</Button>
                     </div>
+                    <div className="kit-inline" style={{ gap: 8 }}>
+                      <Button variant="ghost" size="sm" onClick={() => setShowMoodlePaste((v) => !v)}>
+                        Paste a key instead
+                      </Button>
+                    </div>
+                    {showMoodlePaste && (
+                      <>
+                        <ol className="kit-muted" style={{ fontSize: 'var(--text-sm)', margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
+                          <li>Open Moodle → your profile → <b>Preferences</b> → <b>Security keys</b>.</li>
+                          <li>Copy the key for the <b>Moodle mobile web service</b>.</li>
+                          <li>Paste it below and Connect.</li>
+                        </ol>
+                        <div className="kit-inline" style={{ gap: 8 }}>
+                          <input type="password" autoComplete="off" placeholder="Paste wstoken"
+                            value={moodleToken} onChange={(e) => setMoodleToken(e.target.value)}
+                            style={{ flex: 1, padding: '8px 12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--paper-300)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-sm)' }} />
+                          <Button variant="secondary" size="sm" disabled={busy === 'moodle' || !moodleToken.trim()}
+                            onClick={connectMoodle}>Connect</Button>
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
                 {c.status === 'connected' && confirming !== c.name && (
