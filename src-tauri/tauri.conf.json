@@ -34,7 +34,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["scuffedos"]
+        "schemes": ["scuffedos", "moodlemobile"]
       }
     }
   }

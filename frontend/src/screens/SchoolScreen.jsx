@@ -1,16 +1,16 @@
-/* Scuffed OS — School (live, synced with NC State WolfWare Moodle).
-   Owns its own state (App.jsx renders <SchoolScreen /> with no props),
-   mirroring EmailScreen's in-component fetch convention. /api/oauth/status
-   drives which connection state renders; the five /api/moodle/* reads feed a
-   course list + deadline timeline + grades + announcements + notifications.
-   Every read comes straight from the moodle_* tables server-side (never a
-   live Moodle call), so it works while a sync is mid-flight or Moodle is
-   down — it shows what's landed. Read-only this slice: no submit, forum
-   post, or message send. Moodle uses a static per-user wstoken (not an OAuth
-   code exchange), so connecting is a one-time token paste; the token lives
-   server-side only and never reaches the client again. Announcement/
-   notification text is rendered as plain text (no dangerouslySetInnerHTML) —
-   the backend already strips HTML. */
+/* Scuffed OS — School (live, synced with NC State WolfWare Moodle). Owns its
+   own state (App.jsx renders <SchoolScreen /> with no props), mirroring
+   EmailScreen's in-component fetch convention. /api/oauth/status drives which
+   connection state renders; the five /api/moodle/* reads feed a course list +
+   deadline timeline + grades + announcements + notifications. Every read comes
+   straight from the moodle_* tables server-side (never a live Moodle call), so
+   it works while a sync is mid-flight or Moodle is down — it shows what's
+   landed. Read-only this slice: no submit, forum post, or message send. Moodle
+   uses a static per-user wstoken (not an OAuth code exchange); it is obtained
+   once, by the browser sign-in in Settings › Connectors or by pasting a key,
+   and lives server-side only — it never reaches the client again.
+   Announcement/notification text is rendered as plain text (no
+   dangerouslySetInnerHTML) — the backend already strips HTML. */
 import React from 'react'
 import { Card, Badge, Button } from '../components/ui.jsx'
 import { Icon } from '../lib/Icon.jsx'

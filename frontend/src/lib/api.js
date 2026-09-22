@@ -220,10 +220,11 @@ export const api = {
 
   // School / Moodle (M6) — every read comes straight from the moodle_* tables
   // server-side (a list call never triggers a live Moodle request), so the
-  // screen works while a sync is mid-flight or Moodle is down. Only
-  // moodleConnect (validate the pasted wstoken) and moodleSync (kick a
-  // foreground tick) reach Moodle. The wstoken is pasted once and lives
-  // server-side only — it never crosses this boundary again.
+  // screen works while a sync is mid-flight or Moodle is down. Moodle is
+  // reached via the shared oauthConnect browser sign-in (the primary path) or
+  // moodleConnect (validate a pasted wstoken) as the fallback; moodleSync
+  // kicks a foreground tick. A pasted wstoken lives server-side only — it
+  // never crosses this boundary again.
   moodleCourses: () => request('/api/moodle/courses'),
   moodleDeadlines: (days) => request(`/api/moodle/deadlines${days ? `?days=${days}` : ''}`),
   moodleGrades: (courseId) => request(`/api/moodle/grades${courseId ? `?course_id=${courseId}` : ''}`),
