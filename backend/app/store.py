@@ -1934,7 +1934,8 @@ class Store:
         locked transaction: on a COMPLETE_* read upsert every person + rebuild
         handles, then reconcile soft-deletions IFF no per-record error occurred
         (else commit the good upserts and record status='partial', skipping
-        reconcile). A non-COMPLETE read writes NO rows — it only records state;
+        reconcile and leaving last_sync_at on the last SUCCESSFUL pass). A
+        non-COMPLETE read writes NO rows — it only records state;
         ACCESS_DENIED with existing rows marks the state 'stale' (never
         soft-deletes)."""
         from .config import settings
@@ -1976,10 +1977,14 @@ class Store:
                     seen.append(person.source_id)
                     imported += int(created)
                     updated += int(not created)
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, AttributeError, KeyError):
                     # DATA-TRANSFORM error only (bad record shape / handle): drop
                     # this record, commit the rest, and degrade to 'partial' with
-                    # reconcile skipped. Infrastructure/DB errors (SQLAlchemyError /
+                    # reconcile skipped. AttributeError/KeyError cover the same
+                    # class of malformed-record failure (a bare string where a
+                    # {value,label} dict belongs, a missing key) — the reader is
+                    # defensive but the record shapes come from a reverse-
+                    # engineered store. Infrastructure/DB errors (SQLAlchemyError /
                     # OperationalError) are deliberately NOT caught here -> they
                     # propagate and the whole transaction rolls back atomically.
                     per_record_error = True
@@ -2000,11 +2005,17 @@ class Store:
 
             if state.normalization_region is None:
                 state.normalization_region = region
+            # The READ itself succeeded (COMPLETE_*), so access is 'granted' even
+            # when records failed. last_sync_at means "last SUCCESSFUL sync", so a
+            # partial apply leaves it where it was — the UI must keep showing the
+            # last complete pass, not claim this dropped-records one.
             state.access = "granted"
-            state.last_sync_at = now
+            if not per_record_error:
+                state.last_sync_at = now
             result = SyncResult(status=result_status, access="granted",
                                 imported=imported, updated=updated, removed=removed,
-                                last_sync_at=now, last_error=state.last_error)
+                                last_sync_at=aware_utc(state.last_sync_at),
+                                last_error=state.last_error)
             # Surviving photo keys, for the post-commit orphan sweep below.
             keep_photo_keys = set(s.scalars(
                 select(Person.photo_key)
@@ -2238,7 +2249,15 @@ class Store:
         """Every person carrying this handle (shared handles -> multiple), most
         recently contacted first, INCLUDING soft-deleted people so historical
         messages still resolve. Canonicalizes with the PERSISTED
-        normalization_region (falls back to settings), never the live locale."""
+        normalization_region (falls back to settings), never the live locale.
+
+        Each person appears ONCE: person_handle is unique on (person_id, kind,
+        value), so one person can legally carry the same normalized value under
+        two rows and the join would duplicate them. De-duplication is done here
+        over Person.id rather than with SELECT DISTINCT — the row carries JSON
+        columns whose row-wide equality semantics differ by dialect (and the
+        match set is tiny), and a Python `seen` set preserves the ORDER BY
+        exactly."""
         from .config import settings
         from .identity import canon_handle
 
@@ -2261,7 +2280,14 @@ class Store:
                           Person.updated_at.desc(),
                           Person.id.desc())
             ).all()
-            return [_person_dict(r) for r in rows]
+            seen: set[int] = set()
+            out: list[dict] = []
+            for row in rows:
+                if row.id in seen:
+                    continue
+                seen.add(row.id)
+                out.append(_person_dict(row))
+            return out
 
     @_retry_integrity
     def get_contacts_state(self) -> dict:
@@ -2284,22 +2310,29 @@ class Store:
                     setattr(st, key, _to_utc(patch[key]) if patch[key] is not None else None)
             return _state_dict(st)
 
+    @_retry_integrity
     def set_contacts_enabled(self, enabled: bool, *, region: str | None = None,
                              now: datetime | None = None) -> dict:
-        """Thin consent toggle over set_contacts_state (used by the Task 10 tests
-        and any caller that just flips the flag). Enabling stamps enabled_at +
-        status 'ready' and, when given, persists normalization_region; disabling
-        sets status 'disabled'. Delegates locking/serialization to
-        set_contacts_state."""
-        patch: dict = {"enabled": bool(enabled)}
-        if enabled:
-            patch["status"] = "ready"
-            patch["enabled_at"] = now or utcnow()
-            if region:
-                patch["normalization_region"] = region
-        else:
-            patch["status"] = "disabled"
-        return self.set_contacts_state(patch)
+        """Consent toggle (used by the Task 10 tests and any caller that just flips
+        the flag). Enabling stamps enabled_at + status 'ready' and persists
+        normalization_region ONCE — an already-persisted region is NEVER
+        overwritten (the same rule enable_contacts follows: a later locale change
+        must not retroactively re-resolve existing handles). Disabling sets status
+        'disabled'. The read and the write share ONE locked transaction (rather
+        than patching through set_contacts_state, which cannot see the current
+        region), so the persist-once check can't race a concurrent enable."""
+        with self._locked_write() as s:
+            st = self._state_row(s)
+            st.enabled = bool(enabled)
+            if enabled:
+                st.status = "ready"
+                st.enabled_at = _to_utc(now or utcnow())
+                if region and not st.normalization_region:
+                    st.normalization_region = region
+            else:
+                st.status = "disabled"
+            s.flush()
+            return _state_dict(st)
 
     # ---- people photo key (M10) ----
     # NOTE: the paginated/searchable people list is `store.list_people(...)` from

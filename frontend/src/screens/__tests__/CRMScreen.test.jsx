@@ -38,6 +38,13 @@ const pageTwoPerson = {
 
 const searchBox = () => screen.getByLabelText('Search people')
 
+const contactsCard = (over = {}) => ({
+  name: 'macos_contacts', label: 'Apple Contacts', auth_kind: 'local', configured: true,
+  status: 'connected', access: 'denied', enabled: true, sync_status: 'ready',
+  last_sync_at: null, last_error: null, count: 0, items: [],
+  ...over,
+})
+
 beforeEach(() => {
   // reset, not clear: several tests queue mockResolvedValueOnce values, and a
   // leftover queued page would otherwise pre-empt the next test's implementation.
@@ -195,5 +202,28 @@ describe('CRMScreen', () => {
     expect(screen.getByRole('button', { name: /zeb zephyr/i })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /jane doe/i })).toBeNull()
     expect(screen.queryByRole('button', { name: /load more/i })).toBeNull()
+  })
+
+  it('shows the Full Disk Access banner (not "unsupported") when access is denied but sync_status is unsupported', async () => {
+    // The backend never writes sync_status 'unsupported' (apply_contacts_snapshot
+    // only ever records ready|error|stale|access_denied|disabled), so projecting
+    // it here could only ever mislabel a denied Mac as an unsupported device.
+    api.listPeople.mockResolvedValue({ items: [importedPerson], next_cursor: null })
+    api.getConnectors.mockResolvedValue([contactsCard({ sync_status: 'unsupported' })])
+    render(<CRMScreen />)
+
+    expect(await screen.findByText(/full disk access is off/i)).toBeInTheDocument()
+    expect(screen.queryByText(/contacts import isn.t available on this device/i)).toBeNull()
+  })
+
+  it('still shows the unavailable banner when configured is false, regardless of sync_status', async () => {
+    api.listPeople.mockResolvedValue({ items: [importedPerson], next_cursor: null })
+    api.getConnectors.mockResolvedValue([
+      contactsCard({ configured: false, sync_status: 'unsupported' }),
+    ])
+    render(<CRMScreen />)
+
+    expect(await screen.findByText(/contacts import isn.t available on this device/i))
+      .toBeInTheDocument()
   })
 })

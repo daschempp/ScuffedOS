@@ -1,12 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "ScuffedOS shell: spawn the backend sidecar only.",
+  "description": "ScuffedOS shell: spawn the backend sidecar only. Also allows opening the x-apple.systempreferences: deep link so the Contacts panel's Grant Full Disk Access button can open System Settings.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "opener:default",
     "deep-link:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "x-apple.systempreferences:*" }]
+    },
     {
       "identifier": "shell:allow-spawn",
       "allow": [

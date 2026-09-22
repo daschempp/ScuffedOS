@@ -4199,6 +4199,7 @@ def _contacts_access() -> str:
     return macos_contacts.probe_access(
         getattr(settings, "addressbook_root", macos_contacts.DEFAULT_ROOT)
     )
+```
 
 
 > **Note:** `store.count_people(source: str | None = None) -> int` (owner-scoped,
