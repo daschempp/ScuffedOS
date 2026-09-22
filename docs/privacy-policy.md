@@ -1,6 +1,6 @@
 # ScuffedOS Privacy Policy
 
-**Effective date:** September 17, 2026
+**Effective date:** September 22, 2026
 
 ScuffedOS is a personal assistant application operated by Dylan Schempp ("we," "us"). It combines tasks, calendar, habits, nutrition, notes, and connected health data behind a single AI assistant. ScuffedOS is a self-hosted application: in the current deployment, the operator and the sole user are the same person, and there are no third-party user accounts.
 
@@ -10,11 +10,11 @@ This policy describes what data ScuffedOS stores, how it is used, and which serv
 
 **Information you enter directly.** Tasks and reminders, calendar events, habit definitions and completions, nutrition logs (meals and water), notes and "second-brain" memories, file attachments, and your messages to the assistant (typed or dictated).
 
-**Derived information.** After each assistant conversation, the app may extract short factual "memories" (for example, a stated preference or goal) and store them, along with vector embeddings of that text, so the assistant can recall relevant context later. Conversation history with the assistant is also stored so conversations can resume.
+**Derived information.** Whenever memory is enabled — it is on by default, in every domain, with no separate opt-in — every assistant turn is passed through a memory pipeline: your message and the assistant's reply are embedded as vectors, a model extracts short factual "memories" from them (for example, a stated preference or goal), and those memories are stored with embeddings of their own so the assistant can recall relevant context later. Stored memories are searched and pasted into the assistant's context on every subsequent turn. The assistant's tool results — the domain rows it read to answer you — are not put through this pipeline; what you typed and what it wrote back are. Section 3 names the providers this reaches. Conversation history with the assistant is also stored so conversations can resume.
 
-**Connected service data (with your consent).** If you connect a WHOOP account, ScuffedOS retrieves your WHOOP data via the official WHOOP API after you authorize access through WHOOP's OAuth flow. Depending on the scopes you grant, this may include basic profile information, recovery scores, sleep data, strain and workout data, and related physiological measurements such as heart rate. If you connect a Gmail account, ScuffedOS reads your inbox messages via the Gmail API after you authorize access through Google's OAuth flow (read plus the modify/send scopes); it stores email metadata (sender, subject, snippet, and an AI-derived category and summary) but never the message bodies. Beyond reading, ScuffedOS acts on your mailbox only when you take an explicit action — sending, replying, forwarding, moving a message to Trash, starring, marking read/unread, or applying a label. If you connect a Moodle (school learning-management) account, ScuffedOS reads your course information read-only via the Moodle web-services API after you sign in to your school's Moodle site in your browser — using Moodle's own mobile-app sign-in handoff, which passes only web-service tokens back to the app (only the access token is stored, and ScuffedOS uses it read-only) — or after you paste in an access token you obtain from that site; ScuffedOS never sees your school username or password. It stores course names, assignment due dates, assignment and grade metadata, and short announcement and notification summaries — never assignment files or the full text of course content. If you connect a bank or Coinbase account, ScuffedOS retrieves your financial data read-only through **Plaid** after you authorize each institution through Plaid's own hosted link flow; it stores account names/masks/types, balances, transaction metadata, and investment holdings (including crypto) — plus recurring subscription and bill streams; liabilities (loan and credit-card statement balances, minimum payments, next-payment due dates, and APRs); and investment transaction history — never your bank/Coinbase credentials. If you enable **macOS Contacts**, ScuffedOS reads your local Contacts (AddressBook) database read-only after you grant the app Full Disk Access and acknowledge the storage disclosure; it stores contact names, phone numbers, email addresses, organization and job title, and contact photos. It never writes back to your Contacts and sends Contacts to no AI provider. See Section 4 for how WHOOP, Gmail, Moodle, Plaid, and macOS Contacts data are handled.
+**Connected service data (with your consent).** If you connect a WHOOP account, ScuffedOS retrieves your WHOOP data via the official WHOOP API after you authorize access through WHOOP's OAuth flow. Depending on the scopes you grant, this may include basic profile information, recovery scores, sleep data, strain and workout data, and related physiological measurements such as heart rate. If you connect a Gmail account, ScuffedOS reads your inbox messages via the Gmail API after you authorize access through Google's OAuth flow (read plus the modify/send scopes); it stores email metadata (sender, subject, snippet, and an AI-derived category and summary) but never the message bodies. Beyond reading, ScuffedOS acts on your mailbox only when you take an explicit action — sending, replying, forwarding, moving a message to Trash, starring, marking read/unread, or applying a label. If you connect a Moodle (school learning-management) account, ScuffedOS reads your course information read-only via the Moodle web-services API after you sign in to your school's Moodle site in your browser — using Moodle's own mobile-app sign-in handoff, which passes only web-service tokens back to the app (only the access token is stored, and ScuffedOS uses it read-only) — or after you paste in an access token you obtain from that site; ScuffedOS never sees your school username or password. It stores course names, assignment due dates, assignment and grade metadata, and short announcement and notification summaries — never assignment files or the full text of course content. If you connect a bank or Coinbase account, ScuffedOS retrieves your financial data read-only through **Plaid** after you authorize each institution through Plaid's own hosted link flow; it stores account names/masks/types, balances, transaction metadata, and investment holdings (including crypto) — plus recurring subscription and bill streams; liabilities (loan and credit-card statement balances, minimum payments, next-payment due dates, and APRs); and investment transaction history — never your bank/Coinbase credentials. If you enable **macOS Contacts**, ScuffedOS reads your local Contacts (AddressBook) database read-only after you grant the app Full Disk Access and acknowledge the storage disclosure; it stores contact names, phone numbers, email addresses, organization and job title, and contact photos. It never writes back to your Contacts, and sends Contacts to no third-party Contacts API; contact fields reach Anthropic when something you ask the assistant makes it look someone up or edit their CRM entry, and conversation text about a contact also passes through the memory pipeline described below. See Section 4 for how WHOOP, Gmail, Moodle, Plaid, and macOS Contacts data are handled.
 
-**What we do not collect.** ScuffedOS contains no advertising, no third-party analytics, and no tracking technologies. ScuffedOS does not collect data about anyone other than the user of the app **except** the contact details you choose to import from your own macOS Contacts (names, phone numbers, email addresses, organization/title, and photos) if you enable that connector — those describe people you already have in your own Contacts, and are used only to power your CRM and (in a future slice) messaging features. We do not sell, share, or otherwise use imported contact data for any purpose beyond your own use of the app.
+**What we do not collect.** ScuffedOS contains no advertising, no third-party analytics, and no tracking technologies. ScuffedOS does not collect data about anyone other than the user of the app **except** the contact details you choose to import from your own macOS Contacts (names, phone numbers, email addresses, organization/title, and photos) if you enable that connector — those describe people you already have in your own Contacts, and are used only to power your CRM, to answer your own assistant requests about those people, and (in a future slice) messaging features. We do not sell, share, or otherwise use imported contact data for any purpose beyond your own use of the app.
 
 ## 2. How we use information
 
@@ -33,13 +33,13 @@ ScuffedOS sends data to a small set of service providers, each for a specific fu
 
 | Provider | Purpose | What is shared |
 | --- | --- | --- |
-| **Anthropic** (Claude API) | Powers the AI assistant, memory extraction, email triage, and fitness-card phrasing | Your messages to the assistant, conversation history, and data the assistant reads from your stored domains (tasks, calendar, health data, etc.) in order to respond. When you connect Gmail, each email's sender, subject, preview snippet, and a bounded body excerpt (~2 KB) are sent to Anthropic to classify it and generate a short summary. After a scored recovery sync, deterministic facts for any fired fitness rules (for example, recovery percentage, sleep duration, strain, or a computed delta) are sent to Anthropic to phrase coaching cards; raw snapshot rows are not sent as a bulk dataset |
-| **OpenAI** | Text embeddings for memory search (embeddings only — the assistant itself never calls OpenAI) | The text of stored memories |
+| **Anthropic** (Claude API) | Powers the AI assistant, memory extraction, email triage, and fitness-card phrasing | Your messages to the assistant, conversation history, and data the assistant reads from your stored domains (tasks, calendar, health data, contacts, etc.) in order to respond. When you connect Gmail, each email's sender, subject, preview snippet, and a bounded body excerpt (~2 KB) are sent to Anthropic to classify it and generate a short summary. After a scored recovery sync, deterministic facts for any fired fitness rules (for example, recovery percentage, sleep duration, strain, or a computed delta) are sent to Anthropic to phrase coaching cards; raw snapshot rows are not sent as a bulk dataset. If you enable macOS Contacts, a request that makes the assistant use its People tools sends the matching contacts' names, nicknames, organization/job title, your relationship notes (truncated) and last-contacted dates, and — whenever it works with a single person, whether reading them, adding them, editing their CRM entry, or logging that you spoke — that person's phone numbers and email addresses; contact photos are never sent, only a has-photo flag |
+| **OpenAI** | Text embeddings for memory search and memory capture (embeddings only — the assistant itself never calls OpenAI) | The text of each message you send the assistant (embedded to search your memories before it replies), the text of the exchange that follows (your message plus the assistant's reply, embedded during memory capture), and the text of stored memories. This happens on every assistant turn, in every domain, whenever memory is enabled (it is by default — see Section 7): whatever you or the assistant happen to write about a stored domain — health, school, email, finance and contacts included — is embedded along with it; the assistant's tool results are not sent |
 | **PostgreSQL database** (the configured server) | Structured app data storage | Tasks, events, habits, nutrition logs, conversations, memories and embeddings, synced WHOOP/finance/Moodle data, email metadata, and imported contact fields (names, phone numbers, emails, organization/title). The database may run locally or on a remote/self-hosted server; when remote, this data is transmitted to that server over TLS. Contact photos are NOT stored here — they stay on the backend host |
 | **WHOOP** | Health data source (only if you connect it) | OAuth authorization plus the access token and request parameters needed for API sync; ScuffedOS receives the health data you authorize, while unrelated ScuffedOS domain data is not sent to WHOOP |
-| **Google (Gmail)** | Email source — read and user-initiated actions (only if you connect it) | OAuth authorization; ScuffedOS reads your Gmail messages via the Gmail API. Message content is retrieved to display it and (subject + a bounded body excerpt) is sent to Anthropic for triage or, when you ask for an AI draft, to generate one — see Section 4. Actions you take (send, reply, forward, trash, star, read/unread, labels) are carried out via the Gmail API using your own account; sent mail is delivered through Gmail and appears in your Sent folder |
-| **Moodle** (school LMS, e.g. NC State WolfWare) | School source, read-only (only if you connect it) | A `wstoken` you provide; ScuffedOS reads your courses, deadlines, grades, and announcements via the Moodle web-services API to display them. Course data may be included in assistant context sent to Anthropic only when you ask the assistant about school — see Section 4 |
-| **Plaid** | Bank and Coinbase data source, read-only (only if you connect an institution) | OAuth-style authorization through Plaid's hosted link flow; ScuffedOS sends the access token, cursor, and request parameters needed to retrieve the financial account data you authorize (balances, transactions, investment holdings, recurring subscription/bill streams, liabilities such as loan/credit-card terms, and investment transaction history). Local budget limits and unrelated ScuffedOS data are not sent to Plaid. Financial figures may be included in assistant context sent to Anthropic only when you ask the assistant about your money — see Section 4 |
+| **Google (Gmail)** | Email source — read and user-initiated actions (only if you connect it) | OAuth authorization; ScuffedOS reads your Gmail messages via the Gmail API. Message content is retrieved to display it and (subject + a bounded body excerpt) is sent to Anthropic for triage or, when you ask for an AI draft, to generate one — see Section 4. Actions you take (send, reply, forward, trash, star, read/unread, labels) are carried out via the Gmail API using your own account; sent mail is delivered through Gmail and appears in your Sent folder. When you ask the assistant about your email, what you and the assistant then write about it runs through the memory pipeline like any other turn (see the OpenAI row) |
+| **Moodle** (school LMS, e.g. NC State WolfWare) | School source, read-only (only if you connect it) | A `wstoken` — either passed back to the app by Moodle's own browser sign-in handoff after you authenticate on your school's pages, or pasted in by you (see Section 4); ScuffedOS reads your courses, deadlines, grades, and announcements via the Moodle web-services API to display them. Course data may be included in assistant context sent to Anthropic only when you ask the assistant about school, and what you and the assistant then write about it runs through the memory pipeline like any other turn (see the OpenAI row) — see Section 4 |
+| **Plaid** | Bank and Coinbase data source, read-only (only if you connect an institution) | OAuth-style authorization through Plaid's hosted link flow; ScuffedOS sends the access token, cursor, and request parameters needed to retrieve the financial account data you authorize (balances, transactions, investment holdings, recurring subscription/bill streams, liabilities such as loan/credit-card terms, and investment transaction history). Local budget limits and unrelated ScuffedOS data are not sent to Plaid. Financial figures may be included in assistant context sent to Anthropic only when you ask the assistant about your money, and what you and the assistant then write about them runs through the memory pipeline like any other turn (see the OpenAI row) — see Section 4 |
 | **USDA FoodData Central** | Food nutrition lookup | Only the food search text you enter (e.g., "chicken wrap") |
 | **Google Fonts** | Loads the app's display typefaces | Ordinary connection metadata such as IP address and user agent; no ScuffedOS content or stored domain data |
 
@@ -55,7 +55,8 @@ If you choose to connect WHOOP:
 
 - Data is retrieved only after you explicitly authorize ScuffedOS through WHOOP's OAuth consent flow, and only for the scopes you grant.
 - WHOOP data is used solely to display your health metrics within ScuffedOS and to let the assistant answer your questions about them. It is never sold, never shared with third parties for their own purposes, and never used for advertising.
-- WHOOP data may be included in assistant context sent to Anthropic when you ask the assistant about your health data. Separately, after a scored recovery sync, ScuffedOS may send the deterministic facts for fired fitness rules (for example, recovery percentage, sleep duration, strain, or a computed delta) to Anthropic to phrase short coaching cards. Raw snapshot rows are not sent as a bulk dataset, and local template wording is used if the model is unavailable. WHOOP data is not sent to any other provider.
+- WHOOP data may be included in assistant context sent to Anthropic when you ask the assistant about your health data. Separately, after a scored recovery sync, ScuffedOS may send the deterministic facts for fired fitness rules (for example, recovery percentage, sleep duration, strain, or a computed delta) to Anthropic to phrase short coaching cards. Raw snapshot rows are not sent as a bulk dataset, and local template wording is used if the model is unavailable.
+- **Memory, and the one other provider.** Your synced WHOOP rows go to no provider other than Anthropic — but a conversation about them does not end with that turn. Every assistant turn runs through the memory pipeline described in Sections 1 and 3: the text of your message is embedded by **OpenAI** before the reply, and your message together with the assistant's reply is embedded by OpenAI again afterwards and passed to Anthropic for fact extraction. The health rows the assistant read are not part of this — tool results never reach the memory pipeline — but a recovery score, a sleep duration, or anything else about your health that appears in what you typed or in what the assistant wrote back does reach OpenAI as text to embed, and can be extracted into a stored memory that is sent to Anthropic again on a later, unrelated turn.
 - You can revoke ScuffedOS's access at any time from your WHOOP account settings or by disconnecting WHOOP within ScuffedOS. Upon disconnection or request, stored WHOOP data and access tokens are deleted within 30 days.
 
 ScuffedOS is an independent application and is not affiliated with, endorsed by, or sponsored by WHOOP.
@@ -68,6 +69,7 @@ If you choose to connect Gmail:
 - Beyond reading, ScuffedOS **acts on your mailbox only on your explicit action.** You can send a new message, reply, or forward; move a message to Trash; star or unstar it; mark it read or unread; and apply or remove labels. Every one of these actions happens only when you click the corresponding control — nothing is automated.
 - **AI-drafted replies are generated only when you ask for one**, using the instructions and any notes you type into the compose box at that moment. A draft is never generated automatically (not on opening a message, not on sync). Draft text is **never stored server-side** — it exists only in your compose box until you send it or discard it.
 - **Outbound mail is sent through Gmail itself.** When you send, reply, or forward, ScuffedOS submits the message to the Gmail API using your own authorized account; Gmail delivers it, and it appears in your Gmail Sent folder exactly as if you had sent it from Gmail directly.
+- **Memory, and the one other provider.** Asking the assistant about your mail — "summarize this thread," "draft a reply saying I can't make Thursday" — is an assistant turn like any other, so it runs through the memory pipeline described in Sections 1 and 3: the text of your message is embedded by **OpenAI** before the reply, and your message together with the assistant's reply is embedded by OpenAI again afterwards and passed to Anthropic for fact extraction. The messages and drafts the assistant fetched are not part of this — tool results never reach the memory pipeline, which is why the promises above about bodies and drafts hold — but a sender, a subject, or anything else about your mail that appears in what you typed or in what the assistant wrote back in the chat does reach OpenAI as text to embed, and can be extracted into a stored memory that is sent to Anthropic again on a later, unrelated turn.
 - Gmail data is never sold, never shared with third parties for their own purposes, and never used for advertising.
 - You can disconnect Gmail within ScuffedOS at any time. On disconnect, stored email metadata and your Google OAuth tokens are deleted, and ScuffedOS revokes its Google access token. As with all deletions, this is honored within 30 days.
 
@@ -79,7 +81,8 @@ If you choose to connect Moodle:
 - ScuffedOS reads your course data to display it in the School section. It **stores** your course names, assignment due dates, assignment and grade metadata (title, status, points), and short announcement and notification summaries.
 - ScuffedOS does **not** request or store course files or the full body text of assignments or course pages. Links back to Moodle let you open source material there.
 - Assignment deadlines from Moodle are **projected into your Calendar and Tasks locally** so they appear alongside your own events and to-dos. These projected entries are read-only markers derived from Moodle data — they are not copied into your calendar or task tables and cannot be edited or deleted through ScuffedOS; changing them happens in Moodle.
-- Moodle data is **never sent to Anthropic except when you ask the assistant about your school** (for example, "what's due this week?"); it is never sent to any other provider, never sold, never shared with third parties for their own purposes, and never used for advertising.
+- Moodle data reaches **Anthropic** when you ask the assistant about your school (for example, "what's due this week?") — and, through the memory pipeline below, can reach it again later. Moodle data is never sold, never shared with third parties for their own purposes, and never used for advertising.
+- **Memory, and the one other provider.** Your synced Moodle rows go to no provider other than Anthropic — but a conversation about school does not end with that turn. Every assistant turn runs through the memory pipeline described in Sections 1 and 3: the text of your message is embedded by **OpenAI** before the reply, and your message together with the assistant's reply is embedded by OpenAI again afterwards and passed to Anthropic for fact extraction. The course rows the assistant read are not part of this — tool results never reach the memory pipeline — but a course name, a deadline, or a grade that appears in what you typed or in what the assistant wrote back does reach OpenAI as text to embed, and can be extracted into a stored memory that is sent to Anthropic again on a later, unrelated turn.
 - You can disconnect Moodle within ScuffedOS at any time. On disconnect, all stored Moodle data and your access token are deleted. As with all deletions, this is honored within 30 days.
 
 ScuffedOS is an independent application and is not affiliated with, endorsed by, or sponsored by Moodle, Moodle Pty Ltd, or North Carolina State University.
@@ -106,10 +109,23 @@ initiates a transfer, or writes anything back to your bank or Coinbase.**
   Coinbase; net worth is computed by ScuffedOS.
 - **What is not stored:** your bank/Coinbase credentials (Plaid holds those),
   and full statements/documents.
-- **Anthropic.** No financial data is sent to Anthropic **except** when you ask
-  the assistant about your money — then the relevant figures transit to generate
-  the reply and are not stored beyond it. The assistant can edit **local budget
-  limits** on your instruction; it can **never** move money.
+- **Anthropic, and the memory pipeline.** Your financial rows reach
+  **Anthropic** only when you ask the assistant about your money — then the
+  relevant figures transit to generate the reply — and, through the memory
+  pipeline, can reach it again later. Every assistant turn runs through the
+  memory pipeline described in Sections 1 and 3: the text of your message is
+  embedded by **OpenAI** before the reply, and your message together with the
+  assistant's reply is embedded by OpenAI again afterwards and passed to
+  Anthropic for fact extraction, and each
+  fact extracted is embedded once more and stored. The account, balance and
+  transaction rows the assistant read are not part of this — tool results never
+  reach the memory pipeline — but a figure that appears in what you typed or in
+  what the assistant wrote back does reach OpenAI as text to embed, can be
+  stored as a memory, and can then be sent to Anthropic again on a later,
+  unrelated turn. Apart from Anthropic, OpenAI, and the database itself, your
+  financial data goes to no provider other than Plaid and the institution you
+  linked. The assistant can edit **local budget limits** on your instruction; it
+  can **never** move money.
 - **Disconnect.** Disconnecting an institution removes it at Plaid and deletes
   all of its data from Scuffed OS within 30 days.
 
@@ -134,16 +150,59 @@ your real contacts instead of sample data.
   may be remote — see Section 5; transmitted over TLS when it is). Contact
   **photos are not put in the database** — they are stored as files on the
   backend host running the app.
-- **No AI, no third parties.** Contacts data is sent to **no AI provider**
-  and to **no third-party Contacts API**. It is used only to populate your own
-  CRM.
+- **No third-party Contacts API. The assistant, when you ask.** Contacts
+  data is sent to **no third-party Contacts API**, and nothing about your
+  contacts is uploaded in the background — syncing writes to your own database
+  and stops there. Contact data reaches **Anthropic** when a request you
+  make to the assistant causes it to use one of its People tools: searching
+  your contacts, opening one, adding someone by hand, editing what you know
+  about them, or logging that you were in touch. What can transit then: the
+  person's name, nickname, organization and job title; how you know them, your
+  strength rating, whether they're pinned, when you last spoke, and your notes
+  (capped at 200 characters in a search result); plus the row's ScuffedOS id
+  and whether the entry came from your macOS Contacts or was added by hand.
+  Whenever a tool touches **one specific person** — opening them, or any of
+  the three writes (adding someone, editing what you know about them, logging
+  that you were in touch) — the result also carries that person's **phone
+  numbers and email addresses** and up to 1,000 characters of your notes. So
+  "I called mom today" sends back mom's full numbers, addresses and notes, not
+  just her name; only a search across many people stays on the shorter row. A
+  search also reports how many contacts you have in total. Contact **photos
+  are never sent** — the assistant sees only a yes/no has-photo flag — and
+  neither are the normalized matching forms of phone
+  numbers and email addresses or the identifiers linking a row back to Apple
+  Contacts. **There is no separate opt-in for this**: enabling the Contacts
+  connector is the only choice you make, and from then on the assistant's
+  People tools are always available to your requests. What the assistant can
+  **change** is narrower than what it can read: your own CRM fields
+  (relationship, strength, notes, pinned, last-contacted) plus adding a person
+  by hand — it cannot edit the name, phone numbers, emails or organization on
+  an imported contact, and it has no tool to delete anyone.
+- **Memory, and the one other provider.** A conversation about a contact does
+  not end with that turn. Every assistant turn runs through the memory
+  pipeline described in Sections 1 and 3: before the reply, the text of your
+  message is embedded by **OpenAI** to search your stored memories; after it,
+  your message together with the assistant's reply is embedded by OpenAI again
+  and passed to **Anthropic** for fact extraction, and each fact extracted is
+  embedded once more and stored. Tool results are not part of this — the
+  contact rows the assistant read are never handed to the memory pipeline —
+  but anything about a contact that appears in what you typed or in what the
+  assistant wrote back does reach OpenAI as text to embed, and can be
+  extracted into a stored memory. And because stored memories are searched and
+  pasted into the assistant's context on **every** turn, a fact learned from a
+  People conversation can be sent to Anthropic again later, on an unrelated
+  turn. Apart from Anthropic, OpenAI, and the database itself, contacts go to
+  no other provider; they are never sold, never shared with third parties for
+  their own purposes, and never used for advertising.
 - **Revocation.** You can revoke access by turning off Full Disk Access for
   ScuffedOS in System Settings, and/or by **Disconnecting** the connector
   in-app (stops future syncing but keeps your existing CRM data — relationship
-  notes, pinned contacts, etc. — intact), or by using **Forget imported data**
+  notes, pinned contacts, etc. — intact, and the assistant's People tools can
+  still read what is kept), or by using **Forget imported data**
   (deletes the imported contacts, their handle index, and their photos; a
-  contact you had added relationship notes to is converted into a
-  manually-owned entry rather than losing that history).
+  contact carrying any CRM-native data — a relationship, a strength, notes, a
+  pin, or a last-contacted date — is converted into a manually-owned entry
+  that keeps their name and that history rather than losing it).
 - **Retention.** Imported contact data persists until you Forget it or delete
   an individual manually-owned entry. If access is revoked (Full Disk Access
   turned off) without disconnecting or forgetting, ScuffedOS shows the
@@ -166,7 +225,7 @@ Data is retained until it is deleted. ScuffedOS provides in-app deletion control
 
 ## 7. Your rights and choices
 
-You can access, correct, or delete data through the in-app controls and assistant tools available for each domain; the operator can also export or delete records directly from the database. You can decline to connect WHOOP, Gmail, Moodle, Plaid, or macOS Contacts (the rest of the app works without any of them), disable voice dictation by simply not using the microphone, and disconnect any integration at any time. For macOS Contacts specifically, use **Forget imported data** (Section 4) to delete previously-imported contact data, not just Disconnect.
+You can access, correct, or delete data through the in-app controls and assistant tools available for each domain; the operator can also export or delete records directly from the database. You can decline to connect WHOOP, Gmail, Moodle, Plaid, or macOS Contacts (the rest of the app works without any of them), disable voice dictation by simply not using the microphone, and disconnect any integration at any time. For macOS Contacts specifically, use **Forget imported data** (Section 4) to delete previously-imported contact data, not just Disconnect. The memory pipeline (Sections 1 and 3) is on by default and has no in-app opt-in, but because ScuffedOS is self-hosted you can turn it off entirely in the server's configuration (`MEMORY_ENABLED=false`); the assistant still answers, without recall or capture, and nothing is embedded by OpenAI.
 
 ## 8. Children
 

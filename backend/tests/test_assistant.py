@@ -1,7 +1,7 @@
 """The real assistant: tool loop, persistence, streaming, availability."""
 import json
 
-from app import llm
+from app import assistant, llm, tools
 from app.store import store
 
 from .fakes import FakeLLM, text_turn, tool_block, tool_turn
@@ -160,3 +160,15 @@ def test_empty_message_is_rejected(client):
     llm.configure(FakeLLM())
     res = client.post("/api/assistant/chat", json={"message": ""})
     assert res.status_code == 422
+
+
+def test_persona_presents_contacts_as_an_available_domain():
+    """The People/CRM domain has tools; the persona must say so or the model
+    never reaches for them (it silently drifted out of the list once)."""
+    persona = assistant._PERSONA.lower()
+    assert "contacts" in persona or "people" in persona
+    # Framed as the personal CRM over the address book, not a raw contact dump.
+    assert "crm" in persona or "address book" in persona
+    # And the tools the persona is promising actually exist.
+    names = {t["name"] for t in tools.DEFINITIONS}
+    assert {"list_people", "get_person", "log_contact"} <= names

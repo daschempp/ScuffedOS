@@ -28,8 +28,9 @@ Moodle, read-only) · People (personal CRM, with a local Apple Contacts
 Full-Disk-Access connector; signed-bundle acceptance remains outstanding) ·
 Second Brain (semantic memory) —
 plus a launchable **Assistant** chat panel (live Claude) with tools across the
-local domains and limited read/write access to integrations. People does not yet
-have assistant tools.
+local domains and limited read/write access to integrations — People included
+(search/read contacts, add one by hand, edit CRM fields, log when they last
+spoke; no delete tool).
 
 ### Desktop app (M8)
 ScuffedOS also ships as a **double-clickable Apple-Silicon macOS app** built with
@@ -112,8 +113,9 @@ Interactive API docs are available at `http://localhost:8000/docs` while the bac
 
 ## Notes & caveats
 - **The assistant is live Claude** (`backend/app/llm.py`) with a server-side tool loop
-  over the local domains and selected integration actions; People does not yet expose
-  assistant tools, and read-only surfaces remain read-only. Reminders fire real macOS
+  over the local domains and selected integration actions; the People tools read, add a
+  contact by hand and write CRM fields — identity on imported contacts is not editable
+  there, and read-only surfaces remain read-only. Reminders fire real macOS
   notifications via `osascript`.
   Every surface now has a live backend: Fitness syncs from **WHOOP** (M4) and feeds a
   derived **Insights** coaching tab, Email from **Gmail** with AI triage + draft replies

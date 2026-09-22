@@ -1,4 +1,6 @@
 """Mem0 integration: auto-capture mirroring, verbatim filing, sync, fallback."""
+import os
+
 from app import llm, memory_engine
 from app.store import store
 
@@ -104,3 +106,37 @@ def test_recalled_memories_enter_the_system_prompt(client):
     llm.configure(fake)
     client.post("/api/assistant/chat", json={"message": "when is mom's birthday?"})
     assert "Mom's birthday is March 14" in fake.calls[0]["system"]
+
+
+def test_lazy_init_opts_out_of_mem0_telemetry(monkeypatch):
+    """mem0's telemetry module reads MEM0_TELEMETRY at import time and defaults it
+    ON (PostHog). The privacy policy promises no third-party analytics, so the
+    opt-out has to be in place *before* the import — assert it on the real lazy
+    path, which `configure()` normally short-circuits."""
+    import sys
+    import types
+
+    monkeypatch.delenv("MEM0_TELEMETRY", raising=False)
+    monkeypatch.setattr(memory_engine.settings, "memory_enabled", True)
+    monkeypatch.setattr(memory_engine.settings, "anthropic_api_key", "sk-ant-test")
+    monkeypatch.setattr(memory_engine.settings, "openai_api_key", "sk-oai-test")
+    monkeypatch.setattr(memory_engine.settings, "database_url", "postgresql+psycopg://x/y")
+
+    seen: dict[str, str | None] = {}
+
+    class _FakeMemory:
+        @staticmethod
+        def from_config(_cfg):
+            # Sampled at the moment mem0 would be imported for real.
+            seen["telemetry"] = os.environ.get("MEM0_TELEMETRY")
+            return FakeMem0(add_results=[[]])
+
+    monkeypatch.setitem(sys.modules, "mem0",
+                        types.SimpleNamespace(Memory=_FakeMemory))
+
+    memory_engine.configure("unset")          # take the real lazy path
+    try:
+        assert memory_engine._get() is not None
+        assert seen["telemetry"] == "False"
+    finally:
+        memory_engine.configure(None)
