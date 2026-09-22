@@ -334,6 +334,67 @@ def test_fetch_grades_empty_when_no_course_ids():
     assert http.posts == []          # no course ids -> no WS calls at all
 
 
+def _grade_payload(item_id: int, name: str) -> dict:
+    return {"usergrades": [{"gradeitems": [
+        {"id": item_id, "itemname": name, "itemtype": "mod", "graderaw": 1.0,
+         "gradeformatted": "1", "grademin": 0.0, "grademax": 1.0,
+         "gradedategraded": 0}]}]}
+
+
+# Live finding 2026-09-22: WolfWare's grade report for ONE course (ECE 200 sec
+# 002) fails Moodle's own return-value validation ("invalidresponse: Invalid
+# response value detected"). One broken course must not abort the whole school
+# sync — skip it and keep the rest.
+def test_fetch_grades_skips_a_course_whose_report_moodle_cannot_serialize(caplog):
+    http = FakeMoodleHTTP(responses={
+        "gradereport_user_get_grade_items": seq(
+            _grade_payload(1, "A"),
+            {"exception": "webservice_exception", "errorcode": "invalidresponse",
+             "message": "Invalid response value detected"},
+            _grade_payload(3, "C"),
+        ),
+    })
+    with caplog.at_level("WARNING", logger="scuffed_os.moodle"):
+        grades = _provider(http).fetch_grades(userid=7, course_ids=["72", "12185", "69"])
+
+    assert [(g.course_id, g.source_id) for g in grades] == [("72", "1"), ("69", "3")]
+    assert len(http.posts) == 3                       # the bad course did not stop the loop
+    assert "12185" in caplog.text and "invalidresponse" in caplog.text
+
+
+def test_fetch_grades_still_raises_on_an_auth_error():
+    # An expired/invalid token is not a per-course glitch: it must propagate so
+    # moodle_sync flips the account to needs_reauth.
+    from app.providers.moodle import MoodleAuthError
+
+    http = FakeMoodleHTTP(exceptions={
+        "gradereport_user_get_grade_items": {
+            "exception": "moodle_exception", "errorcode": "invalidtoken",
+            "message": "Invalid token - token not found"},
+    })
+    with pytest.raises(MoodleAuthError):
+        _provider(http).fetch_grades(userid=7, course_ids=["72"])
+
+
+def test_fetch_announcements_skips_a_forum_whose_discussions_call_fails():
+    http = FakeMoodleHTTP(responses={
+        "mod_forum_get_forums_by_courses": [
+            {"id": 11, "type": "news", "course": 72},
+            {"id": 12, "type": "news", "course": 69},
+        ],
+        "mod_forum_get_forum_discussions": seq(
+            {"exception": "webservice_exception", "errorcode": "invalidresponse",
+             "message": "Invalid response value detected"},
+            {"discussions": [{"discussion": 501, "subject": "Welcome",
+                              "message": "<p>Hi</p>", "userfullname": "Prof",
+                              "created": 1725580800}]},
+        ),
+    })
+    anns = _provider(http).fetch_announcements(userid=7, course_ids=["72", "69"])
+
+    assert [(a.course_id, a.source_id) for a in anns] == [("69", "501")]
+
+
 # ---- fetch_announcements [confirm-against-live: mod_forum_get_forums_by_courses
 #      (courseids[]) -> [{id,type,course,...}] keep type=='news'; then
 #      mod_forum_get_forum_discussions(forumid) ->

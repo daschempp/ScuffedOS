@@ -260,10 +260,19 @@ class MoodleProvider:
         row. gradedategraded 0 -> None via _epoch."""
         out: list[NormalizedGrade] = []
         for course_id in course_ids:
-            result = self._call(
-                "gradereport_user_get_grade_items",
-                courseid=course_id, userid=userid,
-            ) or {}
+            try:
+                result = self._call(
+                    "gradereport_user_get_grade_items",
+                    courseid=course_id, userid=userid,
+                ) or {}
+            except MoodleError as exc:
+                # Live finding 2026-09-22: Moodle can fail to serialize ONE
+                # course's grade report ("invalidresponse"). That is the
+                # course's problem, not the token's — skip it so the other
+                # courses (and the rest of the snapshot) still sync. Auth
+                # errors are MoodleAuthError (not a MoodleError) and propagate.
+                log.warning("Moodle grades skipped for course %s: %s", course_id, exc)
+                continue
             for usergrade in result.get("usergrades") or []:
                 for item in usergrade.get("gradeitems") or []:
                     out.append(NormalizedGrade(
@@ -301,9 +310,16 @@ class MoodleProvider:
                 continue
             forum_id = str(forum.get("id") or "")
             course_id = str(forum.get("course") or "")
-            result = self._call(
-                "mod_forum_get_forum_discussions", forumid=forum_id
-            ) or {}
+            try:
+                result = self._call(
+                    "mod_forum_get_forum_discussions", forumid=forum_id
+                ) or {}
+            except MoodleError as exc:
+                # Same per-course resilience as fetch_grades: one broken forum
+                # must not abort the whole school sync.
+                log.warning("Moodle announcements skipped for forum %s (course %s): %s",
+                            forum_id, course_id, exc)
+                continue
             for disc in result.get("discussions") or []:
                 out.append(NormalizedAnnouncement(
                     source="moodle",
