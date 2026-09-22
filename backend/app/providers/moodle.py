@@ -53,6 +53,8 @@ log = logging.getLogger("scuffed_os.moodle")
 MOODLE_REST_PATH = "/webservice/rest/server.php"
 MOODLE_LAUNCH_PATH = "/admin/tool/mobile/launch.php"
 MOODLE_SERVICE = "moodle_mobile_app"
+# Width of moodle_grades.grade_formatted (models.MoodleGrade, String(64)).
+_GRADE_FORMATTED_MAX = 64
 # The custom URL scheme Moodle redirects the browser back to after sign-in
 # (<scheme>://token=<blob>). Must match the deep-link scheme the desktop app
 # registers; Moodle also accepts its own 'moodlemobile'.
@@ -281,7 +283,12 @@ class MoodleProvider:
                         course_id=course_id,
                         item_name=item.get("itemname") or "",
                         item_type=item.get("itemtype") or "",
-                        grade_formatted=item.get("gradeformatted") or "-",
+                        # Live finding 2026-09-22: gradeformatted can be a
+                        # pass/fail icon as HTML plus the value; strip markup
+                        # at the boundary and clamp to the column width.
+                        grade_formatted=(
+                            _strip_html(item.get("gradeformatted") or "") or "-"
+                        )[:_GRADE_FORMATTED_MAX],
                         grade_raw=item.get("graderaw"),
                         grade_min=item.get("grademin"),
                         grade_max=item.get("grademax"),

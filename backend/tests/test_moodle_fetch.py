@@ -362,6 +362,30 @@ def test_fetch_grades_skips_a_course_whose_report_moodle_cannot_serialize(caplog
     assert "12185" in caplog.text and "invalidresponse" in caplog.text
 
 
+# Live finding 2026-09-22: Moodle's `gradeformatted` can carry a pass/fail
+# icon as HTML ('<i class="icon fa fa-check …" title="Pass" …></i>105.00'),
+# which overflowed the 64-char moodle_grades.grade_formatted column and killed
+# the whole sync. Strip markup at the provider boundary (like summaries) and
+# clamp to the column width.
+def test_fetch_grades_strips_html_from_gradeformatted_and_clamps_to_column_width():
+    icon = ('<i class="icon fa fa-check text-success fa-fw inline"  title="Pass" '
+            'role="img" aria-label="Pass"></i>105.00')
+    http = FakeMoodleHTTP(responses={
+        "gradereport_user_get_grade_items": {"usergrades": [{"gradeitems": [
+            {"id": 1, "itemname": "Quiz", "itemtype": "mod", "graderaw": 105.0,
+             "gradeformatted": icon, "grademin": None, "grademax": None,
+             "gradedategraded": 0},
+            {"id": 2, "itemname": "Essay", "itemtype": "mod", "graderaw": 9.0,
+             "gradeformatted": "x" * 100, "grademin": 0.0, "grademax": 10.0,
+             "gradedategraded": 0},
+        ]}]},
+    })
+    g_icon, g_long = _provider(http).fetch_grades(userid=7, course_ids=["12065"])
+
+    assert g_icon.grade_formatted == "105.00"
+    assert len(g_long.grade_formatted) == 64
+
+
 def test_fetch_grades_still_raises_on_an_auth_error():
     # An expired/invalid token is not a per-course glitch: it must propagate so
     # moodle_sync flips the account to needs_reauth.
