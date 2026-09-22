@@ -53,6 +53,10 @@ log = logging.getLogger("scuffed_os.moodle")
 MOODLE_REST_PATH = "/webservice/rest/server.php"
 MOODLE_LAUNCH_PATH = "/admin/tool/mobile/launch.php"
 MOODLE_SERVICE = "moodle_mobile_app"
+# The custom URL scheme Moodle redirects the browser back to after sign-in
+# (<scheme>://token=<blob>). Must match the deep-link scheme the desktop app
+# registers; Moodle also accepts its own 'moodlemobile'.
+MOODLE_URLSCHEME = "scuffedos"
 
 # Moodle web-service errorcodes that mean "the wstoken is bad" -> needs_reauth.
 _AUTH_ERRORCODES = frozenset({"invalidtoken", "accessexception", "invalidlogin"})
@@ -390,13 +394,24 @@ class MoodleProvider:
             notifications=notifications,
         )
 
-    # ---- OAuth-ish plumbing (Moodle has no code exchange; connect is token-paste) ----
+    # ---- OAuth-ish plumbing (Moodle has no code exchange; sign-in is a launch) ----
     def authorize_url(self, state: str, code_challenge: str | None = None) -> str:
-        """The Moodle mobile launch URL. Not used by the token-paste connect flow;
-        present for OAuthProvider/registry symmetry."""
+        """The real "Sign in to Moodle" URL served by GET /api/oauth/connect/moodle.
+
+        Moodle's mobile-app launch endpoint: the user signs in through the
+        site's normal (for WolfWare, Shibboleth SSO) flow, then Moodle redirects
+        the browser to `{urlscheme}://token=<blob>` where the blob carries
+        md5(wwwroot + passport) alongside the web-service token. `state` rides
+        along as the `passport`, which is how /auth/moodle/launch matches a
+        returning blob back to this one-time sign-in. There is no code exchange
+        and no PKCE, so `code_challenge` is ignored."""
         from urllib.parse import urlencode
 
-        q = urlencode({"service": MOODLE_SERVICE, "passport": state})
+        q = urlencode({
+            "service": MOODLE_SERVICE,
+            "passport": state,
+            "urlscheme": MOODLE_URLSCHEME,
+        })
         return f"{settings.moodle_base_url}{MOODLE_LAUNCH_PATH}?{q}"
 
     def exchange_code(self, code: str, verifier: str | None = None) -> Tokens:
@@ -503,7 +518,10 @@ def parse_pasted_token(pasted: str, *, passport: str | None = None,
     value = (pasted or "").strip()
     if _HEX32_RE.match(value):
         return value
-    # Launch-redirect form: everything after the last 'token=' is the base64 blob.
+    # Launch-redirect form: everything after the FIRST 'token=' is the base64
+    # blob. First-split is load-bearing for the /auth/moodle/launch caller,
+    # which passes a bare f"token={blob}": a base64 blob can legitimately end
+    # in 'token=', and a last-split would then keep only the empty tail.
     if "token=" in value:
         blob = value.split("token=", 1)[1].strip()
         try:

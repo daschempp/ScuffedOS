@@ -787,6 +787,15 @@ class MoodleConnect(BaseModel):
     passport: str | None = None
 
 
+# POST /auth/moodle/launch body — the raw base64 blob Moodle handed back on the
+# custom-scheme redirect, forwarded by the desktop shell. It carries the
+# wstoken, so it travels in the BODY: a query string would reach uvicorn's
+# access log (and the sidecar's stderr drain). Optional so a missing/blank
+# value renders the inline error page instead of a 422.
+class MoodleLaunch(BaseModel):
+    token: str | None = None
+
+
 # ---- Finance schemas (M7 Plaid) ---------------------------------------------
 class LinkStart(BaseModel):
     kind: Literal["bank", "investments"]
