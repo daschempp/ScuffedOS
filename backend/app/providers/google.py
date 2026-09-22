@@ -196,11 +196,17 @@ class GoogleProvider:
 
     # ---- OAuth ----
     def _redirect_uri(self) -> str:
-        # Empty -> compute the loopback callback from the live port (dev 8000 /
-        # packaged random). A non-empty env value wins verbatim (registered
-        # tunnel etc.). Both OAuth legs MUST use this so redirect_uri matches.
-        return (settings.google_redirect_uri
-                or f"http://127.0.0.1:{settings.scuffedos_port}/auth/google/callback")
+        # A non-empty env value wins verbatim (registered tunnel etc.). Otherwise:
+        # packaged app (SCUFFEDOS_MANAGED_PG) -> the fixed https bounce page on
+        # the corporate site, because the sidecar's random loopback port cannot
+        # be pre-registered on a "Web application" OAuth client (issue #25);
+        # dev -> the loopback callback on the live port (registered as-is).
+        # Both OAuth legs MUST use this so redirect_uri matches.
+        if settings.google_redirect_uri:
+            return settings.google_redirect_uri
+        if settings.scuffedos_managed_pg:
+            return settings.google_bounce_redirect_uri
+        return f"http://127.0.0.1:{settings.scuffedos_port}/auth/google/callback"
 
     def authorize_url(self, state: str, code_challenge: str | None = None) -> str:
         # access_type=offline + prompt=consent guarantee Google issues a

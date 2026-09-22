@@ -85,7 +85,12 @@ class Settings(BaseSettings):
     # local validation needs no tunnel. Tokens live in provider_accounts, never here.
     google_client_id: str = ""
     google_client_secret: str = ""
-    google_redirect_uri: str = ""   # empty -> GoogleProvider computes http://127.0.0.1:{scuffedos_port}/auth/google/callback at request time (M9 s2); a non-empty env value wins verbatim
+    google_redirect_uri: str = ""   # empty -> GoogleProvider computes the redirect at request time (M9 s2): the loopback http://127.0.0.1:{scuffedos_port}/auth/google/callback in dev, google_bounce_redirect_uri in the packaged app; a non-empty env value wins verbatim
+    # Issue #25: the packaged sidecar's port is random, which a "Web application"
+    # OAuth client cannot pre-register, so the packaged app redirects through the
+    # fixed https bounce page on the corporate site (same bridge WHOOP uses); it
+    # forwards Google's code+state into scuffedos://oauth/callback?provider=google.
+    google_bounce_redirect_uri: str = "https://scuffedcorporation.com/auth/google/callback"
 
     # Background email-sync (mirrors fitness_sync_enabled / fitness_sync_seconds).
     email_sync_enabled: bool = True

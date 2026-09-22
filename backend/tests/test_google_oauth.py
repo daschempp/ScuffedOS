@@ -80,6 +80,36 @@ def test_authorize_url_computes_loopback_when_redirect_empty(monkeypatch):
     assert q["redirect_uri"] == ["http://127.0.0.1:4300/auth/google/callback"]
 
 
+# Issue #25: the packaged app's sidecar listens on a random loopback port, which
+# a "Web application" OAuth client cannot pre-register (Google answered
+# redirect_uri_mismatch for every port but the dev one). In packaged mode the
+# redirect is therefore the fixed https bounce page on the corporate site, which
+# hops the code back in through scuffedos://oauth/callback?provider=google —
+# the same bridge WHOOP uses. Dev keeps the loopback default.
+def test_authorize_url_uses_the_public_bounce_page_in_packaged_mode(monkeypatch):
+    monkeypatch.setattr(settings, "google_redirect_uri", "")
+    monkeypatch.setattr(settings, "scuffedos_managed_pg", True)
+    monkeypatch.setattr(settings, "scuffedos_port", 4300)
+    settings.google_client_id = "gid"
+    url = GoogleProvider().authorize_url("st8")
+    q = parse_qs(urlparse(url).query)
+    assert q["redirect_uri"] == ["https://scuffedcorporation.com/auth/google/callback"]
+
+
+def test_exchange_code_uses_the_same_bounce_redirect_in_packaged_mode(monkeypatch):
+    monkeypatch.setattr(settings, "google_redirect_uri", "")
+    monkeypatch.setattr(settings, "scuffedos_managed_pg", True)
+    settings.google_client_id = "gid"
+    settings.google_client_secret = "gsecret"
+    p = GoogleProvider()
+    p.configure(fake_http=FakeHttp({
+        GOOGLE_TOKEN_URL: FakeResp(200, {"access_token": "AT", "expires_in": 3600}),
+    }))
+    p.exchange_code("thecode")
+    _, data = p._http.posts[0]
+    assert data["redirect_uri"] == "https://scuffedcorporation.com/auth/google/callback"
+
+
 def test_authorize_url_uses_env_redirect_verbatim_when_set(monkeypatch):
     monkeypatch.setattr(settings, "google_redirect_uri", "https://tunnel.example/auth/google/callback")
     monkeypatch.setattr(settings, "scuffedos_port", 4300)
