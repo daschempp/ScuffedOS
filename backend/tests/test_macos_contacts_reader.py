@@ -1,3 +1,4 @@
+import builtins
 import errno
 import glob
 import hashlib
@@ -280,3 +281,69 @@ def test_probe_access_unknown_off_darwin(ab_root, monkeypatch):
     macos_contacts.configure()
     monkeypatch.setattr(macos_contacts, "_is_darwin", lambda: False)
     assert probe_access(ab_root) == "unknown"
+
+
+# ---- 4c: probe_access covers EVERY discovered store, not just paths[0] -------
+
+def _two_stores(tmp_path, monkeypatch):
+    """Two readable store files, installed as the discovered store list."""
+    a, b = tmp_path / "a.abcddb", tmp_path / "b.abcddb"
+    a.write_bytes(b"\x00" * 32)
+    b.write_bytes(b"\x00" * 32)
+    monkeypatch.setattr(macos_contacts, "_store_paths", lambda root: [str(a), str(b)])
+    return str(a), str(b)
+
+
+def _fail_open(monkeypatch, path: str, exc: OSError) -> None:
+    """Make open(path) raise `exc`. Deterministic on macOS dev and Linux CI alike,
+    unlike chmod 000 (which a root CI runner still reads straight through)."""
+    real_open = builtins.open
+
+    def _fake(file, *args, **kwargs):
+        if str(file) == path:
+            raise exc
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "open", _fake)
+
+
+def test_4c_probe_access_granted_only_when_every_store_opens(tmp_path, monkeypatch):
+    macos_contacts.configure(platform="darwin")
+    _two_stores(tmp_path, monkeypatch)
+    assert probe_access(str(tmp_path)) == "granted"
+
+
+def test_4c_probe_access_denied_when_a_later_store_is_denied(tmp_path, monkeypatch):
+    """The FIRST store opens fine — only the second is FDA-denied, which the
+    paths[0]-only probe reported as 'granted'."""
+    macos_contacts.configure(platform="darwin")
+    _a, b = _two_stores(tmp_path, monkeypatch)
+    _fail_open(monkeypatch, b, PermissionError(errno.EPERM, "Operation not permitted"))
+    assert probe_access(str(tmp_path)) == "denied"
+
+
+def test_4c_probe_access_unknown_when_a_later_store_has_another_os_error(tmp_path, monkeypatch):
+    macos_contacts.configure(platform="darwin")
+    _a, b = _two_stores(tmp_path, monkeypatch)
+    _fail_open(monkeypatch, b, OSError(errno.EIO, "I/O error"))
+    assert probe_access(str(tmp_path)) == "unknown"
+
+
+def test_4c_probe_access_denied_wins_over_unknown(tmp_path, monkeypatch):
+    """A denial anywhere is the actionable answer (grant Full Disk Access), even
+    when another store failed for an unrelated reason."""
+    macos_contacts.configure(platform="darwin")
+    a, b = _two_stores(tmp_path, monkeypatch)
+    _fail_open(monkeypatch, a, OSError(errno.EIO, "I/O error"))
+    _fail_open(monkeypatch, b, PermissionError(errno.EACCES, "Permission denied"))
+    assert probe_access(str(tmp_path)) == "denied"
+
+
+# ---- 4g: addressbook_root is a real setting ---------------------------------
+
+def test_4g_addressbook_root_setting_mirrors_the_provider_default():
+    """config.py must NOT import the provider, so the default root literal is
+    duplicated in Settings — this test is the guard that keeps the two in sync."""
+    from app.config import settings
+
+    assert settings.addressbook_root == macos_contacts.DEFAULT_ROOT

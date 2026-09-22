@@ -52,10 +52,12 @@ const CONTACTS_DISCLOSURE = 'Your contacts’ names, phone numbers, email addres
 const FDA_DEEP_LINK = 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'
 
 // probe_access returns granted|denied|unknown; 'unsupported' is a projection for a
-// non-macOS host or an UNSUPPORTED_SCHEMA snapshot — rendered as its own state.
+// non-macOS host (configured === false) — rendered as its own state. The backend
+// never emits sync_status 'unsupported' (apply_contacts_snapshot only ever writes
+// ready|error|stale|access_denied|disabled), so sync_status is not consulted here.
 function contactsCapability(c) {
   if (!c) return 'unknown'
-  if (c.configured === false || c.sync_status === 'unsupported') return 'unsupported'
+  if (c.configured === false) return 'unsupported'
   return c.access || 'unknown'
 }
 

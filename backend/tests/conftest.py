@@ -60,15 +60,14 @@ def no_external_services():
     # have stopped a test that enables contacts and calls tick()/read_snapshot()
     # without also configuring its own fake_snapshot from reading the real store.
     # A test that needs a REAL read (the reader/photo fixture tests) must reset
-    # this seam first via macos_contacts.configure(fake_snapshot=None). Keep the
-    # background loop disarmed either way.
+    # this seam first via macos_contacts.configure(fake_snapshot=None). The
+    # background loop has no env kill-switch (it is always started and gated per
+    # tick by contacts_sync_state.enabled), so this seam is the CI guarantee.
     macos_contacts.configure(
         platform="linux",
         fake_snapshot=ContactsSnapshot(status=SnapshotStatus.ACCESS_DENIED, people=[]),
     )
     contacts_sync.configure(None)
-    _prev_contacts_sync_enabled = settings.contacts_sync_enabled
-    settings.contacts_sync_enabled = False
     yield
     llm.configure()
     memory_engine.configure("unset")
@@ -83,7 +82,6 @@ def no_external_services():
     finance_sync.configure("unset")
     macos_contacts.configure()          # reset to real detection
     contacts_sync.configure("unset")
-    settings.contacts_sync_enabled = _prev_contacts_sync_enabled
 
 
 @pytest.fixture(autouse=True)

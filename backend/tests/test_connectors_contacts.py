@@ -74,3 +74,21 @@ def test_contacts_card_count_none_when_unsupported(monkeypatch):
     monkeypatch.setattr(connectors, "_contacts_configured", lambda: False)
     card = _card(TestClient(app))
     assert card["count"] is None
+
+
+def test_4g_contacts_access_probes_the_configured_addressbook_root(monkeypatch):
+    """The card's permission probe reads `settings.addressbook_root` (a real
+    setting now, not a getattr fallback to the provider default)."""
+    from app.config import settings
+    from app.providers import macos_contacts
+
+    monkeypatch.setattr(settings, "addressbook_root", "/tmp/addressbook-under-test")
+    seen = {}
+
+    def _probe(root):
+        seen["root"] = root
+        return "granted"
+
+    monkeypatch.setattr(macos_contacts, "probe_access", _probe)
+    assert connectors._contacts_access() == "granted"
+    assert seen["root"] == "/tmp/addressbook-under-test"

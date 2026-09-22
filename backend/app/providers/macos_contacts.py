@@ -494,8 +494,13 @@ def read_snapshot(root: str = DEFAULT_ROOT, *, region: str,
 def probe_access(root: str = DEFAULT_ROOT) -> str:
     """'granted' | 'denied' | 'unknown' — a permission probe only, never raises.
     Attempts a REAL open (contract: never trust os.access()): an EPERM/EACCES from
-    TCC means Full Disk Access is missing. Test seam: a configured fake_snapshot
-    derives access from its status; a configured non-darwin platform -> 'denied'."""
+    TCC means Full Disk Access is missing. EVERY discovered store is probed, not
+    just the first: TCC can deny a single Sources/<UUID> store (and a read that
+    skips one store is a PARTIAL_READ, which never reconciles), so 'granted' means
+    every store opened. A denial anywhere wins over any other failure, because
+    "grant Full Disk Access" is the actionable answer. Test seam: a configured
+    fake_snapshot derives access from its status; a configured non-darwin
+    platform -> 'denied'."""
     if _FAKE_SNAPSHOT is not None:
         st = _FAKE_SNAPSHOT.status
         if st in (SnapshotStatus.COMPLETE_NONEMPTY, SnapshotStatus.COMPLETE_EMPTY):
@@ -510,11 +515,15 @@ def probe_access(root: str = DEFAULT_ROOT) -> str:
     paths = _store_paths(root)
     if not paths:
         return "denied"
-    try:
-        with open(paths[0], "rb") as fh:
-            fh.read(16)
-    except PermissionError as exc:
-        return "denied" if exc.errno in (errno.EPERM, errno.EACCES) else "unknown"
-    except OSError:
-        return "unknown"
-    return "granted"
+    other_failure = False
+    for path in paths:
+        try:
+            with open(path, "rb") as fh:
+                fh.read(16)
+        except PermissionError as exc:
+            if exc.errno in (errno.EPERM, errno.EACCES):
+                return "denied"
+            other_failure = True
+        except OSError:
+            other_failure = True
+    return "unknown" if other_failure else "granted"

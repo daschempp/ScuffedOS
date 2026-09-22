@@ -1,7 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.config import settings
+from app.models import PersonHandle
 from app.providers.base import NormalizedPerson
 from app.providers.macos_contacts import ContactsSnapshot, SnapshotStatus, SyncResult
 from app.store import store
@@ -131,6 +133,30 @@ def test_partial_apply_commits_good_rows_and_skips_reconcile():
     assert store.get_contacts_state()["status"] == "error"
 
 
+def test_4f_partial_apply_keeps_last_sync_at_and_granted_access():
+    """4f — the per-record net also catches AttributeError/KeyError; a partial
+    apply commits the good rows but does NOT advance last_sync_at (it means "last
+    SUCCESSFUL sync"), and `access` stays 'granted' because the READ succeeded."""
+    ok = store.apply_contacts_snapshot(_snap([_np(source_id="A", display_name="Ada")]), NOW)
+    assert ok.status == "ok" and ok.last_sync_at == NOW
+
+    bad = _np(source_id="BAD", display_name="Bad")
+    bad.phones = ["+15550001111"]        # a bare string where a {value,label} dict
+                                         # belongs -> AttributeError in _canon_entries
+    later = NOW + timedelta(hours=6)
+    res = store.apply_contacts_snapshot(
+        _snap([_np(source_id="G", display_name="Good"), bad]), later)
+
+    assert res.status == "partial"
+    assert res.access == "granted"        # the read was COMPLETE_*; only records failed
+    assert res.last_sync_at == NOW        # NOT advanced to `later`
+    st = store.get_contacts_state()
+    assert st["last_sync_at"] == NOW
+    assert st["access"] == "granted"
+    names = {p["display_name"] for p in store.list_people()["items"]}
+    assert names == {"Ada", "Good"}       # good rows committed, bad row rolled back
+
+
 # ---- source-aware CRUD ----
 
 def test_manual_crud_and_imported_identity_is_read_only():
@@ -195,6 +221,18 @@ def test_resolve_handle_returns_all_people_sharing_a_handle():
     assert {h["id"] for h in store.resolve_handle("+15550001111")} == {a["id"], b["id"]}
 
 
+def test_4b_resolve_handle_returns_each_person_once():
+    """4b — person_handle is unique on (person_id, kind, value), so ONE person can
+    legally carry the SAME normalized value under two rows; resolve_handle joins on
+    `value` alone, so that person used to come back twice."""
+    p = store.create_person({"display_name": "Dup",
+                             "phones": [{"value": "+15550006666", "label": "Mobile"}]})
+    with store._session() as s, s.begin():
+        s.add(PersonHandle(owner=settings.owner, person_id=p["id"], kind="short",
+                           value="+15550006666", possible=False))
+    assert [h["id"] for h in store.resolve_handle("+15550006666")] == [p["id"]]
+
+
 def test_resolve_handle_orders_by_recency_and_includes_soft_deleted():
     store.apply_contacts_snapshot(_snap([
         _np(source_id="OLD", display_name="Old", phones=[{"value": "+15559990000"}]),
@@ -244,3 +282,18 @@ def test_contacts_state_get_creates_default_and_set_patches():
     # The PERSISTED region (GB), not the settings default (US), canonicalizes handles.
     p = store.create_person({"display_name": "Nigel", "phones": [{"value": "020 8366 1177"}]})
     assert store.resolve_handle("+442083661177")[0]["id"] == p["id"]
+
+
+def test_4a_enabling_never_overwrites_a_persisted_region():
+    """4a — normalization_region persists ONCE (as enable_contacts already did):
+    a later locale change must never retroactively re-resolve existing handles."""
+    store.set_contacts_state({"normalization_region": "GB"})
+    out = store.set_contacts_enabled(True, region="US", now=NOW)
+    assert out["normalization_region"] == "GB"
+    assert out["enabled"] is True and out["status"] == "ready"
+
+
+def test_4a_enabling_persists_the_region_when_none_is_set():
+    assert store.get_contacts_state()["normalization_region"] is None
+    out = store.set_contacts_enabled(True, region="US", now=NOW)
+    assert out["normalization_region"] == "US"

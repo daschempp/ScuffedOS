@@ -46,13 +46,31 @@ def _snap(status: SnapshotStatus, people: list[NormalizedPerson]) -> ContactsSna
     )
 
 
-def test_real_contacts_probing_disabled_by_default():
+def _pretend_macos_host(monkeypatch):
+    """Declare a macOS backend host for tick().
+
+    The autouse seam installs platform='linux' for every test, and tick() now
+    short-circuits to 'unsupported' on a non-macOS host (there is no AddressBook
+    there). A test about the SYNC behaviour must say it is on a Mac — and must say
+    so explicitly rather than inherit the runner's OS, or it would pass on the
+    macOS dev box and skip the whole pass on the Ubuntu CI runner. Only the
+    platform seam is stubbed, so the installed fake_snapshot stays in place.
+    """
+    monkeypatch.setattr(macos_contacts, "is_supported", lambda: True)
+
+
+def test_real_contacts_probing_disabled_by_default(monkeypatch):
     # The autouse conftest seam forces a non-darwin platform, so a probe never
     # opens the real AddressBook regardless of the host OS.
     assert macos_contacts.probe_access() == "denied"
-    # ...and the background sync loop is not armed under test.
-    from app.config import settings
-    assert settings.contacts_sync_enabled is False
+    # ...and with consent off (the default), a tick reads NOTHING — that consent
+    # gate, not an env flag, is what keeps the always-running background loop
+    # off a dev box's real AddressBook.
+    def _must_not_read(*a, **k):
+        raise AssertionError("read_snapshot must not run while consent is off")
+
+    monkeypatch.setattr(macos_contacts, "read_snapshot", _must_not_read)
+    assert contacts_sync.tick(NOW).status == "disabled"
 
 
 def test_default_autouse_seam_blocks_real_addressbook_read(monkeypatch):
@@ -63,6 +81,7 @@ def test_default_autouse_seam_blocks_real_addressbook_read(monkeypatch):
     disk, so the fix is a default fake_snapshot seeded by the autouse fixture --
     prove it short-circuits before `_store_paths` (the first real-disk touch)
     ever runs."""
+    _pretend_macos_host(monkeypatch)          # the platform gate must not be what saves us
     store.set_contacts_enabled(True, region="US", now=NOW)
 
     def _must_not_touch_disk(*a, **k):
@@ -81,6 +100,7 @@ def test_remote_postgres_outage_is_error_never_empty(monkeypatch):
     """An unreachable/erroring PostgreSQL server is a FAILED sync (status='error'),
     NEVER 'empty' — and it must not soft-delete existing rows. Guards the money-
     manufacturing-style bug where an outage looks like 'every contact deleted'."""
+    _pretend_macos_host(monkeypatch)
     store.set_contacts_enabled(True, region="US", now=NOW)
     macos_contacts.configure(fake_snapshot=_snap(
         SnapshotStatus.COMPLETE_NONEMPTY,

@@ -117,8 +117,8 @@ def forget_contacts(body: ContactsForgetIn) -> dict:
 @router.post("/sync", response_model=SyncResultOut)
 def sync_now() -> SyncResultOut:
     """Run one contacts sync pass now (manual). Reads never depend on it. Returns a
-    SyncResult; a no-op 'disabled' when consent is off; 'error' if the database is
-    unreachable."""
+    SyncResult; a no-op 'disabled' when consent is off; a no-op 'unsupported' on a
+    non-macOS backend host; 'error' if the database is unreachable."""
     result = contacts_sync.tick()
     return SyncResultOut(
         status=result.status, access=result.access, imported=result.imported,

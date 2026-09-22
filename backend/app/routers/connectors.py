@@ -45,8 +45,8 @@ def _configured(name: str) -> bool:
         return bool(settings.plaid_client_id) and bool(settings.plaid_secret)
     if name == "moodle":
         return True
-    if name == "macos_contacts":
-        return _contacts_configured()
+    # macOS Contacts never reaches here: the catalog loop hands it to
+    # _contacts_connector(), which calls _contacts_configured() directly.
     return False
 
 
@@ -91,9 +91,7 @@ def _contacts_configured() -> bool:
 def _contacts_access() -> str:
     from ..providers import macos_contacts
 
-    return macos_contacts.probe_access(
-        getattr(settings, "addressbook_root", macos_contacts.DEFAULT_ROOT)
-    )
+    return macos_contacts.probe_access(settings.addressbook_root)
 
 
 def _contacts_connector() -> ConnectorInfo:

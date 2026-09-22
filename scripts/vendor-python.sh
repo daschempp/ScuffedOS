@@ -116,17 +116,20 @@ echo "==> Re-signing every Mach-O we may have touched"
 find "$OUT" -type f \( -name '*.dylib' -o -name '*.so' \) -exec codesign --force -s - {} + 2>/dev/null || true
 codesign --force -s - "$OUT/bin/python3" 2>/dev/null || true
 
-echo "==> Fail-on-sdist audit: verify all C-extension deps have cp314 arm64 .so"
-# psycopg (binary), pydantic_core, and any compiled dep must exist as loadable
-# .so under the tree. The dry-run preflight above is what actually blocks a
-# missing wheel; this is the belt-and-suspenders smoke import against the
-# real, true-installed tree.
-"$OUT/bin/python3" - <<'PY'
-import importlib.util, sys
-sys.exit(0 if all(
-    importlib.util.find_spec(m) for m in ("psycopg", "pydantic_core", "fastapi", "uvicorn", "alembic", "cryptography", "keyring")
-) else 1)
-PY
+echo "==> Vendored-dependency audit: every requirement is installed and imports"
+# Checks the true-installed tree against requirements.txt itself (plus the
+# EXTRA_DEPS above), so a dep added to requirements.txt can never be silently
+# absent from build/py — the failure mode that shipped an app without
+# phonenumberslite. Deriving the list beats the hard-coded module tuple this
+# replaced, which never learned about new deps. Extras count as the separate
+# distributions they are: psycopg[binary] without psycopg-binary still imports
+# and only dies at the first connect.
+EXTRA_ARGS=()
+for spec in "${EXTRA_DEPS[@]}"; do EXTRA_ARGS+=(--extra "$spec"); done
+python3 "$ROOT/scripts/check_vendored_deps.py" \
+  --requirements "$REQ" \
+  --python "$OUT/bin/python3" \
+  "${EXTRA_ARGS[@]}"
 
 echo "==> otool relocation check (no /opt/homebrew, no absolute build paths)"
 BAD=0

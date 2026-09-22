@@ -61,6 +61,25 @@ describe('ConnectorsPanel — macOS Contacts (local)', () => {
     await waitFor(() => expect(api.enableContacts).toHaveBeenCalledTimes(1))
   })
 
+  it('shows the Full Disk Access denied state (not "unsupported") when access is denied but sync_status is unsupported', async () => {
+    api.getConnectors.mockResolvedValue([localCard({
+      enabled: true, access: 'denied', sync_status: 'unsupported',
+    })])
+    render(<ConnectorsPanel onOpenKeys={() => {}} />)
+
+    expect(await screen.findByText(/full disk access is off/i)).toBeInTheDocument()
+    expect(screen.queryByText(/contacts import isn.t available on this device/i)).toBeNull()
+  })
+
+  it('still renders the unavailable copy when configured is false, regardless of sync_status', async () => {
+    api.getConnectors.mockResolvedValue([localCard({
+      configured: false, access: 'denied', sync_status: 'unsupported',
+    })])
+    render(<ConnectorsPanel onOpenKeys={() => {}} />)
+
+    expect(await screen.findByText(/contacts import isn.t available on this device/i)).toBeInTheDocument()
+  })
+
   it('is exempt from the not-configured API-keys gate when unsupported on this device', async () => {
     api.getConnectors.mockResolvedValue([localCard({
       configured: false, access: 'unknown', sync_status: 'disabled',
